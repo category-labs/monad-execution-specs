@@ -1,4 +1,3 @@
-open Types
 open Utils
 open Lens.Infix
 
@@ -6,12 +5,12 @@ module Bytecode = struct
   type instr
 end
 
-module Make (Rev : Types.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
+module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   module Host = struct
     include Host
     include Monad.Make (Host)
   end
-  module Traits = Types.Traits (Rev)
+  module Traits = Chain.Monad.Traits (Rev)
 
   module Memory : sig
     type t
@@ -63,7 +62,7 @@ module Make (Rev : Types.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   open MachineState
 
   module ExecutionEnvironment = struct
-    open Ethereum
+    open Chain.Ethereum
 
     (* YP 9.3 *)
     type t =
@@ -74,7 +73,7 @@ module Make (Rev : Types.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; sender : Address.t (* I_s *)
       ; value : Word.t (* I_w *)
       ; bytes : Bytes.t (* I_b *)
-      ; header : Ethereum.Block.Header.t (* I_H *)
+      ; header : Block.Header.t (* I_H *)
       ; write_permission : bool (* I_w *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
@@ -529,14 +528,14 @@ module Make (Rev : Types.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ addr = !(execution_environment |-- address) in
-    let$ () = push (Ethereum.Address.to_word addr) in
+    let$ () = push (Chain.Ethereum.Address.to_word addr) in
 
     (* PC *)
     increase_pc_and_continue
 
   let balance =
     (* Stack *)
-    let$ address = Ethereum.Address.of_word_masking <$> pop in
+    let$ address = Chain.Ethereum.Address.of_word_masking <$> pop in
 
     (* Gas *)
     let$ access = access_account address in
@@ -559,7 +558,7 @@ module Make (Rev : Types.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ o = !(execution_environment |-- origin) in
-    let$ () = push (Ethereum.Address.to_word o) in
+    let$ () = push (Chain.Ethereum.Address.to_word o) in
 
     (* PC *)
     increase_pc_and_continue
@@ -572,7 +571,7 @@ module Make (Rev : Types.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ caller = !(execution_environment |-- sender) in
-    let$ () = push (Ethereum.Address.to_word caller) in
+    let$ () = push (Chain.Ethereum.Address.to_word caller) in
 
     (* PC *)
     increase_pc_and_continue
