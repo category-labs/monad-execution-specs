@@ -1,3 +1,5 @@
+(include_subdirs qualified)
+
 (library
  (name monad_lib)
  (public_name monad-spec.monad_lib)
