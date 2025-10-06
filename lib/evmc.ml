@@ -46,7 +46,7 @@ end
 
 module Message = struct
   type t =
-    { kind : [`Call]
+    { kind : CallKind.t
     ; flags : Flags.t list
     ; depth : Int32.t
     ; gas : Uint64.t
