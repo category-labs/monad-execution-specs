@@ -1,0 +1,8 @@
+profile = ocamlformat
+break-infix = fit-or-vertical
+exp-grouping = preserve
+module-item-spacing = preserve
+sequence-blank-line = preserve-one
+margin = 110
+field-space = loose
+break-cases = fit
