@@ -64,6 +64,33 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   module ExecutionEnvironment = struct
     open Chain.Ethereum
 
+    module ExecutionBlockHeader = struct
+      (*
+       * The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
+       * does not give us the full block header information, only those fields required for executing EVM
+       * bytecode
+       * Otherwise, this is as YP 4.4
+       *)
+      type t =
+        { coinbase : Address.t (* H_c *)
+        ; number : Word.t (* H_i *)
+        ; timestamp : Word.t (* H_s *)
+        ; gas_limit : Word.t (* H_l *)
+        ; prev_randao : Word.t (* H_a *)
+        ; base_fee : Word.t (* H_f *) }
+      [@@deriving lens {submodule = true; prefix = true}]
+      include TLens
+
+      let of_tx_context (ctx : Evmc.TxContext.t) : t =
+        { coinbase = ctx.block_coinbase
+        ; number = Word.of_uint64 ctx.block_number
+        ; timestamp = Word.of_uint64 ctx.block_timestamp
+        ; gas_limit = Word.of_uint64 ctx.block_gas_limit
+        ; prev_randao = ctx.block_prev_randao
+        ; base_fee = ctx.block_base_fee }
+    end
+    include ExecutionBlockHeader
+
     (* YP 9.3 *)
     type t =
       { address : Address.t (* I_a *)
@@ -73,7 +100,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; sender : Address.t (* I_s *)
       ; value : Word.t (* I_w *)
       ; bytes : Bytes.t (* I_b *)
-      ; header : Block.Header.t (* I_H *)
+      ; header : ExecutionBlockHeader.t (* I_H *)
       ; write_permission : bool (* I_w *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
@@ -86,7 +113,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; sender = msg.sender
       ; value = msg.value
       ; bytes = msg.code
-      ; header = todo ()
+      ; header = ExecutionBlockHeader.of_tx_context ctx
       ; write_permission = not (List.mem Evmc.Flags.Static msg.flags) }
   end
   open ExecutionEnvironment
@@ -632,16 +659,106 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let extcodehash _s = todo ()
 
   let blockhash = todo ()
-  let coinbase = todo ()
-  let timestamp = todo ()
-  let number = todo ()
-  let difficulty = todo ()
-  let gaslimit = todo ()
-  let chainid _s = todo ()
+  let coinbase =
+    (* Stack *)
+
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ cb = !(execution_environment |-- header |-- coinbase) in
+    let$ () = push (Chain.Ethereum.Address.to_word cb) in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let timestamp =
+    (* Stack *)
+
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ ts = !(execution_environment |-- header |-- timestamp) in
+    let$ () = push ts in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let number =
+    (* Stack *)
+
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ n = !(execution_environment |-- header |-- number) in
+    let$ () = push n in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let prevrandao =
+    (* Stack *)
+
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ pr = !(execution_environment |-- header |-- prev_randao) in
+    let$ () = push pr in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let gaslimit =
+    (* Stack *)
+
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ gl = !(execution_environment |-- header |-- gas_limit) in
+    let$ () = push gl in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let chainid =
+    (* Stack *)
+
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ () = push Word.(of_int Traits.chain_id) in
+
+    (* PC *)
+    increase_pc_and_continue
+
   let selfbalance _s = todo ()
-  let basefee _s = todo ()
-  let blobhash _s = todo ()
-  let blobbasefee _s = todo ()
+  let basefee =
+    (* Stack *)
+
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ bf = !(execution_environment |-- header |-- gas_limit) in
+    let$ () = push bf in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let blobhash =
+    if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun)
+    then todo ()
+    else invalid
+
+  let blobbasefee =
+    if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun)
+    then todo()
+    else invalid
 
   let pop_ =
     (* Stack *)
@@ -885,7 +1002,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       | '\x41' -> coinbase
       | '\x42' -> timestamp
       | '\x43' -> number
-      | '\x44' -> difficulty
+      | '\x44' -> prevrandao
       | '\x45' -> gaslimit
       | '\x46' -> chainid
       | '\x47' -> selfbalance
