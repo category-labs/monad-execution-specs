@@ -4,7 +4,29 @@ open Utils
 open Chain.Ethereum
 
 module Result = struct
-  type status_code = Success | Failure (* | ... *)
+  type status_code =
+    | Success
+    | Failure
+    | Revert
+    | Out_of_gas
+    | Invalid_instruction
+    | Undefined_instruction
+    | Stack_overflow
+    | Stack_underflow
+    | Bad_jump_destination
+    | Invalid_memory_access
+    | Call_depth_exceeded
+    | Static_mode_violation
+    | Precompile_failure
+    | Contract_validation_failure
+    | Argument_out_of_range
+    | Wasm_unreachable_instruction
+    | Wasm_trap
+    | Insufficient_balance
+    | Internal_error
+    | Rejected
+    | Out_of_memory
+
   type t =
     { status_code : status_code
     ; gas_left : Int64.t
