@@ -13,6 +13,9 @@ module Bytes = struct
    *)
   let sub_with_zero_padding bytes i sz =
     init sz (fun j -> if i + j >= length bytes then '\x00' else bytes.[i + j])
+
+  let to_hex_string bytes =
+    to_seq bytes |> Seq.map Char.code |> Seq.map (Format.sprintf "%x") |> List.of_seq |> String.concat ""
 end
 
 module type TY = sig
@@ -22,14 +25,26 @@ end
 module Lens = struct
   include Lens
 
-  let get_or ~(create : unit -> 'a) : ('a option, 'a) t =
+  let get_or_create (create : unit -> 'a) : ('a option, 'a) t =
     {get = (function None -> create () | Some v -> v); set = (fun x _ -> Some x)}
 
-  let get_or_throw : ('a option, 'a) t = {get = Option.get; set = (fun x _ -> Some x)}
+  let get_or_default (default : 'a) : ('a option, 'a) t =
+    {get = (function None -> default | Some v -> v); set = (fun x _ -> Some x)}
 
-  module DerivedMap (M : Map.S) = struct
-    let at (k : M.key) : ('v M.t, 'v option) t =
-      {get = (fun m -> M.find_opt k m); set = (fun v m -> M.update k (fun _ -> v) m)}
+  let get_or_throw : ('a option, 'a) t = {get = Option.get; set = (fun x _ -> Some x)}
+end
+
+(* Lens-aware map *)
+module Map = struct
+  module type OrderedType = Map.OrderedType
+  module type S = sig
+    include Map.S
+    val at : key -> ('v t, 'v option) Lens.t
+  end
+  module Make (Ord : OrderedType) = struct
+    include Map.Make (Ord)
+    let at (k : key) : ('v t, 'v option) Lens.t =
+      {get = (fun m -> find_opt k m); set = (fun v m -> update k (fun _ -> v) m)}
   end
 end
 

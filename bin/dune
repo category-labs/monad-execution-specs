@@ -1,0 +1,5 @@
+(executable
+  (name evmrun)
+  (public_name evmrun)
+  (modes byte exe)
+  (libraries monad_lib))
