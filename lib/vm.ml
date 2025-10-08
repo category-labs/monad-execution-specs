@@ -128,14 +128,31 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   open ExecutionEnvironment
 
   module Context = struct
-    type t = {execution_environment : ExecutionEnvironment.t; machine_state : MachineState.t}
+    type t =
+      { execution_environment : ExecutionEnvironment.t
+      ; machine_state : MachineState.t
+      ; jump_destinations : Word.Set.t (* D(c) *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
+
+    let valid_jump_destinations code =
+      let rec loop i valid_destinations =
+        if i >= Bytes.length code then valid_destinations
+        else
+          match code.[i] with
+          | '\x5b' -> loop (i + 1) Word.(Set.add ~$i valid_destinations)
+          | '\x60' .. '\x7f' as opcode ->
+              let push_bytes = Char.code opcode - 0x60 + 1 in
+              loop (i + 1 + push_bytes) valid_destinations
+          | _ -> loop (i + 1) valid_destinations
+      in
+      loop 0 Word.Set.empty
 
     let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
       if Word.(ctx.chain_id <> ~$Traits.chain_id) then raise Internal_error ;
       { execution_environment = ExecutionEnvironment.make ctx msg
-      ; machine_state = {MachineState.initial with gas = Word.of_uint64 msg.gas} }
+      ; machine_state = {MachineState.initial with gas = Word.of_uint64 msg.gas}
+      ; jump_destinations = valid_jump_destinations msg.code }
   end
   open Context
 
@@ -159,6 +176,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ gas_remaining = !(machine_state |-- gas) in
     if Word.(gas_remaining < amount) then fail Out_of_gas
     else machine_state |-- gas := Word.(gas_remaining - amount)
+
+  let check_jump_destination (destination : Word.t) =
+    let$ valid_destinations = !jump_destinations in
+    if Word.Set.mem destination valid_destinations then return () else fail Bad_jump_destination
 
   let push (x : Word.t) : unit M.t =
     let$ s = !(machine_state |-- stack) in
@@ -923,7 +944,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.mid in
 
     (* Operation *)
-    (* TODO: check jumpdest *)
+    let$ () = check_jump_destination new_pc in
 
     (* PC *)
     update_pc_and_continue (fun _ -> new_pc)
@@ -937,7 +958,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.high in
 
     (* Operation *)
-    (* TODO: check jumpdest *)
+    let$ () = check_jump_destination new_pc in
 
     (* PC *)
     if Word.is_zero condition then increase_pc_and_continue else update_pc_and_continue (fun _ -> new_pc)
