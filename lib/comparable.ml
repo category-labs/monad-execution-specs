@@ -1,3 +1,5 @@
+open Utils
+
 module Make (T : sig
   type t
   val compare : t -> t -> int

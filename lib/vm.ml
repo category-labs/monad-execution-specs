@@ -15,8 +15,11 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   module Memory : sig
     type t
     val empty : t
+
     val read_block_at : Word.t -> Word.t -> t -> Bytes.t
     val read_word_at : Word.t -> t -> Word.t
+
+    val write_block_at : Word.t -> Bytes.t -> t -> t
     val write_word_at : Word.t -> Word.t -> t -> t
     val write_byte_at : Word.t -> char -> t -> t
   end = struct
@@ -27,12 +30,18 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
           Word.Map.find_opt Word.(start + ~$byte_i) mem |> Option.value ~default:'\x00' )
 
     let read_word_at pos (mem : t) =
-      Word.init (fun byte_i -> Word.Map.find_opt Word.(pos + ~$byte_i) mem |> Option.value ~default:'\x00')
+      let bytes_be =
+        Bytes.init 32 (fun byte_i ->
+            Word.Map.find_opt Word.(pos + ~$byte_i) mem |> Option.value ~default:'\x00' )
+      in
+      Word.of_bytes_be bytes_be
 
-    let write_word_at pos w (mem : t) =
-      Seq.take 32 (Seq.ints 0)
-      |> Seq.map (fun i -> (Word.(pos + ~$i), Word.byte i w))
+    let write_block_at (pos : Word.t) (bytes : Bytes.t) (mem : t) =
+      Seq.take (Bytes.length bytes) (Seq.ints 0)
+      |> Seq.map (fun i -> (Word.(pos + ~$i), bytes.[i]))
       |> fun entries -> Word.Map.add_seq entries mem
+
+    let write_word_at pos w = write_block_at pos (Word.to_bytes32_be w)
 
     let write_byte_at pos b (mem : t) = Word.Map.add pos b mem
 
@@ -130,12 +139,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   end
   open Context
 
-  type error = Out_of_gas | Stack_underflow | Stack_overflow | Invalid_instruction | Invalid_operand
-
   module St = Monad.State (Context)
-  module Err = Monad.Result (struct
-    type t = error
-  end)
+  module StatusCode = Evmc.Result.StatusCode
+  module Err = Monad.Result (Evmc.Result.StatusCode)
+
   module M = struct
     module StHost = St.Trans (Host)
     module ErrStHost = Err.Trans (StHost)
@@ -182,6 +189,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let base_keccak256_cost = ~$30
     let keccak256_cost_per_word = ~$6
 
+    let word_copy_cost = ~$3
+
     let memory_cost active_memory_words =
       Word.(((active_memory_words ** 2) / ~$512) + (~$3 * active_memory_words))
 
@@ -196,6 +205,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   type opcode_impl = bool M.t
 
+  (* General undefined opcode *)
+  let undefined : opcode_impl = fail Undefined_instruction
+
+  (* Designated invalid opcode 0xfe *)
   let invalid : opcode_impl = fail Invalid_instruction
 
   (* Note that `stop` instructions get executed (even if they do nothing) *)
@@ -510,7 +523,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.very_low in
 
     (* Operation *)
-    let$ () = push Word.(if byte_index >= ~$32 then zero else of_byte x.$(Word.to_int byte_index)) in
+    let$ () = push Word.(if byte_index >= ~$32 then zero else of_byte (byte (to_int byte_index) x)) in
 
     (* PC *)
     increase_pc_and_continue
@@ -629,7 +642,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       push
         ( match Word.to_int_opt i with
         | None -> Word.zero (* Index exceeds max theoretical data size *)
-        | Some i -> Word.of_bytes (Bytes.sub_with_zero_padding data i 32) )
+        | Some i -> Word.of_bytes_be (Bytes.sub_with_zero_padding data i 32) )
     in
 
     (* PC *)
@@ -648,17 +661,41 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let calldatacopy = todo ()
-  let codesize = todo ()
-  let codecopy = todo ()
-  let gasprice = todo ()
-  let extcodesize = todo ()
-  let extcodecopy = todo ()
+  let calldatacopy =
+    (* Stack *)
+    let$ dst_start = pop in
+    let$ src_start = pop in
+    let$ size = pop in
+
+    (* Gas *)
+    let n_words = Word.((size + ~$31) / ~$32) in
+    let$ memory_extension_gas = extend_memory_to Word.(dst_start + size) in
+    let$ () = spend GasCosts.(memory_extension_gas + (n_words * word_copy_cost) + memory_extension_gas) in
+
+    (* Operation *)
+    let$ data = !(execution_environment |-- data) in
+    let block =
+      match (Word.to_int_opt src_start, Word.to_int_opt size) with
+      | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
+      | _, Some size -> Bytes.init size (fun _ -> '\x00')
+      | _, None -> raise Internal_error
+    in
+    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let codesize _s = todo ()
+
+  let codecopy _s = todo ()
+  let gasprice _s = todo ()
+  let extcodesize _s = todo ()
+  let extcodecopy _s = todo ()
   let returndatasize _s = todo ()
   let returndatacopy _s = todo ()
   let extcodehash _s = todo ()
 
-  let blockhash = todo ()
+  let blockhash _s = todo ()
   let coinbase =
     (* Stack *)
 
@@ -750,15 +787,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let blobhash =
-    if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun)
-    then todo ()
-    else invalid
+  let blobhash _s = if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun) then todo () else undefined _s
 
-  let blobbasefee =
-    if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun)
-    then todo()
-    else invalid
+  let blobbasefee _s = if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun) then todo () else undefined _s
 
   let pop_ =
     (* Stack *)
@@ -784,7 +815,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* Operation *)
     let$ here = Word.to_int <$> !(machine_state |-- pc) in
     let$ code = !(execution_environment |-- bytes) in
-    let$ () = push (Word.of_bytes (Bytes.sub_with_zero_padding code (here + 1) i)) in
+    let$ () = push (Word.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)) in
 
     (* PC *)
     update_pc_and_continue (fun pc -> Word.(pc + one + ~$i))
@@ -882,12 +913,37 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let sload = todo ()
-  let sstore = todo ()
-  let jump = todo ()
-  let jumpi = todo ()
-  let pc = todo ()
-  let msize = todo ()
+  let sload _s = todo ()
+  let sstore _s = todo ()
+  let jump =
+    (* Stack *)
+    let$ new_pc = pop in
+
+    (* Gas *)
+    let$ () = spend GasCosts.mid in
+
+    (* Operation *)
+    (* TODO: check jumpdest *)
+
+    (* PC *)
+    update_pc_and_continue (fun _ -> new_pc)
+
+  let jumpi =
+    (* Stack *)
+    let$ new_pc = pop in
+    let$ condition = pop in
+
+    (* Gas *)
+    let$ () = spend GasCosts.high in
+
+    (* Operation *)
+    (* TODO: check jumpdest *)
+
+    (* PC *)
+    if Word.is_zero condition then increase_pc_and_continue else update_pc_and_continue (fun _ -> new_pc)
+
+  let pc_ _s = todo ()
+  let msize _s = todo ()
   let gas =
     (* Stack *)
 
@@ -916,9 +972,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let log _i = todo ()
 
-  let create = todo ()
-  let call = todo ()
-  let callcode = todo ()
+  let create _s = todo ()
+  let call _s = todo ()
+  let callcode _s = todo ()
   let return_ =
     (* Stack *)
     let$ pos = pop in
@@ -945,7 +1001,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let staticcall _s = todo ()
   let revert _s = todo ()
 
-  let selfdestruct = todo ()
+  let selfdestruct _s = todo ()
 
   let opcode_to_impl (opcode : char) =
     let impl =
@@ -1020,7 +1076,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       (* Control flow *)
       | '\x56' -> jump
       | '\x57' -> jumpi
-      | '\x58' -> pc
+      | '\x58' -> pc_
       (* Environment *)
       | '\x59' -> msize
       | '\x5a' -> gas
@@ -1045,12 +1101,39 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       | '\xf5' -> create2
       | '\xfa' -> staticcall
       | '\xfd' -> revert
+      | '\xfe' -> invalid
       | '\xff' -> selfdestruct
-      | _ -> invalid
+      | _ -> undefined
     in
     impl
 
+  let trace_stack stack =
+    Format.printf "<top>\n" ;
+    List.iter (fun elt -> Format.printf "%s\n" (Word.to_string elt)) stack ;
+    Format.printf "<bottom>\n"
+
+  let trace_memory ms =
+    (* Write one word at a time *)
+    let rec loop pos =
+      if Word.(pos < ms.active_memory_words) then (
+        Format.printf "%s: 0x%s\n" (Word.to_string pos)
+          (Bytes.to_hex_string (Memory.read_block_at pos Word.(~$32) ms.memory)) ;
+        loop Word.(pos + ~$32) )
+    in
+    loop Word.zero
+
+  let trace =
+    let$ ms = !machine_state in
+    Format.printf "PC: %s\n" (Word.to_string ms.pc) ;
+    Format.printf "Gas: %s\n" (Word.to_string ms.gas) ;
+    Format.printf "Stack: \n" ;
+    trace_stack ms.stack ;
+    Format.printf "Memory: \n" ;
+    trace_memory ms ;
+    return ()
+
   let rec run (code : Bytes.t) : unit M.t =
+    (*let$ () = trace in*)
     let$ pc = !(machine_state |-- pc) in
     let opcode =
       (* YP (157) *)
@@ -1058,6 +1141,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       | Some pc when pc < Bytes.length code -> code.[pc]
       | _ -> '\x00'
     in
+    (*Format.printf "Executing opcode 0x%x\n" (Char.code opcode) ;*)
     let$ continue = opcode_to_impl opcode in
     if continue then run code else return ()
 
@@ -1066,5 +1150,17 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       let$ tx_context = Host.get_tx_context in
       let ctx = Context.make tx_context msg in
       let$ res, ctx = run msg.code ctx in
-      todo () )
+      return
+        ( match res with
+        | Ok () ->
+            Evmc.Result.
+              { status_code = Success
+              ; gas_left = Word.to_uint64 ctx.machine_state.gas
+              ; gas_refund = 0L
+              ; output_data = ctx.machine_state.output_buffer
+              ; create_address = None }
+        | Error err ->
+            if err = Success then raise Internal_error ;
+            Format.printf "Error: %s\n" (StatusCode.to_string err) ;
+            exit (-1) ) )
 end
