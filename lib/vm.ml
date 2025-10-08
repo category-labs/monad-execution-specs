@@ -232,7 +232,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   (* Designated invalid opcode 0xfe *)
   let invalid : opcode_impl = fail Invalid_instruction
 
-  (* Note that `stop` instructions get executed (even if they do nothing) *)
   let stop =
     (* Stack *)
     (* Gas *)
@@ -562,7 +561,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       let$ () = machine_state |-- active_memory_words := new_memory_words in
       return (GasCosts.memory_cost new_memory_words - GasCosts.memory_cost current_memory_words)
 
-  let sha3 =
+  let keccak =
     (* Stack *)
     let$ start_index = pop in
     let$ size = pop in
@@ -583,7 +582,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let address =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -613,7 +611,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let origin =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -626,7 +623,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let caller =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -639,7 +635,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let callvalue =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -671,7 +666,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let calldatasize =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -719,7 +713,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let blockhash _s = todo ()
   let coinbase =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -732,7 +725,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let timestamp =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -745,7 +737,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let number =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -758,7 +749,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let prevrandao =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -771,7 +761,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let gaslimit =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -784,7 +773,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let chainid =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -797,7 +785,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let selfbalance _s = todo ()
   let basefee =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.base in
 
@@ -820,16 +807,13 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.base in
 
     (* Operation *)
-
     (* PC *)
     increase_pc_and_continue
 
   let push_ i : opcode_impl =
     assert (i >= 0) ;
     assert (i <= 32) ;
-
     (* Stack *)
-
     (* Gas *)
     let$ () = spend (if i = 0 then GasCosts.base else GasCosts.very_low) in
 
@@ -844,7 +828,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let dup i =
     assert (i >= 1) ;
     assert (i <= 16) ;
-
     (* Stack *)
     let$ nth_elt =
       !(machine_state |-- stack)
@@ -871,7 +854,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let swap i =
     assert (i >= 1) ;
     assert (i <= 16) ;
-
     (* Stack *)
     let$ first = pop in
     let$ nth, stack' =
@@ -963,11 +945,32 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     if Word.is_zero condition then increase_pc_and_continue else update_pc_and_continue (fun _ -> new_pc)
 
-  let pc_ _s = todo ()
-  let msize _s = todo ()
+  let pc_ =
+    (* Stack *)
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ pc = !(machine_state |-- pc) in
+    let$ () = push pc in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let msize =
+    (* Stack *)
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ memory_words = !(machine_state |-- active_memory_words) in
+    let$ () = push Word.(~$8 * memory_words) in
+
+    (* PC *)
+    increase_pc_and_continue
+
   let gas =
     (* Stack *)
-
     (* Gas *)
     let$ () = spend GasCosts.very_low in
 
@@ -1020,111 +1023,128 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let delegatecall _s = todo ()
   let create2 _s = todo ()
   let staticcall _s = todo ()
-  let revert _s = todo ()
+
+  let revert =
+    (* Stack *)
+    let$ pos = pop in
+    let$ size = pop in
+
+    (* Gas *)
+    let$ () =
+      (* TODO: this is a copy of identical code in `return_`, maybe abstract over it *)
+      (* We do not spend gas when copying a zero-size return value *)
+      when_
+        Word.(size > zero)
+        (let$ memory_extension_gas = extend_memory_to Word.(pos + size - one) in
+         spend GasCosts.(zero + memory_extension_gas) )
+    in
+
+    (* Operation *)
+    let$ result = Memory.read_block_at pos size <$> !(machine_state |-- memory) in
+    let$ () = machine_state |-- output_buffer := result in
+
+    (* PC *)
+    fail Revert
 
   let selfdestruct _s = todo ()
 
-  let opcode_to_impl (opcode : char) =
+  let execute_opcode (opcode : Opcode.t) =
     let impl =
       match opcode with
-      | '\x00' -> stop
       (* Arithmetic *)
-      | '\x01' -> add
-      | '\x02' -> mul
-      | '\x03' -> sub
-      | '\x04' -> udiv
-      | '\x05' -> sdiv
-      | '\x06' -> umod
-      | '\x07' -> smod
-      | '\x08' -> addmod
-      | '\x09' -> mulmod
-      | '\x0A' -> exp
-      | '\x0B' -> signextend
+      | Add -> add
+      | Mul -> mul
+      | Sub -> sub
+      | Udiv -> udiv
+      | Sdiv -> sdiv
+      | Umod -> umod
+      | Smod -> smod
+      | Addmod -> addmod
+      | Mulmod -> mulmod
+      | Exp -> exp
+      | Signextend -> signextend
       (* Comparison *)
-      | '\x10' -> lt
-      | '\x11' -> gt
-      | '\x12' -> slt
-      | '\x13' -> sgt
-      | '\x14' -> eq
-      | '\x15' -> is_zero
+      | Lt -> lt
+      | Gt -> gt
+      | Slt -> slt
+      | Sgt -> sgt
+      | Eq -> eq
+      | Iszero -> is_zero
       (* Bitwise *)
-      | '\x16' -> bitwise_and
-      | '\x17' -> bitwise_or
-      | '\x18' -> bitwise_xor
-      | '\x19' -> bitwise_not
-      | '\x1A' -> byte
-      | '\x1b' -> shl
-      | '\x1c' -> shr
-      | '\x1d' -> sar
+      | And -> bitwise_and
+      | Or -> bitwise_or
+      | Xor -> bitwise_xor
+      | Not -> bitwise_not
+      | Byte -> byte
+      | Shl -> shl
+      | Shr -> shr
+      | Sar -> sar
       (* Cryptography *)
-      | '\x20' -> sha3
+      | Keccak -> keccak
       (* Environment *)
-      | '\x30' -> address
-      | '\x31' -> balance
-      | '\x32' -> origin
-      | '\x33' -> caller
-      | '\x34' -> callvalue
-      | '\x35' -> calldataload
-      | '\x36' -> calldatasize
-      | '\x37' -> calldatacopy
-      | '\x38' -> codesize
-      | '\x39' -> codecopy
-      | '\x3a' -> gasprice
-      | '\x3b' -> extcodesize
-      | '\x3c' -> extcodecopy
-      | '\x3d' -> returndatasize
-      | '\x3e' -> returndatacopy
-      | '\x3f' -> extcodehash
-      | '\x40' -> blockhash
-      | '\x41' -> coinbase
-      | '\x42' -> timestamp
-      | '\x43' -> number
-      | '\x44' -> prevrandao
-      | '\x45' -> gaslimit
-      | '\x46' -> chainid
-      | '\x47' -> selfbalance
-      | '\x48' -> basefee
-      | '\x49' -> blobhash
-      | '\x4a' -> blobbasefee
-      (* Stack *)
-      | '\x50' -> pop_
+      | Address -> address
+      | Balance -> balance
+      | Origin -> origin
+      | Caller -> caller
+      | Callvalue -> callvalue
+      | Calldataload -> calldataload
+      | Calldatasize -> calldatasize
+      | Calldatacopy -> calldatacopy
+      | Codesize -> codesize
+      | Codecopy -> codecopy
+      | Gasprice -> gasprice
+      | Extcodesize -> extcodesize
+      | Extcodecopy -> extcodecopy
+      | Returndatasize -> returndatasize
+      | Returndatacopy -> returndatacopy
+      | Extcodehash -> extcodehash
+      | Blockhash -> blockhash
+      | Coinbase -> coinbase
+      | Timestamp -> timestamp
+      | Number -> number
+      | Prevrandao -> prevrandao
+      | Gaslimit -> gaslimit
+      | Chainid -> chainid
+      | Selfbalance -> selfbalance
+      | Basefee -> basefee
+      | Blobhash -> blobhash
+      | Blobbasefee -> blobbasefee
+      | Gas -> gas
       (* Memory and storage *)
-      | '\x51' -> mload
-      | '\x52' -> mstore
-      | '\x53' -> mstore8
-      | '\x54' -> sload
-      | '\x55' -> sstore
+      | Msize -> msize
+      | Mload -> mload
+      | Mstore -> mstore
+      | Mstore8 -> mstore8
+      | Sload -> sload
+      | Sstore -> sstore
+      | Tload -> tload
+      | Tstore -> tstore
+      | Mcopy -> mcopy
       (* Control flow *)
-      | '\x56' -> jump
-      | '\x57' -> jumpi
-      | '\x58' -> pc_
-      (* Environment *)
-      | '\x59' -> msize
-      | '\x5a' -> gas
-      (* Control flow *)
-      | '\x5b' -> jumpdest
-      (* Memory and storage *)
-      | '\x5c' -> tload
-      | '\x5d' -> tstore
-      | '\x5e' -> mcopy
+      | Jump -> jump
+      | Jumpi -> jumpi
+      | Pc -> pc_
+      | Jumpdest -> jumpdest
+      | Stop -> stop
+      | Return -> return_
+      | Revert -> revert
       (* Stack *)
-      | '\x5f' -> push_ 0
-      | '\x60' .. '\x7f' -> push_ (Char.code opcode - 0x60 + 1)
-      | '\x80' .. '\x8f' -> dup (Char.code opcode - 0x80 + 1)
-      | '\x90' .. '\x9f' -> swap (Char.code opcode - 0x90 + 1)
+      | Pop -> pop_
+      | Push i -> push_ i
+      | Dup i -> dup i
+      | Swap i -> swap i
       (* System *)
-      | '\xa0' -> log 0
-      | '\xf0' -> create
-      | '\xf1' -> call
-      | '\xf2' -> callcode
-      | '\xf3' -> return_
-      | '\xf4' -> delegatecall
-      | '\xf5' -> create2
-      | '\xfa' -> staticcall
-      | '\xfd' -> revert
-      | '\xfe' -> invalid
-      | '\xff' -> selfdestruct
-      | _ -> undefined
+      | Log i -> log i
+      | Create -> create
+      | Call -> call
+      | Callcode -> callcode
+      | Delegatecall -> delegatecall
+      | Create2 -> create2
+      | Staticcall -> staticcall
+      | Selfdestruct -> selfdestruct
+      (* Error *)
+      | Invalid -> invalid
+      | Undefined _ -> undefined
     in
     impl
 
@@ -1143,7 +1163,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     in
     loop Word.zero
 
-  let trace =
+  let trace_state =
     let$ ms = !machine_state in
     Format.printf "PC: %s\n" (Word.to_string ms.pc) ;
     Format.printf "Gas: %s\n" (Word.to_string ms.gas) ;
@@ -1153,24 +1173,26 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     trace_memory ms ;
     return ()
 
-  let rec run (code : Bytes.t) : unit M.t =
-    (*let$ () = trace in*)
+  let rec run ?(trace = false) (code : Bytes.t) : unit M.t =
+    let$ () = when_ trace trace_state in
     let$ pc = !(machine_state |-- pc) in
     let opcode =
       (* YP (157) *)
       match Word.to_int_opt pc with
-      | Some pc when pc < Bytes.length code -> code.[pc]
-      | _ -> '\x00'
+      | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
+      | _ -> Opcode.Stop
     in
-    (*Format.printf "Executing opcode 0x%x\n" (Char.code opcode) ;*)
-    let$ continue = opcode_to_impl opcode in
-    if continue then run code else return ()
+    ( if trace then
+        let info = Opcode.info opcode in
+        Format.printf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
+    let$ continue = execute_opcode opcode in
+    if continue then run ~trace code else return ()
 
-  let call (msg : Evmc.Message.t) : Evmc.Result.t Host.t =
+  let call ?(trace = false) (msg : Evmc.Message.t) : Evmc.Result.t Host.t =
     Host.(
       let$ tx_context = Host.get_tx_context in
       let ctx = Context.make tx_context msg in
-      let$ res, ctx = run msg.code ctx in
+      let$ res, ctx = run ~trace msg.code ctx in
       return
         ( match res with
         | Ok () ->
