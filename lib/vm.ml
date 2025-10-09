@@ -110,7 +110,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; value : Word.t (* I_w *)
       ; bytes : Bytes.t (* I_b *)
       ; header : ExecutionBlockHeader.t (* I_H *)
-      ; write_permission : bool (* I_w *) }
+      ; write_permission : bool (* I_w *)
+      ; blob_versioned_hashes : Word.t list (* EIP-4844 *)
+      ; blob_base_fee : Word.t (* EIP-7516 *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
@@ -123,7 +125,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; value = msg.value
       ; bytes = msg.code
       ; header = ExecutionBlockHeader.of_tx_context ctx
-      ; write_permission = not (List.mem Evmc.Flags.Static msg.flags) }
+      ; write_permission = not (List.mem Evmc.Flags.Static msg.flags)
+      ; blob_versioned_hashes = ctx.blob_hashes
+      ; blob_base_fee = ctx.blob_base_fee }
   end
   open ExecutionEnvironment
 
@@ -170,9 +174,11 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   end
   open M
 
+  module Ethereum = Chain.Ethereum
+
   let max_stack_depth = 1024
 
-  let spend (amount : Word.t) (*: unit M.t*) =
+  let spend (amount : Word.t) =
     let$ gas_remaining = !(machine_state |-- gas) in
     if Word.(gas_remaining < amount) then fail Out_of_gas
     else machine_state |-- gas := Word.(gas_remaining - amount)
@@ -228,6 +234,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   (* General undefined opcode *)
   let undefined : opcode_impl = fail Undefined_instruction
+
+  (* Enable an instruction only from a certain EVM revision *)
+  let since rev impl = if Traits.evm_rev >= rev then impl else undefined
 
   (* Designated invalid opcode 0xfe *)
   let invalid : opcode_impl = fail Invalid_instruction
@@ -548,9 +557,52 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let shl _s = todo ()
-  let shr _s = todo ()
-  let sar _s = todo ()
+  let logical_shift_opcode_impl shift_fn =
+      (* Stack *)
+       let$ shift_amount = pop in
+       let$ value = pop in
+
+       (* Gas *)
+       let$ () = spend GasCosts.very_low in
+
+       (* Operation *)
+       let shifted =
+         Word.(
+           match to_int_opt shift_amount with
+           | None -> Word.zero
+           | Some s when Stdlib.(s >= 256) -> Word.zero
+           | Some s -> shift_fn value s )
+       in
+       let$ () = push shifted in
+
+       (* PC *)
+       increase_pc_and_continue
+
+  let shl = since Ethereum.Revision.Constantinople (logical_shift_opcode_impl Word.shift_left)
+  let shr = since Ethereum.Revision.Constantinople (logical_shift_opcode_impl Word.shift_right)
+
+  let sar =
+    since Ethereum.Revision.Constantinople
+      ((* Stack *)
+       let$ shift_amount = pop in
+       let$ value = pop in
+
+       (* Gas *)
+       let$ () = spend GasCosts.very_low in
+
+       (* Operation *)
+       let full_shift = Word.(if is_negative value then ~$(-1) else zero) in
+       let shifted =
+         Word.(
+           match to_int_opt shift_amount with
+           | None -> full_shift
+           | Some s when Stdlib.(s >= 256) -> full_shift
+           | Some s -> shift_right_arith value s )
+       in
+       let$ () = push shifted in
+
+       (* PC *)
+       increase_pc_and_continue )
 
   let extend_memory_to (new_address : Word.t) : Word.t M.t =
     let open Word in
@@ -795,9 +847,40 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let blobhash _s = if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun) then todo () else undefined _s
+  (* EIP-4844 *)
+  let blobhash =
+    since Chain.Ethereum.Revision.Cancun
+      ((* Stack *)
+       let$ index = pop in
 
-  let blobbasefee _s = if Chain.Ethereum.Revision.(Traits.evm_rev >= Cancun) then todo () else undefined _s
+       (* Gas *)
+       let$ () = spend GasCosts.very_low in
+
+       (* Operation *)
+       let$ hashes = !(execution_environment |-- blob_versioned_hashes) in
+       let hash =
+         match Word.to_int_opt index with
+         | None -> Word.zero
+         | Some i -> Option.value ~default:Word.zero (List.nth_opt hashes i)
+       in
+       let$ () = push hash in
+
+       (* PC *)
+       increase_pc_and_continue )
+
+  (* EIP-7516 *)
+  let blobbasefee =
+    since Chain.Ethereum.Revision.Cancun
+      ((* Stack *)
+       (* Gas *)
+       let$ () = spend GasCosts.base in
+
+       (* Operation *)
+       let$ fee = !(execution_environment |-- blob_base_fee) in
+       let$ () = push fee in
+
+       (* PC *)
+       increase_pc_and_continue )
 
   let pop_ =
     (* Stack *)
