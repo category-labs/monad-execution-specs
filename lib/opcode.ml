@@ -1,4 +1,5 @@
 type t =
+  (* 0x0X *)
   | Stop
   | Add
   | Mul
@@ -11,6 +12,7 @@ type t =
   | Mulmod
   | Exp
   | Signextend
+  (* 0x1X *)
   | Lt
   | Gt
   | Slt
@@ -25,7 +27,9 @@ type t =
   | Shl
   | Shr
   | Sar
+  (* 0x2X *)
   | Keccak
+  (* 0x3X *)
   | Address
   | Balance
   | Origin
@@ -42,6 +46,7 @@ type t =
   | Returndatasize
   | Returndatacopy
   | Extcodehash
+  (* 0x4X *)
   | Blockhash
   | Coinbase
   | Timestamp
@@ -53,6 +58,7 @@ type t =
   | Basefee
   | Blobhash
   | Blobbasefee
+  (* 0x5X *)
   | Pop
   | Mload
   | Mstore
@@ -69,9 +75,13 @@ type t =
   | Tstore
   | Mcopy
   | Push of int
+  (* 0x8X*)
   | Dup of int
+  (* 0x9X *)
   | Swap of int
+  (* 0xAX *)
   | Log of int
+  (* 0xFX *)
   | Create
   | Call
   | Callcode
