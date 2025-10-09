@@ -87,6 +87,12 @@ let div_signed _x _y = todo ()
 
 let byte_width (x : t) = Z.numbits (to_z_unsigned x)
 
+let shift_left x shift =  of_z (Z.shift_left (to_z_unsigned x) shift)
+
+(* Zarith's shift right is arithmetic, however to_z_unsigned always results in a positive number *)
+let shift_right x shift = of_z (Z.shift_right (to_z_unsigned x) shift)
+let shift_right_arith x shift = of_z (Z.shift_right (to_z_signed x) shift)
+
 (* Comparisons, Map, Set *)
 include Comparable.Make (struct
   type t_outer = t
@@ -116,5 +122,7 @@ let exp _x _y = todo ()
 let sign_extend _i _x = todo ()
 
 let signed_compare x y = Z.compare (to_z_signed x) (to_z_signed y)
+
+let is_negative x = Stdlib.(signed_compare x zero = -1)
 
 let incr x = x + ~$1
