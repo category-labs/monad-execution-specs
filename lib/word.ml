@@ -16,13 +16,13 @@ end = struct
   let max_unsigned = Z.(shift_left one 256 - one)
   let max_signed = Z.(shift_left one 255 - one)
 
-  let of_z (x : Z.t) = Z.extract x 0 32
+  let of_z (x : Z.t) = Z.extract x 0 256
 
   let to_z_unsigned x = x
   let to_z_signed x =
     Z.(
       assert (leq x max_unsigned) ;
-      if gt x max_signed then max_unsigned + one - x else x )
+      if gt x max_signed then x - max_unsigned - one else x )
 end
 
 include Impl
@@ -37,6 +37,7 @@ let reverse (bs : Bytes.t) : Bytes.t =
 let of_bytes_be (bs : Bytes.t) =
   (* Do not truncate silently *)
   if Bytes.length bs > 32 then raise Internal_error else of_z (Z.of_bits (reverse bs))
+
 let to_bytes32_be (x : t) =
   let be_bytes = reverse (Z.to_bits (to_z_unsigned x)) in
   let len = Bytes.length be_bytes in
@@ -44,10 +45,21 @@ let to_bytes32_be (x : t) =
   let padding = Bytes.init (32 - len) (fun _ -> '\x00') in
   padding ^ be_bytes
 
+let to_bytes32_le (x : t) =
+  let le_bytes = Z.to_bits (to_z_unsigned x) in
+  let len = Bytes.length le_bytes in
+  assert (len <= 32) ;
+  let padding = Bytes.init (32 - len) (fun _ -> '\x00') in
+  le_bytes ^ padding
+
 let byte i x = (Z.to_bits (to_z_unsigned x)).[i]
 
-let of_string s = of_z (Z.of_string s)
 let to_string x = Z.to_string (to_z_unsigned x)
+let of_string s =
+  (* Do not truncate silently *)
+  let x = Z.of_string s in
+  if Z.(x > to_z_unsigned max_unsigned || x < zero) then raise Internal_error ;
+  of_z (Z.of_string s)
 
 let of_bool b = if b then one else zero
 
@@ -87,7 +99,7 @@ let div_signed _x _y = todo ()
 
 let byte_width (x : t) = Z.numbits (to_z_unsigned x)
 
-let shift_left x shift =  of_z (Z.shift_left (to_z_unsigned x) shift)
+let shift_left x (shift : int) = of_z (Z.shift_left (to_z_unsigned x) shift)
 
 (* Zarith's shift right is arithmetic, however to_z_unsigned always results in a positive number *)
 let shift_right x shift = of_z (Z.shift_right (to_z_unsigned x) shift)

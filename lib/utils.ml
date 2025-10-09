@@ -15,7 +15,7 @@ module Bytes = struct
     init sz (fun j -> if i + j >= length bytes then '\x00' else bytes.[i + j])
 
   let to_hex_string bytes =
-    to_seq bytes |> Seq.map Char.code |> Seq.map (Format.sprintf "%x") |> List.of_seq |> String.concat ""
+    to_seq bytes |> Seq.map Char.code |> Seq.map (Format.sprintf "%02x") |> List.of_seq |> String.concat ""
 end
 
 module type TY = sig

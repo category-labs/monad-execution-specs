@@ -1,0 +1,3 @@
+(test
+  (name eip_145)
+  (libraries monad_lib alcotest))
