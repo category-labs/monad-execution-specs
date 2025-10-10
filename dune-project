@@ -10,4 +10,6 @@
     (ocaml (>= 5.3))
     (zarith (>= 1.14))
     (lens (>= 1.2.5))
-    (alcotest (>= 1.9.0))))
+    (alcotest (>= 1.9.0))
+    (qcheck-core (>= 0.26))
+    (qcheck-alcotest (>= 0.26))))

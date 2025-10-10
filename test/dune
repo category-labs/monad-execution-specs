@@ -1,3 +1,7 @@
 (test
+  (name word)
+  (libraries monad_lib alcotest qcheck-core qcheck-alcotest))
+
+(test
   (name eip_145)
-  (libraries monad_lib alcotest))
+  (libraries monad_lib alcotest qcheck-core qcheck-alcotest))
