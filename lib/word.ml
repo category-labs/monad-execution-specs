@@ -3,8 +3,12 @@ open Utils
 module Impl : sig
   type t
 
-  val max_unsigned : t
-  val max_signed : t
+  val max_unsigned_t : t
+  val max_signed_t : t
+
+  val min_signed_z : Z.t
+  val max_signed_z : Z.t
+  val max_unsigned_z : Z.t
 
   val of_z : Z.t -> t
 
@@ -13,22 +17,37 @@ module Impl : sig
 end = struct
   type t = Z.t
 
-  let max_unsigned = Z.(shift_left one 256 - one)
-  let max_signed = Z.(shift_left one 255 - one)
+  let max_unsigned_t = Z.(shift_left one 256 - one)
+  let max_signed_t = Z.(shift_left one 255 - one)
 
-  let of_z (x : Z.t) = Z.extract x 0 256
+  let min_signed_z = Z.(neg max_signed_t - one)
+  let max_signed_z = max_signed_t
+  let max_unsigned_z = max_unsigned_t
 
-  let to_z_unsigned x = x
+  let valid x =
+    Z.(leq x max_unsigned_t && geq x zero)
+
+  let of_z (x : Z.t) =
+    let x = Z.extract x 0 256 in
+    assert (valid x);
+    x
+
+  let to_z_unsigned x = assert (valid x); x
   let to_z_signed x =
     Z.(
-      assert (leq x max_unsigned) ;
-      if gt x max_signed then x - max_unsigned - one else x )
+      assert (valid x);
+      if gt x max_signed_t then x - max_unsigned_t - one else x )
 end
 
 include Impl
 
 let zero = of_z Z.zero
 let one = of_z Z.one
+
+let is_representable_signed (x: Z.t) =
+  Z.(geq x min_signed_z && leq x max_signed_z)
+let is_representable_unsigned (x: Z.t) =
+  Z.(geq x zero && leq x max_unsigned_z)
 
 let reverse (bs : Bytes.t) : Bytes.t =
   let l = Bytes.length bs in
@@ -58,7 +77,7 @@ let to_string x = Z.to_string (to_z_unsigned x)
 let of_string s =
   (* Do not truncate silently *)
   let x = Z.of_string s in
-  if Z.(x > to_z_unsigned max_unsigned || x < zero) then raise Internal_error ;
+  if Z.(x > to_z_unsigned max_unsigned_t || x < zero) then raise Internal_error ;
   of_z (Z.of_string s)
 
 let of_bool b = if b then one else zero

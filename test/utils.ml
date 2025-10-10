@@ -1,12 +1,52 @@
 open Monad_lib
 open Utils
 open Chain.Ethereum
+module Word = Monad_lib.Word
 
 module Revision = struct
   let rev = Chain.Monad.Revision.Four
 end
 module EvmcHost = Evmc.Dummy (Revision)
 module Vm = Vm.Make (Revision) (EvmcHost)
+
+(* Word.t generator *)
+module QCheck2 = struct
+  include QCheck2
+  module Print = struct
+    include Print
+    let word x = Format.sprintf "%s (0x%s)" (Word.to_string x) (Bytes.to_hex_string (Word.to_bytes32_le x))
+    let z : Z.t t = fun x ->
+      (if Z.(x < zero) then Format.sprintf "%s (-0x%s)" (Z.to_string x) else Format.sprintf "0x%s")
+      (Bytes.to_hex_string (Z.to_bits x))
+  end
+
+  module Gen = struct
+    include Gen
+    let uint8 = char_range '\x00' '\xff'
+    let word : Word.t t =
+      (*
+       * Uniformly distributed random strings are very unlikely to be negative.
+       * Bool shrinks towards false so this generator will shrink towards positive numbers.
+       *)
+      let* negative = bool in
+      let* bytes_be =
+        if negative then (
+          (* Always generate 32 bytes, force MSB to be 1. Note that bytes will shrink towards 0xff *)
+          let* bytes = bytes_size ~gen:(char_range ~origin:'\xff' '\x00' '\xff') (return 32) in
+          Stdlib.Bytes.(
+            set bytes 0 (Char.chr (Int.logor (Char.code (get bytes 0)) 0x80)) ;
+            return (to_string bytes) ) )
+        else string_size ~gen:uint8 (int_bound 32)
+      in
+      return (Word.of_bytes_be bytes_be)
+
+    let z : Z.t t =
+      let* negative = bool in
+      let* bytes_le = string_size ~gen:uint8 nat in
+      let abs = Z.of_bits bytes_le in
+      return (if negative then Z.neg abs else abs)
+  end
+end
 
 let test_program ~(pre : unit Vm.M.t) ~(post : (unit Vm.M.t, Evmc.Result.StatusCode.t) result)
     (program : Opcode.t list) : unit =
@@ -62,8 +102,7 @@ let word =
 
 let test_program_pure ~(push : Word.t list) ~(pop : Word.t list) program =
   let open Vm.M in
-  test_program program
-    ~pre:(List.iterM push ~f:Vm.push)
+  test_program program ~pre:(List.iterM push ~f:Vm.push)
     ~post:
       (Ok
          (List.iterM pop ~f:(fun expected ->
@@ -73,6 +112,8 @@ let test_program_pure ~(push : Word.t list) ~(pop : Word.t list) program =
 let tests_pure program (tests : (string list * string list) list) =
   let parse (push, pop) = (List.map Word.of_string push, List.map Word.of_string pop) in
   List.map
-    (fun (push, pop) ->
-      Alcotest.test_case "" `Quick (fun () -> test_program_pure ~push ~pop program) )
+    (fun (push, pop) -> Alcotest.test_case "" `Quick (fun () -> test_program_pure ~push ~pop program))
     (List.map parse tests)
+
+let check_prop ~name ?print ?(count = 10000) generator property =
+  QCheck_alcotest.to_alcotest (QCheck2.Test.make ?print ~name ~count generator property)
