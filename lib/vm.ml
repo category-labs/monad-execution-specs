@@ -627,7 +627,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     in
 
     (* Operation *)
-    let$ () = todo () in
+    let$ bytes = Memory.read_block_at start_index size <$> !(machine_state |-- memory) in
+    let$ () = push (Crypto.keccak_256 bytes) in
 
     (* PC *)
     increase_pc_and_continue
