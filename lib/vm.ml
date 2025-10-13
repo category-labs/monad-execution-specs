@@ -51,12 +51,12 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   module MachineState = struct
     (* YP 9.4.1 *)
     type t =
-      { gas : Word.t
-      ; pc : Word.t
-      ; memory : Memory.t
-      ; active_memory_words : Word.t
-      ; stack : Word.t list
-      ; output_buffer : Bytes.t }
+      { gas : Word.t (* mu_g *)
+      ; pc : Word.t (* mu_pc *)
+      ; memory : Memory.t (* mu_m *)
+      ; active_memory_words : Word.t (* mu_i *)
+      ; stack : Word.t list (* mu_s *)
+      ; output_buffer : Bytes.t (* mu_o *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
@@ -135,7 +135,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     type t =
       { execution_environment : ExecutionEnvironment.t
       ; machine_state : MachineState.t
-      ; jump_destinations : Word.Set.t (* D(c) *) }
+      ; jump_destinations : Word.Set.t (* D(c) *)
+      ; initial_storage : Word.t Word.Map.t
+            (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *)
+      }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
@@ -156,7 +159,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       if Word.(ctx.chain_id <> ~$Traits.chain_id) then raise Internal_error ;
       { execution_environment = ExecutionEnvironment.make ctx msg
       ; machine_state = {MachineState.initial with gas = Word.of_uint64 msg.gas}
-      ; jump_destinations = valid_jump_destinations msg.code }
+      ; jump_destinations = valid_jump_destinations msg.code
+      ; initial_storage = Word.Map.empty }
   end
   open Context
 
@@ -175,6 +179,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   open M
 
   module Ethereum = Chain.Ethereum
+  module Address = Ethereum.Address
 
   let max_stack_depth = 1024
 
@@ -218,11 +223,18 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     let word_copy_cost = ~$3
 
+    let block_hash_cost = ~$20
+
     let memory_cost active_memory_words =
       Word.(((active_memory_words ** 2) / ~$512) + (~$3 * active_memory_words))
 
     let cold_account_access_cost = Word.of_uint64 Traits.cold_costs.Traits.cold_account_cost
-    let warm_storage_read_cost = ~$100
+    let warm_access_cost = ~$100
+
+    let cold_sload_cost = ~$2_100
+
+    let sset_cost = ~$20_000
+    let sreset_cost = ~$2_900
   end
 
   let finish_execution : bool M.t = return false
@@ -558,25 +570,25 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     increase_pc_and_continue
 
   let logical_shift_opcode_impl shift_fn =
-      (* Stack *)
-       let$ shift_amount = pop in
-       let$ value = pop in
+    (* Stack *)
+    let$ shift_amount = pop in
+    let$ value = pop in
 
-       (* Gas *)
-       let$ () = spend GasCosts.very_low in
+    (* Gas *)
+    let$ () = spend GasCosts.very_low in
 
-       (* Operation *)
-       let shifted =
-         Word.(
-           match to_int_opt shift_amount with
-           | None -> Word.zero
-           | Some s when Stdlib.(s >= 256) -> Word.zero
-           | Some s -> shift_fn value s )
-       in
-       let$ () = push shifted in
+    (* Operation *)
+    let shifted =
+      Word.(
+        match to_int_opt shift_amount with
+        | None -> Word.zero
+        | Some s when Stdlib.(s >= 256) -> Word.zero
+        | Some s -> shift_fn value s )
+    in
+    let$ () = push shifted in
 
-       (* PC *)
-       increase_pc_and_continue
+    (* PC *)
+    increase_pc_and_continue
 
   let shl = since Ethereum.Revision.Constantinople (logical_shift_opcode_impl Word.shift_left)
   let shr = since Ethereum.Revision.Constantinople (logical_shift_opcode_impl Word.shift_right)
@@ -633,67 +645,39 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let address =
+  let fetch_environment_variable_opcode_impl (field : Context.t -> Word.t) =
     (* Stack *)
     (* Gas *)
     let$ () = spend GasCosts.base in
 
     (* Operation *)
-    let$ addr = !(execution_environment |-- address) in
-    let$ () = push (Chain.Ethereum.Address.to_word addr) in
+    let$ ctx = get in
+    let$ () = push (field ctx) in
 
     (* PC *)
     increase_pc_and_continue
 
+  let address =
+    fetch_environment_variable_opcode_impl (fun ctx -> Address.to_word ctx.execution_environment.address)
+  let origin =
+    fetch_environment_variable_opcode_impl (fun ctx -> Address.to_word ctx.execution_environment.origin)
+  let caller =
+    fetch_environment_variable_opcode_impl (fun ctx -> Address.to_word ctx.execution_environment.sender)
+  let callvalue = fetch_environment_variable_opcode_impl (execution_environment |-- value).get
+
   let balance =
     (* Stack *)
-    let$ address = Chain.Ethereum.Address.of_word_masking <$> pop in
+    let$ address = Address.of_word_masking <$> pop in
 
     (* Gas *)
     let$ access = access_account address in
     let$ () =
-      spend GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_storage_read_cost)
+      spend GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
 
     (* Operation *)
     let$ balance = get_balance address in
     let$ () = push balance in
-
-    (* PC *)
-    increase_pc_and_continue
-
-  let origin =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ o = !(execution_environment |-- origin) in
-    let$ () = push (Chain.Ethereum.Address.to_word o) in
-
-    (* PC *)
-    increase_pc_and_continue
-
-  let caller =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ caller = !(execution_environment |-- sender) in
-    let$ () = push (Chain.Ethereum.Address.to_word caller) in
-
-    (* PC *)
-    increase_pc_and_continue
-
-  let callvalue =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ v = !(execution_environment |-- value) in
-    let$ () = push v in
 
     (* PC *)
     increase_pc_and_continue
@@ -729,7 +713,19 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let calldatacopy =
+  let codesize =
+    (* Stack *)
+    (* Gas *)
+    let$ () = spend GasCosts.base in
+
+    (* Operation *)
+    let$ size = Bytes.length <$> !(execution_environment |-- bytes) in
+    let$ () = push (Word.of_int size) in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let copy_input_data_opcode_impl data_location =
     (* Stack *)
     let$ dst_start = pop in
     let$ src_start = pop in
@@ -738,10 +734,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* Gas *)
     let n_words = Word.((size + ~$31) / ~$32) in
     let$ memory_extension_gas = extend_memory_to Word.(dst_start + size) in
-    let$ () = spend GasCosts.(memory_extension_gas + (n_words * word_copy_cost) + memory_extension_gas) in
+    let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas) in
 
     (* Operation *)
-    let$ data = !(execution_environment |-- data) in
+    let$ data = !data_location in
     let block =
       match (Word.to_int_opt src_start, Word.to_int_opt size) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
@@ -753,100 +749,159 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let codesize _s = todo ()
+  let calldatacopy = copy_input_data_opcode_impl (execution_environment |-- data)
 
-  let codecopy _s = todo ()
-  let gasprice _s = todo ()
-  let extcodesize _s = todo ()
-  let extcodecopy _s = todo ()
-  let returndatasize _s = todo ()
-  let returndatacopy _s = todo ()
-  let extcodehash _s = todo ()
+  let codecopy = copy_input_data_opcode_impl (execution_environment |-- bytes)
 
-  let blockhash _s = todo ()
+  let gasprice = fetch_environment_variable_opcode_impl (execution_environment |-- price).get
+
+  let extcodesize =
+    (* Stack *)
+    let$ address = Address.of_word_masking <$> pop in
+
+    (* Gas *)
+    let$ access = access_account address in
+    let$ () =
+      spend GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    in
+
+    (* Operation *)
+    let$ size = get_code_size address in
+    let$ () = push size in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let extcodecopy =
+    (* Stack *)
+    let$ address = Address.of_word_masking <$> pop in
+    let$ dst_start = pop in
+    let$ src_start = pop in
+    let$ size = pop in
+
+    (* Gas *)
+    let$ access = access_account address in
+    let access_gas =
+      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    in
+    let n_words = Word.((size + ~$31) / ~$32) in
+    let$ memory_extension_gas = extend_memory_to Word.(dst_start + size) in
+    let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas + access_gas) in
+
+    (* Operation *)
+    let$ data = copy_code address in
+    let block =
+      match (Word.to_int_opt src_start, Word.to_int_opt size) with
+      | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
+      | _, Some size -> Bytes.init size (fun _ -> '\x00')
+      | _, None -> raise Internal_error
+    in
+    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let extcodehash =
+    (* Stack *)
+    let$ address = Address.of_word_masking <$> pop in
+
+    (* Gas *)
+    let$ access = access_account address in
+    let access_gas =
+      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    in
+    let$ () = spend access_gas in
+
+    (* Operation *)
+    let$ hash = get_code_hash address in
+    let$ () = push hash in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let returndatasize =
+    fetch_environment_variable_opcode_impl (fun ctx ->
+        Word.of_int (Bytes.length ctx.machine_state.output_buffer) )
+
+  let returndatacopy =
+    (* Stack *)
+    let$ dst_start = pop in
+    let$ src_start = pop in
+    let$ size = pop in
+
+    (* Gas *)
+    let n_words = Word.((size + ~$31) / ~$32) in
+    let$ memory_extension_gas = extend_memory_to Word.(dst_start + size) in
+    let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas) in
+
+    (* Operation *)
+    let$ data = !(machine_state |-- output_buffer) in
+    (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access *)
+    (* YP (158) *)
+    let$ src_start, size =
+      match (Word.to_int_opt src_start, Word.to_int_opt size) with
+      | None, _ | _, None -> fail Invalid_memory_access
+      | Some start, Some sz when start + sz >= Bytes.length data -> fail Invalid_memory_access
+      | Some start, Some sz -> return (start, sz)
+    in
+    let block = Bytes.sub data src_start size in
+    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let blockhash =
+    (* Stack *)
+    let$ block_num = pop in
+
+    (* Gas *)
+    let$ () = spend GasCosts.block_hash_cost in
+
+    (* Operation *)
+    let$ current_block_num = !(execution_environment |-- header |-- number) in
+    let$ hash =
+      if Word.(current_block_num <= block_num || current_block_num - ~$256 > block_num) then return Word.zero
+      else get_block_hash block_num
+    in
+    let$ () = push hash in
+
+    (* PC *)
+    increase_pc_and_continue
+
   let coinbase =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
+    fetch_environment_variable_opcode_impl (fun ctx ->
+        Address.to_word ctx.execution_environment.header.coinbase )
 
-    (* Operation *)
-    let$ cb = !(execution_environment |-- header |-- coinbase) in
-    let$ () = push (Chain.Ethereum.Address.to_word cb) in
+  let timestamp = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- timestamp).get
 
-    (* PC *)
-    increase_pc_and_continue
-
-  let timestamp =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ ts = !(execution_environment |-- header |-- timestamp) in
-    let$ () = push ts in
-
-    (* PC *)
-    increase_pc_and_continue
-
-  let number =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ n = !(execution_environment |-- header |-- number) in
-    let$ () = push n in
-
-    (* PC *)
-    increase_pc_and_continue
+  let number = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- number).get
 
   let prevrandao =
+    fetch_environment_variable_opcode_impl (execution_environment |-- header |-- prev_randao).get
+
+  let gaslimit = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- gas_limit).get
+
+  (*
+   * The yellow paper gets the chain ID directly as the ambient variable Beta, as opposed to fetching it
+   * from a specific field in the execution environment. The executable specs, on the other hand, does get
+   * it from an environment field
+   *)
+  let chainid = fetch_environment_variable_opcode_impl (fun _ -> Word.of_int Traits.chain_id)
+
+  let selfbalance =
     (* Stack *)
     (* Gas *)
-    let$ () = spend GasCosts.base in
+    let$ () = spend GasCosts.low in
 
     (* Operation *)
-    let$ pr = !(execution_environment |-- header |-- prev_randao) in
-    let$ () = push pr in
+    let$ self = !(execution_environment |-- ExecutionEnvironment.address) in
+    let$ balance = get_balance self in
+    let$ () = push balance in
 
     (* PC *)
     increase_pc_and_continue
 
-  let gaslimit =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ gl = !(execution_environment |-- header |-- gas_limit) in
-    let$ () = push gl in
-
-    (* PC *)
-    increase_pc_and_continue
-
-  let chainid =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ () = push Word.(of_int Traits.chain_id) in
-
-    (* PC *)
-    increase_pc_and_continue
-
-  let selfbalance _s = todo ()
-  let basefee =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ bf = !(execution_environment |-- header |-- gas_limit) in
-    let$ () = push bf in
-
-    (* PC *)
-    increase_pc_and_continue
+  let basefee = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- gas_limit).get
 
   (* EIP-4844 *)
   let blobhash =
@@ -1000,8 +1055,54 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let sload _s = todo ()
-  let sstore _s = todo ()
+  let sload =
+    (* Stack *)
+    let$ key = pop in
+
+    (* Gas *)
+    let$ self = !(execution_environment |-- ExecutionEnvironment.address) in
+    let$ access = access_storage self key in
+    let$ () = spend GasCosts.(match access with `Cold -> cold_sload_cost | `Warm -> warm_access_cost) in
+
+    (* Operation *)
+    let$ value = get_storage self key in
+    let$ () = push value in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let sstore =
+    (* Stack *)
+    let$ key = pop in
+    let$ value' = pop in
+
+    (* Gas *)
+    let$ self = !(execution_environment |-- ExecutionEnvironment.address) in
+    let$ access = access_storage self key in
+    let$ value = get_storage self key in
+    let$ value0 = !(initial_storage |-- Word.Map.get key |-- Lens.get_or_default value) in
+    (*
+     * If the storage slot had already been written to, then initial_storage contained an entry for it and so
+     * this code does not change its value. If it had not been written to, then we store the value we get from
+     * storage, before the first update
+     *)
+    let$ () = initial_storage |-- Word.Map.get key := Some value0 in
+    let access_gas = GasCosts.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
+    let update_gas =
+      GasCosts.(
+        if value = value' || value0 <> value then warm_access_cost
+        else if value <> value' && value0 = value && value0 == Word.zero then sset_cost
+        else if not (value <> value' && value0 = value && value0 <> Word.zero) then raise Internal_error
+        else sreset_cost )
+    in
+    let$ () = spend GasCosts.(access_gas + update_gas) in
+
+    (* Operation *)
+    let$ () = set_storage self key value in
+
+    (* PC *)
+    increase_pc_and_continue
+
   let jump =
     (* Stack *)
     let$ new_pc = pop in
@@ -1029,29 +1130,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     if Word.is_zero condition then increase_pc_and_continue else update_pc_and_continue (fun _ -> new_pc)
 
-  let pc_ =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ pc = !(machine_state |-- pc) in
-    let$ () = push pc in
-
-    (* PC *)
-    increase_pc_and_continue
+  let pc_ = fetch_environment_variable_opcode_impl (machine_state |-- pc).get
 
   let msize =
-    (* Stack *)
-    (* Gas *)
-    let$ () = spend GasCosts.base in
-
-    (* Operation *)
-    let$ memory_words = !(machine_state |-- active_memory_words) in
-    let$ () = push Word.(~$8 * memory_words) in
-
-    (* PC *)
-    increase_pc_and_continue
+    fetch_environment_variable_opcode_impl (fun ctx -> Word.(~$8 * ctx.machine_state.active_memory_words))
 
   let gas =
     (* Stack *)
@@ -1074,9 +1156,54 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let tload _s = todo ()
-  let tstore _s = todo ()
-  let mcopy _s = todo ()
+  let tload =
+    (* Stack *)
+    let$ key = pop in
+
+    (* Gas *)
+    let$ () = spend GasCosts.warm_access_cost in
+
+    (* Operation *)
+    let$ value = get_transient_storage key in
+    let$ () = push value in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let tstore =
+    (* Stack *)
+    let$ key = pop in
+    let$ value = pop in
+
+    (* Gas *)
+    let$ () = spend GasCosts.warm_access_cost in
+
+    (* Operation *)
+    let$ can_write = !(execution_environment |-- write_permission) in
+    let$ () = when_ (not can_write) (fail Static_mode_violation) in
+    let$ () = set_transient_storage key value in
+
+    (* PC *)
+    increase_pc_and_continue
+
+  let mcopy =
+    (* Stack *)
+    let$ dst_start = pop in
+    let$ src_start = pop in
+    let$ size = pop in
+
+    (* Gas *)
+    let n_words = Word.((size + ~$31) / ~$32) in
+    let copy_cost = GasCosts.(n_words * word_copy_cost) in
+    let$ memory_expansion_cost = extend_memory_to Word.(max src_start dst_start + size) in
+    let$ () = spend GasCosts.(very_low + copy_cost + memory_expansion_cost) in
+
+    (* Operation *)
+    let$ block = Memory.read_block_at src_start size <$> !(machine_state |-- memory) in
+    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+
+    (* PC *)
+    increase_pc_and_continue
 
   let log _i = todo ()
 

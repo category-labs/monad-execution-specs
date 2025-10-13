@@ -1,9 +1,9 @@
 open Utils
 open Monad_lib
 open Opcode
+open Alcotest
 
 let () =
-  let open Alcotest in
   run "EIP-145: Bitwise shifting instructions in EVM"
     [ ( "SHL"
       , tests_pure [Shl]
