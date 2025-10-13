@@ -129,8 +129,8 @@ module Host = struct
     val access_account : Address.t -> [`Warm | `Cold] t
     val access_storage : Address.t -> Word.t -> [`Warm | `Cold] t
 
-    val get_transient_storage : Address.t -> Word.t t
-    val set_transient_storage : Address.t -> Word.t -> unit t
+    val get_transient_storage : Word.t -> Word.t t
+    val set_transient_storage : Word.t -> Word.t -> unit t
   end
 
   (* Lift a host monad through a transformer stack *)
