@@ -217,11 +217,13 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
   open AccruedSubstate
 
   module State = struct
-    type t = {accounts : Account.t Address.Map.t; substate : AccruedSubstate.t}
+    type t =
+      {accounts : Account.t Address.Map.t; substate : AccruedSubstate.t; transient_storage : Word.t Word.Map.t}
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
-    let empty = {accounts = Address.Map.empty; substate = AccruedSubstate.empty}
+    let empty =
+      {accounts = Address.Map.empty; substate = AccruedSubstate.empty; transient_storage = Word.Map.empty}
   end
   open State
 
@@ -291,6 +293,9 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
       let$ () = touch_storage addr key in
       return `Cold
 
-  let get_transient_storage _addr _key = todo ()
-  let set_transient_storage _addr _key _v = todo ()
+  let get_transient_storage key =
+    !(transient_storage |-- Word.Map.at key |-- get_or_default Word.zero)
+
+  let set_transient_storage key value =
+    transient_storage |-- Word.Map.at key := Some value
 end
