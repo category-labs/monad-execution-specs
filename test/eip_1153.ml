@@ -3,122 +3,60 @@ open Alcotest
 
 module Word = Monad_lib.Word
 
-let key_0 = Program.Lit Word.zero
-let key_1 = Program.Lit Word.one
-let key_2 = Program.Lit Word.(of_int 2)
-let key_3 = Program.Lit Word.(one ** 128)
-let key_4 = Program.Lit Word.max_unsigned_t
-
 let () =
   run "EIP-1153: Transient storage opcodes"
     [ ( "Unset values"
-      , [ test_case "Slot 0" `Quick (test_program_pure ~push:[] Program.(tload key_0) ~pop:[Word.zero])
-        ; test_case "Slot 1" `Quick (test_program_pure ~push:[] Program.(tload key_1) ~pop:[Word.zero])
-        ; test_case "Slot 2" `Quick (test_program_pure ~push:[] Program.(tload key_2) ~pop:[Word.zero])
-        ; test_case "Slot 2**128" `Quick (test_program_pure ~push:[] Program.(tload key_3) ~pop:[Word.zero])
-        ; test_case "Slot 2**256-1" `Quick (test_program_pure ~push:[] Program.(tload key_4) ~pop:[Word.zero])
-        ] )
+      , let test k =
+          test_case
+            (Format.sprintf "Tload(0x%s)" (Word.to_short_hex_string k))
+            `Quick
+            (test_program_pure ~push:[] Program.(tload (Lit k)) ~pop:[Word.zero])
+        in
+        let test_keys = Word.[~$0; ~$1; ~$2; ~$2 ** 128; max_unsigned_t] in
+        List.map test test_keys )
     ; ( "TLOAD after TSTORE"
-      , [ test_case "Slot 0" `Quick
+      , let test_keys = Word.[~$0; ~$1; ~$2; ~$2 ** 128; max_unsigned_t] in
+        let test k =
+          test_case
+            (Format.sprintf "Tload(0x%s)" (Word.to_short_hex_string k))
+            `Quick
             (test_program_pure ~push:[]
                Program.(
-                 tstore key_0 key_0
-                 @ tstore key_1 key_1
-                 @ tstore key_2 key_2
-                 @ tstore key_3 key_3
-                 @ tstore key_4 key_4
-                 @ tload key_0 )
+                 let stores = test_keys |> List.map (fun k -> tstore (Lit k) (Lit k)) |> List.concat in
+                 stores @ tload (Lit k) )
+               ~pop:[k] )
+        in
+        List.map test test_keys )
+    ; ( "TLOAD after SSTORE" (* Check that transient storage is distinct from storage *)
+      , let test_keys = Word.[~$0; ~$1; ~$2; ~$2 ** 128; max_unsigned_t] in
+        let test k =
+          test_case
+            (Format.sprintf "Tload(0x%s)" (Word.to_short_hex_string k))
+            `Quick
+            (test_program_pure ~push:[]
+               Program.(
+                 let stores = test_keys |> List.map (fun k -> sstore (Lit k) (Lit k)) |> List.concat in
+                 stores @ tload (Lit k) )
                ~pop:[Word.zero] )
-        ; test_case "Slot 1" `Quick
+        in
+        List.map test test_keys )
+    ; ( "TLOAD near TSTORE" (* Check that transient storage is word-addressed *)
+      , let write_keys = Word.[~$0; ~$2; ~$4; ~$6; ~$8] in
+        let test write_key =
+          let read_key_1 = Word.(write_key - one) in
+          let read_key_2 = Word.(write_key + one) in
+          test_case
+            (Format.sprintf "Tstore(0x%s); Tload(0x%s); Tload(0x%s)" (Word.to_short_hex_string write_key)
+               (Word.to_short_hex_string read_key_1)
+               (Word.to_short_hex_string read_key_2) )
+            `Quick
             (test_program_pure ~push:[]
                Program.(
-                 tstore key_0 key_0
-                 @ tstore key_1 key_1
-                 @ tstore key_2 key_2
-                 @ tstore key_3 key_3
-                 @ tstore key_4 key_4
-                 @ tload key_1 )
-               ~pop:[Word.one] )
-        ; test_case "Slot 2" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 tstore key_0 key_0
-                 @ tstore key_1 key_1
-                 @ tstore key_2 key_2
-                 @ tstore key_3 key_3
-                 @ tstore key_4 key_4
-                 @ tload key_2 )
-               ~pop:[Word.of_int 2] )
-        ; test_case "Slot 2**128" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 tstore key_0 key_0
-                 @ tstore key_1 key_1
-                 @ tstore key_2 key_2
-                 @ tstore key_3 key_3
-                 @ tstore key_4 key_4
-                 @ tload key_3 )
-               ~pop:[Word.(one ** 128)] )
-        ; test_case "Slot 2**256-1" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 tstore key_0 key_0
-                 @ tstore key_1 key_1
-                 @ tstore key_2 key_2
-                 @ tstore key_3 key_3
-                 @ tstore key_4 key_4
-                 @ tload key_4 )
-               ~pop:[Word.max_unsigned_t] ) ] )
-    ; ( "TLOAD after SSTORE"
-      (* Check that transient storage is distinct from storage *)
-      , [ test_case "Slot 0" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 sstore key_0 key_0
-                 @ sstore key_1 key_1
-                 @ sstore key_2 key_2
-                 @ sstore key_3 key_3
-                 @ sstore key_4 key_4
-                 @ tload key_0 )
-               ~pop:[Word.zero] )
-        ; test_case "Slot 1" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 sstore key_0 key_0
-                 @ sstore key_1 key_1
-                 @ sstore key_2 key_2
-                 @ sstore key_3 key_3
-                 @ sstore key_4 key_4
-                 @ tload key_1 )
-               ~pop:[Word.zero] )
-        ; test_case "Slot 2" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 sstore key_0 key_0
-                 @ sstore key_1 key_1
-                 @ sstore key_2 key_2
-                 @ sstore key_3 key_3
-                 @ sstore key_4 key_4
-                 @ tload key_2 )
-               ~pop:[Word.zero] )
-        ; test_case "Slot 2**128" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 sstore key_0 key_0
-                 @ sstore key_1 key_1
-                 @ sstore key_2 key_2
-                 @ sstore key_3 key_3
-                 @ sstore key_4 key_4
-                 @ tload key_3 )
-               ~pop:[Word.zero] )
-        ; test_case "Slot 2**256-1" `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 sstore key_0 key_0
-                 @ sstore key_1 key_1
-                 @ sstore key_2 key_2
-                 @ sstore key_3 key_3
-                 @ sstore key_4 key_4
-                 @ tload key_4 )
-               ~pop:[Word.zero] ) ] )
+                 tstore (Lit write_key) (Lit Word.max_unsigned_t)
+                 @ tload (Lit read_key_1)
+                 @ tload (Lit write_key)
+                 @ tload (Lit read_key_2) )
+               ~pop:Word.[zero; max_unsigned_t; zero] )
+        in
+        List.map test write_keys )
     ; ("TLOAD after TSTORE is zero", []) ]

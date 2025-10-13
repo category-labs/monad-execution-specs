@@ -24,18 +24,19 @@ end = struct
   let max_signed_z = max_signed_t
   let max_unsigned_z = max_unsigned_t
 
-  let valid x =
-    Z.(leq x max_unsigned_t && geq x zero)
+  let valid x = Z.(leq x max_unsigned_t && geq x zero)
 
   let of_z (x : Z.t) =
     let x = Z.extract x 0 256 in
-    assert (valid x);
+    assert (valid x) ;
     x
 
-  let to_z_unsigned x = assert (valid x); x
+  let to_z_unsigned x =
+    assert (valid x) ;
+    x
   let to_z_signed x =
     Z.(
-      assert (valid x);
+      assert (valid x) ;
       if gt x max_signed_t then x - max_unsigned_t - one else x )
 end
 
@@ -44,10 +45,8 @@ include Impl
 let zero = of_z Z.zero
 let one = of_z Z.one
 
-let is_representable_signed (x: Z.t) =
-  Z.(geq x min_signed_z && leq x max_signed_z)
-let is_representable_unsigned (x: Z.t) =
-  Z.(geq x zero && leq x max_unsigned_z)
+let is_representable_signed (x : Z.t) = Z.(geq x min_signed_z && leq x max_signed_z)
+let is_representable_unsigned (x : Z.t) = Z.(geq x zero && leq x max_unsigned_z)
 
 let reverse (bs : Bytes.t) : Bytes.t =
   let l = Bytes.length bs in
@@ -74,6 +73,15 @@ let to_bytes32_le (x : t) =
 let byte i x = (Z.to_bits (to_z_unsigned x)).[i]
 
 let to_string x = Z.to_string (to_z_unsigned x)
+let to_hex_string x = Bytes.to_hex_string (to_bytes32_be x)
+let to_short_hex_string x =
+  to_bytes32_be x
+  |> Bytes.to_seq
+  |> Seq.drop_while (( = ) '\x00')
+  |> Bytes.of_seq
+  |> (fun b -> if Bytes.length b = 0 then Bytes.init 1 (fun _ -> '\x00') else b)
+  |> Bytes.to_hex_string
+
 let of_string s =
   (* Do not truncate silently *)
   let x = Z.of_string s in
