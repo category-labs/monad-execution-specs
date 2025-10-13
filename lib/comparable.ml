@@ -17,10 +17,5 @@ struct
   let min x y = if x < y then x else y
 
   module Set = Set.Make (T)
-  module Map = struct
-    include Map.Make (T)
-
-    let get (key : T.t) : ('a t, 'a option) Lens.t =
-      {get = find_opt key; set = (fun v -> update key (fun _ -> v))}
-  end
+  module Map = Map.Make (T)
 end

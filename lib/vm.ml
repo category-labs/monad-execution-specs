@@ -1080,13 +1080,13 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ self = !(execution_environment |-- ExecutionEnvironment.address) in
     let$ access = access_storage self key in
     let$ value = get_storage self key in
-    let$ value0 = !(initial_storage |-- Word.Map.get key |-- Lens.get_or_default value) in
+    let$ value0 = !(initial_storage |-- Word.Map.at key |-- Lens.get_or_default value) in
     (*
      * If the storage slot had already been written to, then initial_storage contained an entry for it and so
      * this code does not change its value. If it had not been written to, then we store the value we get from
      * storage, before the first update
      *)
-    let$ () = initial_storage |-- Word.Map.get key := Some value0 in
+    let$ () = initial_storage |-- Word.Map.at key := Some value0 in
     let access_gas = GasCosts.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
       GasCosts.(

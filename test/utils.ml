@@ -100,7 +100,7 @@ let word =
   end : Alcotest.TESTABLE
     with type t = Word.t )
 
-let test_program_pure ~(push : Word.t list) ~(pop : Word.t list) program =
+let test_program_pure ~(push : Word.t list) ~(pop : Word.t list) program () =
   let open Vm.M in
   test_program program ~pre:(List.iterM push ~f:Vm.push)
     ~post:
@@ -112,7 +112,7 @@ let test_program_pure ~(push : Word.t list) ~(pop : Word.t list) program =
 let tests_pure program (tests : (string list * string list) list) =
   let parse (push, pop) = (List.map Word.of_string push, List.map Word.of_string pop) in
   List.map
-    (fun (push, pop) -> Alcotest.test_case "" `Quick (fun () -> test_program_pure ~push ~pop program))
+    (fun (push, pop) -> Alcotest.test_case "" `Quick (test_program_pure ~push ~pop program))
     (List.map parse tests)
 
 let check_prop ~name ?print ?(count = 10000) generator property =
