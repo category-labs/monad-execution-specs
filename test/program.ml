@@ -21,8 +21,10 @@ let opt_2 opcode x y  =
   | Pop, Lit lit_y -> push lit_y @ [Swap 1; opcode]
   | Pop, Pop -> [opcode]
 
+let mload key = opt_1 Mload key
 let sload key = opt_1 Sload key
 let tload key = opt_1 Tload key
 
+let mstore key value = opt_2 Mstore key value
 let sstore key value = opt_2 Sstore key value
 let tstore key value = opt_2 Tstore key value

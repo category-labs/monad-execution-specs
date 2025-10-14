@@ -22,6 +22,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     val write_block_at : Word.t -> Bytes.t -> t -> t
     val write_word_at : Word.t -> Word.t -> t -> t
     val write_byte_at : Word.t -> char -> t -> t
+
+    (* For debugging purposes *)
+    val dump : t -> unit
   end = struct
     type t = char Word.Map.t
     let read_block_at start size (mem : t) =
@@ -46,6 +49,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let write_byte_at pos b (mem : t) = Word.Map.add pos b mem
 
     let empty = Word.Map.empty
+
+    let dump mem =
+      Word.Map.to_seq mem
+      |> Seq.iter (fun (k, v) -> Format.printf "%s => 0x%x\n" (Word.to_short_hex_string k) (Char.code v))
   end
 
   module MachineState = struct
@@ -1098,7 +1105,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.(access_gas + update_gas) in
 
     (* Operation *)
-    let$ () = set_storage self key value in
+    let$ () = set_storage self key value' in
 
     (* PC *)
     increase_pc_and_continue
@@ -1368,7 +1375,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* Write one word at a time *)
     let rec loop pos =
       if Word.(pos < ms.active_memory_words) then (
-        Format.printf "%s: 0x%s\n" (Word.to_string pos)
+        Format.printf "%s: 0x%s\n" (Word.to_short_hex_string pos)
           (Bytes.to_hex_string (Memory.read_block_at pos Word.(~$32) ms.memory)) ;
         loop Word.(pos + ~$32) )
     in

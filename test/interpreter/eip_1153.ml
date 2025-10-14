@@ -1,11 +1,12 @@
-open Utils
+open Test_utils
+open Test_utils.Utils
 open Alcotest
 
 module Word = Monad_lib.Word
 
 let () =
   run "EIP-1153: Transient storage opcodes"
-    [ ( "Unset values"
+    [ ( "Unset values" (* Check that uninitialized keys contain zero *)
       , let test k =
           test_case
             (Format.sprintf "Tload(0x%s)" (Word.to_short_hex_string k))
@@ -14,7 +15,7 @@ let () =
         in
         let test_keys = Word.[~$0; ~$1; ~$2; ~$2 ** 128; max_unsigned_t] in
         List.map test test_keys )
-    ; ( "TLOAD after TSTORE"
+    ; ( "TLOAD after TSTORE" (* Check that tload sees stored values *)
       , let test_keys = Word.[~$0; ~$1; ~$2; ~$2 ** 128; max_unsigned_t] in
         let test k =
           test_case
@@ -58,5 +59,4 @@ let () =
                  @ tload (Lit read_key_2) )
                ~pop:Word.[zero; max_unsigned_t; zero] )
         in
-        List.map test write_keys )
-    ; ("TLOAD after TSTORE is zero", []) ]
+        List.map test write_keys ) ]

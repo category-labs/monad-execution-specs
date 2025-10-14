@@ -293,9 +293,7 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
       let$ () = touch_storage addr key in
       return `Cold
 
-  let get_transient_storage key =
-    !(transient_storage |-- Word.Map.at key |-- get_or_default Word.zero)
+  let get_transient_storage key = !(transient_storage |-- Word.Map.at key |-- get_or_default Word.zero)
 
-  let set_transient_storage key value =
-    transient_storage |-- Word.Map.at key := Some value
+  let set_transient_storage key value = transient_storage |-- Word.Map.at key := Some value
 end

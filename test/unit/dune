@@ -1,3 +1,5 @@
-(library
-  (name test_utils)
+
+(test
+  (name unit)
+  (modules unit)
   (libraries monad_lib alcotest qcheck-core qcheck-alcotest))
