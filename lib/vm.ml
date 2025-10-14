@@ -195,9 +195,15 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     if Word.(gas_remaining < amount) then fail Out_of_gas
     else machine_state |-- gas := Word.(gas_remaining - amount)
 
+  let check_write_permissions =
+    let$ can_write = !(execution_environment |-- write_permission) in
+    if can_write then return () else fail Static_mode_violation
+
   let check_jump_destination (destination : Word.t) =
     let$ valid_destinations = !jump_destinations in
     if Word.Set.mem destination valid_destinations then return () else fail Bad_jump_destination
+
+  let self : Address.t M.t = !(execution_environment |-- address)
 
   let push (x : Word.t) : unit M.t =
     let$ s = !(machine_state |-- stack) in
@@ -242,6 +248,16 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     let sset_cost = ~$20_000
     let sreset_cost = ~$2_900
+
+    let log_cost = ~$375
+    let log_cost_per_byte = ~$8
+    let log_cost_per_topic = ~$375
+
+    let self_destruct_cost = ~$5_000
+    let self_destruct_new_account_cost = ~$25_000
+
+    let new_account_cost = ~$25_000
+    let call_value = ~$9_000
   end
 
   let finish_execution : bool M.t = return false
@@ -901,8 +917,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.low in
 
     (* Operation *)
-    let$ self = !(execution_environment |-- ExecutionEnvironment.address) in
-    let$ balance = get_balance self in
+    let$ self_addr = self in
+    let$ balance = get_balance self_addr in
     let$ () = push balance in
 
     (* PC *)
@@ -1067,12 +1083,12 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ key = pop in
 
     (* Gas *)
-    let$ self = !(execution_environment |-- ExecutionEnvironment.address) in
-    let$ access = access_storage self key in
+    let$ self_addr = self in
+    let$ access = access_storage self_addr key in
     let$ () = spend GasCosts.(match access with `Cold -> cold_sload_cost | `Warm -> warm_access_cost) in
 
     (* Operation *)
-    let$ value = get_storage self key in
+    let$ value = get_storage self_addr key in
     let$ () = push value in
 
     (* PC *)
@@ -1084,9 +1100,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ value' = pop in
 
     (* Gas *)
-    let$ self = !(execution_environment |-- ExecutionEnvironment.address) in
-    let$ access = access_storage self key in
-    let$ value = get_storage self key in
+    let$ self_addr = self in
+    let$ access = access_storage self_addr key in
+    let$ value = get_storage self_addr key in
     let$ value0 = !(initial_storage |-- Word.Map.at key |-- Lens.get_or_default value) in
     (*
      * If the storage slot had already been written to, then initial_storage contained an entry for it and so
@@ -1105,7 +1121,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.(access_gas + update_gas) in
 
     (* Operation *)
-    let$ () = set_storage self key value' in
+    let$ () = check_write_permissions in
+    let$ () = set_storage self_addr key value' in
 
     (* PC *)
     increase_pc_and_continue
@@ -1132,10 +1149,11 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.high in
 
     (* Operation *)
-    let$ () = check_jump_destination new_pc in
-
     (* PC *)
-    if Word.is_zero condition then increase_pc_and_continue else update_pc_and_continue (fun _ -> new_pc)
+    if Word.is_zero condition then increase_pc_and_continue
+    else
+      let$ () = check_jump_destination new_pc in
+      update_pc_and_continue (fun _ -> new_pc)
 
   let pc_ = fetch_environment_variable_opcode_impl (machine_state |-- pc).get
 
@@ -1186,8 +1204,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.warm_access_cost in
 
     (* Operation *)
-    let$ can_write = !(execution_environment |-- write_permission) in
-    let$ () = when_ (not can_write) (fail Static_mode_violation) in
+    let$ () = check_write_permissions in
     let$ () = set_transient_storage key value in
 
     (* PC *)
@@ -1212,10 +1229,59 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let log _i = todo ()
+  let log n_topics =
+    if n_topics < 0 || n_topics > 4 then raise Internal_error ;
+    (* Stack *)
+    let$ src_start = pop in
+    let$ size = pop in
+
+    let$ topics = List.mapM (List.of_seq Seq.(take n_topics (ints 0))) ~f:(fun _ -> pop) in
+
+    (* Gas *)
+    let$ memory_extension_gas = extend_memory_to Word.(src_start + size) in
+    let$ () =
+      spend
+        GasCosts.(
+          log_cost + (log_cost_per_byte * size) + (log_cost_per_topic * ~$n_topics) + memory_extension_gas )
+    in
+
+    (* Operation *)
+    let$ () = check_write_permissions in
+    let$ self_addr = self in
+    let$ data = Memory.read_block_at src_start size <$> !(machine_state |-- memory) in
+    let$ () = emit_log self_addr ~data ~topics in
+
+    (* PC *)
+    increase_pc_and_continue
 
   let create _s = todo ()
-  let call _s = todo ()
+  let call =
+    (* Stack *)
+    let$ _gas = pop in
+    let$ target = Address.of_word_masking <$> pop in
+    let$ value = pop in
+    let$ input_start = pop in
+    let$ input_size = pop in
+    let$ output_start = pop in
+    let$ output_size = pop in
+
+    (* Gas *)
+    let$ _memory_extension_gas =
+      extend_memory_to Word.(max (input_start + input_size) (output_start + output_size))
+    in
+    let$ access = access_account target in
+    let _access_gas =
+      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    in
+    let$ target_is_alive = account_exists target in
+    let _create_gas = GasCosts.(if Word.(value = zero) || target_is_alive then zero else new_account_cost) in
+    let _transfer_gas = GasCosts.(if Word.(value = zero) then zero else call_value) in
+    let$ _x = todo () in
+
+    (* Operation *)
+    (* PC *)
+    increase_pc_and_continue
+
   let callcode _s = todo ()
   let return_ =
     (* Stack *)
@@ -1243,6 +1309,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let staticcall _s = todo ()
 
   let revert =
+    let$ () = fail Stack_underflow in
+    let$ () = return (failwith "REVERT") in
     (* Stack *)
     let$ pos = pop in
     let$ size = pop in
@@ -1264,7 +1332,28 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     fail Revert
 
-  let selfdestruct _s = todo ()
+  let selfdestruct =
+    (* Stack *)
+    let$ beneficiary = Address.of_word_masking <$> pop in
+
+    (* Gas *)
+    let$ access = access_account beneficiary in
+    let access_gas = GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> zero) in
+    let$ self_addr = self in
+    let$ self_balance = get_balance self_addr in
+    let$ beneficiary_exists = account_exists beneficiary in
+    let new_account_gas =
+      GasCosts.(
+        if (not beneficiary_exists) && Word.(self_balance <> zero) then self_destruct_new_account_cost
+        else zero )
+    in
+    let$ () = spend GasCosts.(self_destruct_cost + access_gas + new_account_gas) in
+
+    (* Operation *)
+    let$ () = check_write_permissions in
+
+    (* PC *)
+    finish_execution
 
   let execute_opcode (opcode : Opcode.t) =
     let impl =
@@ -1421,7 +1510,12 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
         | Error err ->
-            if err = Success then raise Internal_error ;
-            Format.printf "Error: %s\n" (StatusCode.to_string err) ;
-            exit (-1) ) )
+            if err = Success then raise Internal_error
+            else
+              Evmc.Result.
+                { status_code = err
+                ; gas_left = 0L
+                ; gas_refund = 0L
+                ; output_data = ctx.machine_state.output_buffer
+                ; create_address = None } ) )
 end

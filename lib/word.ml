@@ -122,7 +122,7 @@ let ( - ) = lift_2 Z.( - )
 let ( * ) = lift_2 Z.( * )
 let ( / ) = lift_2 Z.( / )
 
-let div_signed _x _y = todo ()
+let div_signed x y = of_z (Z.div (to_z_signed x) (to_z_signed y))
 
 let byte_width (x : t) = Z.numbits (to_z_unsigned x)
 
