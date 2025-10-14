@@ -1,4 +1,8 @@
 (test
+  (name opcodes)
+  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
   (name memory)
   (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
 
