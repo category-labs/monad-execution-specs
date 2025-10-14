@@ -1,0 +1,15 @@
+(test
+  (name memory)
+  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
+  (name storage)
+  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
+  (name eip_145)
+  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
+  (name eip_1153)
+  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
