@@ -2,6 +2,7 @@ open Test_utils
 open Test_utils.Utils
 open Alcotest
 
+open Monad_lib.Utils
 module Word = Monad_lib.Word
 
 let () =
@@ -12,7 +13,7 @@ let () =
           test_case
             (Format.sprintf "Mload(0x%s)" (Word.to_short_hex_string k))
             `Quick
-            (test_program_pure ~push:[] Program.(mload (Lit k)) ~pop:[Word.zero])
+            (fun () -> test_bytecode_pure ~input_stack:[] Program.(mload (Lit k)) ~output_stack:[Word.zero])
         in
         List.map test test_keys )
     ; ( "MLOAD after MSTORE" (* Check that mload sees stored values *)
@@ -21,11 +22,11 @@ let () =
           test_case
             (Format.sprintf "Mload(0x%s)" (Word.to_short_hex_string k))
             `Quick
-            (test_program_pure ~push:[]
+            (fun () -> test_bytecode_pure ~input_stack:[]
                Program.(
-                 let stores = test_keys |> List.map (fun k -> mstore (Lit k) (Lit k)) |> List.concat in
-                 stores @ mload (Lit k) )
-               ~pop:[k] )
+                 let stores = test_keys |> List.map (fun k -> mstore (Lit k) (Lit k)) |> Bytes.concat "" in
+                 stores ^ mload (Lit k) )
+               ~output_stack:[k] )
         in
         List.map test test_keys )
     ; ( "MLOAD near MSTORE" (* Check that storage is word-addressed *)
@@ -45,12 +46,12 @@ let () =
                (Word.to_short_hex_string read_key_before)
                (Word.to_short_hex_string read_key_after) )
             `Quick
-            (test_program_pure ~push:[]
+            (fun () -> test_bytecode_pure ~input_stack:[]
                Program.(
                  mstore (Lit write_key) (Lit write_word)
-                 @ mload (Lit read_key_before)
-                 @ mload (Lit write_key)
-                 @ mload (Lit read_key_after) )
-               ~pop:[read_word_after; write_word; read_word_before] )
+                 ^ mload (Lit read_key_before)
+                 ^ mload (Lit write_key)
+                 ^ mload (Lit read_key_after) )
+               ~output_stack:[read_word_after; write_word; read_word_before] )
         in
         List.map test write_keys ) ]

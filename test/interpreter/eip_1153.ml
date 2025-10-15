@@ -2,6 +2,7 @@ open Test_utils
 open Test_utils.Utils
 open Alcotest
 
+open Monad_lib.Utils
 module Word = Monad_lib.Word
 
 let () =
@@ -11,7 +12,7 @@ let () =
           test_case
             (Format.sprintf "Tload(0x%s)" (Word.to_short_hex_string k))
             `Quick
-            (test_program_pure ~push:[] Program.(tload (Lit k)) ~pop:[Word.zero])
+            (fun () -> test_bytecode_pure ~input_stack:[] Program.(tload (Lit k)) ~output_stack:[Word.zero])
         in
         let test_keys = Word.[~$0; ~$1; ~$2; ~$2 ** 128; max_unsigned_t] in
         List.map test test_keys )
@@ -21,11 +22,12 @@ let () =
           test_case
             (Format.sprintf "Tload(0x%s)" (Word.to_short_hex_string k))
             `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 let stores = test_keys |> List.map (fun k -> tstore (Lit k) (Lit k)) |> List.concat in
-                 stores @ tload (Lit k) )
-               ~pop:[k] )
+            (fun () ->
+              test_bytecode_pure ~input_stack:[]
+                Program.(
+                  let stores = test_keys |> List.map (fun k -> tstore (Lit k) (Lit k)) |> Bytes.concat "" in
+                  stores ^ tload (Lit k) )
+                ~output_stack:[k] )
         in
         List.map test test_keys )
     ; ( "TLOAD after SSTORE" (* Check that transient storage is distinct from storage *)
@@ -34,11 +36,12 @@ let () =
           test_case
             (Format.sprintf "Tload(0x%s)" (Word.to_short_hex_string k))
             `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 let stores = test_keys |> List.map (fun k -> sstore (Lit k) (Lit k)) |> List.concat in
-                 stores @ tload (Lit k) )
-               ~pop:[Word.zero] )
+            (fun () ->
+              test_bytecode_pure ~input_stack:[]
+                Program.(
+                  let stores = test_keys |> List.map (fun k -> sstore (Lit k) (Lit k)) |> Bytes.concat "" in
+                  stores ^ tload (Lit k) )
+                ~output_stack:[Word.zero] )
         in
         List.map test test_keys )
     ; ( "TLOAD near TSTORE" (* Check that transient storage is word-addressed *)
@@ -51,12 +54,13 @@ let () =
                (Word.to_short_hex_string read_key_1)
                (Word.to_short_hex_string read_key_2) )
             `Quick
-            (test_program_pure ~push:[]
-               Program.(
-                 tstore (Lit write_key) (Lit Word.max_unsigned_t)
-                 @ tload (Lit read_key_1)
-                 @ tload (Lit write_key)
-                 @ tload (Lit read_key_2) )
-               ~pop:Word.[zero; max_unsigned_t; zero] )
+            (fun () ->
+              test_bytecode_pure ~input_stack:[]
+                Program.(
+                  tstore (Lit write_key) (Lit Word.max_unsigned_t)
+                  ^ tload (Lit read_key_1)
+                  ^ tload (Lit write_key)
+                  ^ tload (Lit read_key_2) )
+                ~output_stack:Word.[zero; max_unsigned_t; zero] )
         in
         List.map test write_keys ) ]

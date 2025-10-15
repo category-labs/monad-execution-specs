@@ -1,3 +1,5 @@
+open Utils
+
 type t =
   (* 0x0X *)
   | Stop
@@ -272,5 +274,6 @@ let info = function
       {opcode = Undefined opcode; byte = opcode; name = Format.sprintf "Undefined(0x%x)" (Char.code opcode)}
 
 let to_byte opcode = (info opcode).byte
+let to_bytes opcode = Bytes.make 1 (to_byte opcode)
 
 let to_string opcode = (info opcode).name
