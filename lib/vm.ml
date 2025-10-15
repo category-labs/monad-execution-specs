@@ -435,7 +435,13 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.low in
 
     (* Operation *)
-    let$ () = push Word.(sign_extend byte_index x) in
+    let$ () =
+      push
+        Word.(
+          match to_int_opt byte_index with
+          | Some i when Stdlib.(i < 256) -> sign_extend i x
+          | Some _ | None -> x )
+    in
 
     (* PC *)
     increase_pc_and_continue

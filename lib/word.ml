@@ -14,6 +14,8 @@ module Impl : sig
 
   val to_z_unsigned : t -> Z.t
   val to_z_signed : t -> Z.t
+
+  val testbit : t -> int -> bool
 end = struct
   type t = Z.t
 
@@ -38,6 +40,8 @@ end = struct
     Z.(
       assert (valid x) ;
       if gt x max_signed_t then x - max_unsigned_t - one else x )
+
+  let testbit i x = Z.testbit i x
 end
 
 include Impl
@@ -70,7 +74,7 @@ let to_bytes32_le (x : t) =
   let padding = Bytes.init (32 - len) (fun _ -> '\x00') in
   le_bytes ^ padding
 
-let byte i x = (Z.to_bits (to_z_unsigned x)).[i]
+let byte i x = (Z.to_bits (to_z_unsigned x)).[31 - i]
 
 let to_string x = Z.to_string (to_z_unsigned x)
 let to_hex_string x = Bytes.to_hex_string (to_bytes32_be x)
@@ -99,6 +103,7 @@ let to_int_opt x =
   if Z.fits_int x then Some (Z.to_int x) else None
 
 let ( ~$ ) = of_int
+let ( ~@ ) = of_string
 let of_uint64 i = of_z (Z.of_int64_unsigned i)
 let to_uint64 x = Z.to_int64_unsigned (to_z_unsigned x)
 
@@ -150,18 +155,32 @@ end)
 
 let modulo = lift_2 Z.rem
 
-let modulo_signed _x _y = todo ()
+let modulo_signed x y = of_z (Z.rem (to_z_signed x) (to_z_signed y))
 
 let addmod x y m = of_z Z.(rem (to_z_unsigned x + to_z_unsigned y) (to_z_unsigned m))
 let mulmod x y m = of_z Z.(rem (to_z_unsigned x * to_z_unsigned y) (to_z_unsigned m))
 
 let ( ** ) base exp = of_z (Z.pow (to_z_unsigned base) exp)
 
-let exp _x _y = todo ()
-let sign_extend _i _x = todo ()
+let exp x y =
+    match to_int_opt y with
+    | Some y -> x ** y
+    | None ->
+        let rec loop acc mul y =
+          if y = zero then acc
+          else
+            let acc = if modulo y ~$2 = ~$1 then acc * mul else acc in
+            let mul = mul * mul in
+            let y = y / ~$2 in
+            loop acc mul y
+        in
+        loop ~$1 x y
 
 let signed_compare x y = Z.compare (to_z_signed x) (to_z_signed y)
 
-let is_negative x = Stdlib.(signed_compare x zero = -1)
+let is_negative x = testbit x 255
 
-let incr x = x + ~$1
+let sign_extend i x =
+  let mask_upper = shift_left max_unsigned_t Stdlib.(8 * (i + 1)) in
+  let mask_lower = lognot mask_upper in
+  if testbit x Stdlib.(7 + (8 * i)) then logor x mask_upper else logand x mask_lower

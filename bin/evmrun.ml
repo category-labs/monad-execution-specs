@@ -26,16 +26,10 @@ let () =
         exit (-1) )
       usage_str )
 
-let to_bytes str =
-  let l = String.length str in
-  assert (l mod 2 == 0) ;
-  String.init (l / 2) (fun i ->
-      Char.chr (int_of_string (Printf.sprintf "0x%c%c" str.[i * 2] str.[(i * 2) + 1])) )
-
 let read_source place =
   match !place with
   | Some (`File file) -> In_channel.(with_open_bin file input_all)
-  | Some (`Literal lit) -> to_bytes lit
+  | Some (`Literal lit) -> Bytes.of_hex_string lit
   | None -> ""
 
 let bytecode = read_source bytecode_source

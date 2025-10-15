@@ -5,60 +5,61 @@ open Alcotest
 
 let () =
   run "EIP-145: Bitwise shifting instructions in EVM"
-    [ ( "SHL"
-      , tests_pure [Shl]
-          [ (["0x1"; "0x0"], ["0x1"])
-          ; (["0x1"; "0x1"], ["0x2"])
-          ; (["0x1"; "0xff"], ["0x8000000000000000000000000000000000000000000000000000000000000000"])
-          ; (["0x1"; "0x100"], ["0x0"])
-          ; (["0x1"; "0x0101"], ["0x0"])
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x1"]
-            , ["0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe"] )
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0xff"]
-            , ["0x8000000000000000000000000000000000000000000000000000000000000000"] )
-          ; (["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x100"], ["0x0"])
-          ; (["0x0"; "0x1"], ["0x0"])
-          ; ( ["0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x1"]
-            , ["0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe"] ) ] )
-    ; ( "SHR"
-      , tests_pure [Shr]
-          [ (["0x1"; "0x0"], ["0x1"])
-          ; (["0x1"; "0x1"], ["0x0"])
-          ; ( ["0x8000000000000000000000000000000000000000000000000000000000000000"; "0x1"]
-            , ["0x4000000000000000000000000000000000000000000000000000000000000000"] )
-          ; (["0x8000000000000000000000000000000000000000000000000000000000000000"; "0xff"], ["0x1"])
-          ; (["0x8000000000000000000000000000000000000000000000000000000000000000"; "0x100"], ["0x0"])
-          ; (["0x8000000000000000000000000000000000000000000000000000000000000000"; "0x101"], ["0x0"])
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x0"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x1"]
-            , ["0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; (["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0xff"], ["0x1"])
-          ; (["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x100"], ["0x0"])
-          ; (["0x0"; "0x1"], ["0x0"]) ] )
-    ; ( "SAR"
-      , tests_pure [Sar]
-          [ (["0x1"; "0x0"], ["0x1"])
-          ; (["0x1"; "0x1"], ["0x0"])
-          ; ( ["0x8000000000000000000000000000000000000000000000000000000000000000"; "0x1"]
-            , ["0xc000000000000000000000000000000000000000000000000000000000000000"] )
-          ; ( ["0x8000000000000000000000000000000000000000000000000000000000000000"; "0xff"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; ( ["0x8000000000000000000000000000000000000000000000000000000000000000"; "0x100"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; ( ["0x8000000000000000000000000000000000000000000000000000000000000000"; "0x101"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x0"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x1"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0xff"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; ( ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x100"]
-            , ["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"] )
-          ; (["0x0"; "0x1"], ["0x0"])
-          ; (["0x4000000000000000000000000000000000000000000000000000000000000000"; "0xfe"], ["0x1"])
-          ; (["0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0xf8"], ["0x7f"])
-          ; (["0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0xfe"], ["0x1"])
-          ; (["0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0xff"], ["0x0"])
-          ; (["0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; "0x100"], ["0x0"]) ] ) ]
+    [ test_cases_opcode_2 Shl
+        Word.
+          [ ((~@"0x0", ~@"0x1"), ~@"0x1")
+          ; ((~@"0x1", ~@"0x1"), ~@"0x2")
+          ; ((~@"0xff", ~@"0x1"), ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
+          ; ((~@"0x100", ~@"0x1"), ~@"0x0")
+          ; ((~@"0x0101", ~@"0x1"), ~@"0x0")
+          ; ( (~@"0x1", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe" )
+          ; ( (~@"0xff", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0x8000000000000000000000000000000000000000000000000000000000000000" )
+          ; ((~@"0x100", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x0")
+          ; ((~@"0x1", ~@"0x0"), ~@"0x0")
+          ; ( (~@"0x1", ~@"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe" ) ]
+    ; test_cases_opcode_2 Shr
+        Word.
+          [ ((~@"0x0", ~@"0x1"), ~@"0x1")
+          ; ((~@"0x1", ~@"0x1"), ~@"0x0")
+          ; ( (~@"0x1", ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
+            , ~@"0x4000000000000000000000000000000000000000000000000000000000000000" )
+          ; ((~@"0xff", ~@"0x8000000000000000000000000000000000000000000000000000000000000000"), ~@"0x1")
+          ; ((~@"0x100", ~@"0x8000000000000000000000000000000000000000000000000000000000000000"), ~@"0x0")
+          ; ((~@"0x101", ~@"0x8000000000000000000000000000000000000000000000000000000000000000"), ~@"0x0")
+          ; ( (~@"0x0", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ( (~@"0x1", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ((~@"0xff", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x1")
+          ; ((~@"0x100", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x0")
+          ; ((~@"0x1", ~@"0x0"), ~@"0x0") ]
+    ; test_cases_opcode_2 Sar
+        Word.
+          [ ((~@"0x0", ~@"0x1"), ~@"0x1")
+          ; ((~@"0x1", ~@"0x1"), ~@"0x0")
+          ; ( (~@"0x1", ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
+            , ~@"0xc000000000000000000000000000000000000000000000000000000000000000" )
+          ; ( (~@"0xff", ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ( (~@"0x100", ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ( (~@"0x101", ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ( (~@"0x0", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ( (~@"0x1", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ( (~@"0xff", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ( (~@"0x100", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            , ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" )
+          ; ((~@"0x1", ~@"0x0"), ~@"0x0")
+          ; ((~@"0xfe", ~@"0x4000000000000000000000000000000000000000000000000000000000000000"), ~@"0x1")
+          ; ((~@"0xf8", ~@"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x7f")
+          ; ((~@"0xfe", ~@"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x1")
+          ; ((~@"0xff", ~@"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x0")
+          ; ((~@"0x100", ~@"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x0") ]
+    ]
