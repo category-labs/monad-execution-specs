@@ -117,6 +117,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; value : Word.t (* I_w *)
       ; bytes : Bytes.t (* I_b *)
       ; header : ExecutionBlockHeader.t (* I_H *)
+      ; depth : int
       ; write_permission : bool (* I_w *)
       ; blob_versioned_hashes : Word.t list (* EIP-4844 *)
       ; blob_base_fee : Word.t (* EIP-7516 *) }
@@ -132,6 +133,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; value = msg.value
       ; bytes = msg.code
       ; header = ExecutionBlockHeader.of_tx_context ctx
+      ; depth = msg.depth
       ; write_permission = not (List.mem Evmc.Flags.Static msg.flags)
       ; blob_versioned_hashes = ctx.blob_hashes
       ; blob_base_fee = ctx.blob_base_fee }
@@ -190,7 +192,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let max_stack_depth = 1024
 
-  let spend (amount : Word.t) =
+  let spend (amount : Uint.t) =
     let$ gas_remaining = !(machine_state |-- gas) in
     if Word.(gas_remaining < amount) then fail Out_of_gas
     else machine_state |-- gas := Word.(gas_remaining - amount)
@@ -218,8 +220,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
         return hd
 
   module GasCosts = struct
-    (* Bring Word into scope so the operators are all available to users *)
-    include Word
+    (* Bring Z into scope so the operators are all available to users *)
+    include Z
 
     let jumpdest = ~$1
     let base = ~$2
@@ -1166,7 +1168,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let msize =
     fetch_environment_variable_opcode_impl (fun ctx -> Word.(~$8 * ctx.machine_state.active_memory_words))
 
-  let gas =
+  let gas_ =
     (* Stack *)
     (* Gas *)
     let$ () = spend GasCosts.very_low in
@@ -1261,9 +1263,47 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     increase_pc_and_continue
 
   let create _s = todo ()
+  let calculate_message_call_gas value gas gas_left memory_extension_gas sum_total = todo ()
+
+  let generic_call_impl ~call_gas ~value ~caller ~target ~code_address ~delegated ~static ~input_start
+      ~input_size ~output_start ~output_size =
+    let$ () = machine_state |-- output_buffer := Bytes.empty in
+
+    let$ depth = ( + ) 1 <$> !(execution_environment |-- depth) in
+    if depth > max_stack_depth then
+      let$ () = update_field (machine_state |-- gas) (fun g -> Word.(g + call_gas)) in
+      push Word.zero
+    else
+      let$ input_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
+      let$ code = copy_code code_address in
+      let flags = Evmc.Flags.((if delegated then [Delegated] else []) @ if static then [Static] else []) in
+      let message =
+        Evmc.(
+          Message.
+            { kind = CallKind.Call
+            ; flags
+            ; depth
+            ; gas = Word.to_uint64 call_gas
+            ; recipient = target
+            ; sender = caller
+            ; input_data
+            ; value
+            ; create2_salt = Word.zero
+            ; code_address
+            ; code } )
+      in
+      let$ result = call message in
+      let truncated_output =
+        match Word.to_int_opt output_size with
+        | None -> result.output_data
+        | Some i -> Bytes.sub result.output_data 0 (min i (Bytes.length result.output_data))
+      in
+      let$ () = if result.status_code = Success then todo () else todo () in
+      update_field (machine_state |-- memory) (Memory.write_block_at output_start truncated_output)
+
   let call =
     (* Stack *)
-    let$ _gas = pop in
+    let$ gas = pop in
     let$ target = Address.of_word_masking <$> pop in
     let$ value = pop in
     let$ input_start = pop in
@@ -1272,19 +1312,36 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ output_size = pop in
 
     (* Gas *)
-    let$ _memory_extension_gas =
+    let$ memory_extension_gas =
       extend_memory_to Word.(max (input_start + input_size) (output_start + output_size))
     in
     let$ access = access_account target in
-    let _access_gas =
+    let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
     let$ target_is_alive = account_exists target in
-    let _create_gas = GasCosts.(if Word.(value = zero) || target_is_alive then zero else new_account_cost) in
-    let _transfer_gas = GasCosts.(if Word.(value = zero) then zero else call_value) in
-    let$ _x = todo () in
+    let create_gas = GasCosts.(if Word.(value = zero) || target_is_alive then zero else new_account_cost) in
+    let transfer_gas = GasCosts.(if Word.(value = zero) then zero else call_value) in
+    let$ gas_left = !(machine_state |-- MachineState.gas) in
+    let gas_cost, sub_call_gas =
+      calculate_message_call_gas value gas gas_left memory_extension_gas
+        GasCosts.(access_gas + create_gas + transfer_gas)
+    in
+    let$ () = spend GasCosts.(gas_cost + memory_extension_gas) in
 
     (* Operation *)
+    let$ () = when_ Word.(value <> zero) check_write_permissions in
+    let$ caller = self in
+    let$ caller_balance = get_balance caller in
+    let$ () =
+      if Word.(caller_balance < value) then
+        let$ () = push Word.zero in
+        let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> Word.(g + sub_call_gas)) in
+        machine_state |-- output_buffer := Bytes.empty
+      else
+        generic_call_impl ~call_gas:sub_call_gas ~value ~caller ~target ~code_address:target ~input_start
+          ~input_size ~output_start ~output_size ~delegated:false ~static:false
+    in
     (* PC *)
     increase_pc_and_continue
 
@@ -1422,7 +1479,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       | Basefee -> basefee
       | Blobhash -> blobhash
       | Blobbasefee -> blobbasefee
-      | Gas -> gas
+      | Gas -> gas_
       (* Memory and storage *)
       | Msize -> msize
       | Mload -> mload
