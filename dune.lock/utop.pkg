@@ -1,0 +1,30 @@
+(version 2.16.0)
+
+(build
+ (progn
+  (when
+   %{pkg-self:dev}
+   (run dune subst))
+  (run dune build -p %{pkg-self:name} -j %{jobs} @install)))
+
+(depends
+ dune
+ ocaml
+ base-unix
+ base-threads
+ ocamlfind
+ lambda-term
+ logs
+ lwt
+ lwt_react
+ zed
+ react
+ cppo
+ xdg)
+
+(source
+ (fetch
+  (url
+   https://github.com/ocaml-community/utop/releases/download/2.16.0/utop-2.16.0.tbz)
+  (checksum
+   sha256=0b9f79135d2132fb211cbe889941cfd0d54cc7bb8062b8a0443e38c540b8c763)))
