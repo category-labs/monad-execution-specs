@@ -24,6 +24,10 @@ module Bytes = struct
     init
       (String.length str / 2)
       (fun i -> Char.chr (int_of_string (Printf.sprintf "0x%c%c" str.[i * 2] str.[(i * 2) + 1])))
+
+  let reverse (bs : t) : t =
+    let l = length bs in
+    init l (fun i -> bs.[l - i - 1])
 end
 
 module type TY = sig

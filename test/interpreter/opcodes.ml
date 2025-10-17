@@ -14,13 +14,14 @@ let test_keccak (input : Bytes.t) (output : Word.t) =
     bytecode_to_call_message (Program.keccak (Lit Word.zero) (Lit (Word.of_int (Bytes.length input))))
   in
   let open Vm in
-  test_message
-    ~prepare_vm:
-      Vm.M.(
-        update_field
-          (Context.machine_state |-- MachineState.memory)
-          (Vm.Memory.write_block_at Word.zero input) )
-    ~check_vm_state:(expect_stack [output]) msg
+  ignore
+    (test_message
+       ~prepare_vm:
+         Vm.M.(
+           update_field
+             (Context.machine_state |-- MachineState.memory)
+             (Vm.Memory.write_block_at Word.zero input) )
+       ~check_vm_state:(expect_stack [output]) msg )
 
 let test_cases_keccak test_cases =
   ( "Keccak"

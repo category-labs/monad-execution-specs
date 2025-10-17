@@ -68,7 +68,7 @@ let status_code =
     with type t = Evmc.Result.StatusCode.t )
 
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
-  Alcotest.check' status_code ~msg:"Status code" ~expected:status ~actual:result.status_code
+  Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
 let test_message ?(prepare_env : unit EvmcHost.t = EvmcHost.return ())
     ?(prepare_vm : unit Vm.M.t = Vm.M.return ()) ?(check_vm_state : unit Vm.M.t option)
@@ -110,13 +110,14 @@ let test_message ?(prepare_env : unit EvmcHost.t = EvmcHost.return ())
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None } ) )
   in
-  let result, _state = action EvmcHost.State.empty in
+  let result, state = action EvmcHost.State.empty in
   (*
    * If the caller specified a VM postcondition but execution finished with an early abort,
    * the postcondition did not get checked and so the test preemptively fails
    *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
-  check_result result
+  check_result result ;
+  (result, state)
 
 let bytecode_to_call_message code =
   Evmc.(
@@ -138,19 +139,23 @@ let expect_stack expected_stack =
   Vm.(
     M.(
       let$ stack = !(Context.machine_state |-- MachineState.stack) in
+      Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
+        ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
       return
-        (List.iter2
-           (fun expected actual -> Alcotest.check' word ~msg:"Output" ~expected ~actual)
-           expected_stack stack ) ) )
+        (List.iteri
+           (fun i (expected, actual) ->
+             Alcotest.check' word ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
+           (List.combine expected_stack stack) ) ) )
 
 let test_bytecode_pure bc ~input_stack ~output_stack =
   let open Lens.Infix in
   let open Vm in
   let open Vm.M in
   let msg = bytecode_to_call_message bc in
-  test_message
-    ~prepare_vm:(Context.machine_state |-- MachineState.stack := input_stack)
-    ~check_vm_state:(expect_stack output_stack) msg
+  ignore
+    (test_message
+       ~prepare_vm:(Context.machine_state |-- MachineState.stack := input_stack)
+       ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =
   let inputs = List.map Word.to_short_hex_string inputs |> String.concat ", " in

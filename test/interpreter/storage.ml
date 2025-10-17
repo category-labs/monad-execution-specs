@@ -49,4 +49,17 @@ let () =
                   ^ sload (Lit read_key_2) )
                 ~output_stack:Word.[zero; max_unsigned_t; zero] )
         in
-        List.map test write_keys ) ]
+        List.map test write_keys )
+    ; ( "SLOAD across transactions" (* Check that storage persists across transactions *)
+      , [ (let addr = Word.of_int 0xdeadbeef in
+           let value = Word.of_int 0x1234 in
+           let bc_write = Program.(sstore (Lit addr) (Lit value)) in
+           let bc_read = Program.(sload (Lit addr)) in
+           test_case
+             (Format.sprintf "Sload(0x%s)" Word.(to_short_hex_string zero))
+             `Quick
+             (fun () ->
+               let _, state = test_message (bytecode_to_call_message bc_write) in
+               ignore
+                 (test_message ~prepare_env:(EvmcHost.put state) ~check_vm_state:(expect_stack [value])
+                    (bytecode_to_call_message bc_read) ) ) ) ] ) ]

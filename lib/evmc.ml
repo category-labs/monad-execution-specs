@@ -72,7 +72,7 @@ module Message = struct
   type t =
     { kind : CallKind.t
     ; flags : Flags.t list
-    ; depth : Int32.t
+    ; depth : int
     ; gas : Uint64.t
     ; recipient : Address.t
     ; sender : Address.t
