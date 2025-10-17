@@ -1,4 +1,6 @@
 open Monad_lib
+open Monad_lib.Utils
+open Monad_lib.Numeric
 open Chain.Ethereum
 
 let usage_str =
@@ -48,13 +50,13 @@ let msg =
     Message.
       { kind = CallKind.Call
       ; flags = []
-      ; depth = 0l
+      ; depth = 0
       ; gas = !gas_limit
       ; recipient = Address.zero
       ; sender = Address.zero
       ; input_data = calldata
-      ; value = Word.of_int 1000
-      ; create2_salt = Word.zero
+      ; value = U256.of_int 1000
+      ; create2_salt = U256.zero
       ; code_address = Address.zero
       ; code = bytecode } )
 

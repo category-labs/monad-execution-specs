@@ -1,5 +1,5 @@
 
 (test
-  (name unit)
-  (modules unit)
-  (libraries monad_lib alcotest qcheck-core qcheck-alcotest))
+  (name numeric)
+  (modules numeric)
+  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
