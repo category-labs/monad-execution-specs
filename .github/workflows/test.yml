@@ -1,0 +1,29 @@
+name: Tests
+
+on:
+  push:
+
+jobs:
+  test:
+    name: Dune tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5
+
+      - name: Install dependencies
+        run: |
+          opam install . --deps-only -y
+
+      - name: Build
+        run: |
+          opam exec -- dune build --verbose
+
+      - name: Run tests
+        run: |
+          opam exec -- dune runtest --verbose
