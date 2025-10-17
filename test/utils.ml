@@ -1,7 +1,7 @@
 open Monad_lib
 open Utils
 open Chain.Ethereum
-module Word = Monad_lib.Word
+open Monad_lib.Numeric
 
 module Revision = struct
   let rev = Chain.Monad.Revision.Four
@@ -9,12 +9,12 @@ end
 module EvmcHost = Evmc.Dummy (Revision)
 module Vm = Vm.Make (Revision) (EvmcHost)
 
-(* Word.t generator *)
+(* U256.t generator *)
 module QCheck2 = struct
   include QCheck2
   module Print = struct
     include Print
-    let word x = Format.sprintf "%s (0x%s)" (Word.to_string x) (Bytes.to_hex_string (Word.to_bytes32_le x))
+    let u256 x = Format.sprintf "%s (0x%s)" (U256.to_string x) (U256.to_short_hex_string x)
     let z : Z.t t =
      fun x ->
       (if Z.(x < zero) then Format.sprintf "%s (-0x%s)" (Z.to_string x) else Format.sprintf "0x%s")
@@ -24,7 +24,7 @@ module QCheck2 = struct
   module Gen = struct
     include Gen
     let uint8 = char_range '\x00' '\xff'
-    let word : Word.t t =
+    let u256 : U256.t t =
       (*
        * Uniformly distributed random strings are very unlikely to be negative.
        * Bool shrinks towards false so this generator will shrink towards positive numbers.
@@ -39,7 +39,7 @@ module QCheck2 = struct
             return (to_string bytes) ) )
         else string_size ~gen:uint8 (int_bound 32)
       in
-      return (Word.of_bytes_be bytes_be)
+      return (U256.of_bytes_be bytes_be)
 
     let z : Z.t t =
       let* negative = bool in
@@ -52,12 +52,12 @@ end
 let check_prop ~name ?print ?(count = 10000) generator property =
   QCheck_alcotest.to_alcotest (QCheck2.Test.make ?print ~name ~count generator property)
 
-let word =
+let u256 =
   ( module struct
-    include Word
-    let pp = Fmt.of_to_string (fun w -> Bytes.to_hex_string (Word.to_bytes32_be w))
+    include U256
+    let pp = Fmt.of_to_string (fun w -> U256.to_short_hex_string w)
   end : Alcotest.TESTABLE
-    with type t = Word.t )
+    with type t = U256.t )
 
 let status_code =
   ( module struct
@@ -97,7 +97,7 @@ let test_message ?(prepare_env : unit EvmcHost.t = EvmcHost.return ())
         | Ok () ->
             Evmc.Result.
               { status_code = Success
-              ; gas_left = Word.to_uint64 ctx.machine_state.gas
+              ; gas_left = U256.to_uint64 ctx.machine_state.gas
               ; gas_refund = 0L
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
@@ -124,13 +124,13 @@ let bytecode_to_call_message code =
     Message.
       { kind = CallKind.Call
       ; flags = []
-      ; depth = 0l
+      ; depth = 0
       ; gas = 100_000_000L
       ; recipient = Address.zero
       ; sender = Address.zero
       ; input_data = Bytes.empty
-      ; value = Word.of_int 1000
-      ; create2_salt = Word.zero
+      ; value = U256.of_int 1000
+      ; create2_salt = U256.zero
       ; code_address = Address.zero
       ; code } )
 
@@ -144,7 +144,7 @@ let expect_stack expected_stack =
       return
         (List.iteri
            (fun i (expected, actual) ->
-             Alcotest.check' word ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
+             Alcotest.check' u256 ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
            (List.combine expected_stack stack) ) ) )
 
 let test_bytecode_pure bc ~input_stack ~output_stack =
@@ -158,8 +158,8 @@ let test_bytecode_pure bc ~input_stack ~output_stack =
        ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =
-  let inputs = List.map Word.to_short_hex_string inputs |> String.concat ", " in
-  Format.sprintf "%s(%s) -> 0x%s" (Opcode.to_string opcode) inputs (Word.to_short_hex_string output)
+  let inputs = List.map U256.to_short_hex_string inputs |> String.concat ", " in
+  Format.sprintf "%s(%s) -> 0x%s" (Opcode.to_string opcode) inputs (U256.to_short_hex_string output)
 
 let test_case_opcode_1 opcode x_0 y =
   let test_name = opcode_test_name opcode [x_0] y in

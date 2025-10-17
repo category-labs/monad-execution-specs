@@ -1,12 +1,13 @@
 open Test_utils.Utils
 open Monad_lib
+open Monad_lib.Numeric
 open Opcode
 open Alcotest
 
 let () =
   run "EIP-145: Bitwise shifting instructions in EVM"
     [ test_cases_opcode_2 Shl
-        Word.
+        U256.
           [ ((~@"0x0", ~@"0x1"), ~@"0x1")
           ; ((~@"0x1", ~@"0x1"), ~@"0x2")
           ; ((~@"0xff", ~@"0x1"), ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
@@ -21,7 +22,7 @@ let () =
           ; ( (~@"0x1", ~@"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
             , ~@"0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe" ) ]
     ; test_cases_opcode_2 Shr
-        Word.
+        U256.
           [ ((~@"0x0", ~@"0x1"), ~@"0x1")
           ; ((~@"0x1", ~@"0x1"), ~@"0x0")
           ; ( (~@"0x1", ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
@@ -37,7 +38,7 @@ let () =
           ; ((~@"0x100", ~@"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), ~@"0x0")
           ; ((~@"0x1", ~@"0x0"), ~@"0x0") ]
     ; test_cases_opcode_2 Sar
-        Word.
+        U256.
           [ ((~@"0x0", ~@"0x1"), ~@"0x1")
           ; ((~@"0x1", ~@"0x1"), ~@"0x0")
           ; ( (~@"0x1", ~@"0x8000000000000000000000000000000000000000000000000000000000000000")
