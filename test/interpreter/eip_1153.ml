@@ -10,7 +10,7 @@ let () =
     [ ( "Unset values" (* Check that uninitialized keys contain zero *)
       , let test k =
           test_case
-            (Format.sprintf "Tload(0x%s)" (U256.to_short_hex_string k))
+            (Format.sprintf "Tload(%s)" (U256.to_short_hex_string k))
             `Quick
             (fun () -> test_bytecode_pure ~input_stack:[] Program.(tload (Lit k)) ~output_stack:[U256.zero])
         in
@@ -20,7 +20,7 @@ let () =
       , let test_keys = U256.[~$0; ~$1; ~$2; ~$2 ** 128; max_t] in
         let test k =
           test_case
-            (Format.sprintf "Tload(0x%s)" (U256.to_short_hex_string k))
+            (Format.sprintf "Tload(%s)" (U256.to_short_hex_string k))
             `Quick
             (fun () ->
               test_bytecode_pure ~input_stack:[]
@@ -34,7 +34,7 @@ let () =
       , let test_keys = U256.[~$0; ~$1; ~$2; ~$2 ** 128; max_t] in
         let test k =
           test_case
-            (Format.sprintf "Tload(0x%s)" (U256.to_short_hex_string k))
+            (Format.sprintf "Tload(%s)" (U256.to_short_hex_string k))
             `Quick
             (fun () ->
               test_bytecode_pure ~input_stack:[]
@@ -50,7 +50,7 @@ let () =
           let read_key_1 = U256.(write_key - one) in
           let read_key_2 = U256.(write_key + one) in
           test_case
-            (Format.sprintf "Tstore(0x%s); Tload(0x%s); Tload(0x%s)" (U256.to_short_hex_string write_key)
+            (Format.sprintf "Tstore(%s); Tload(%s); Tload(%s)" (U256.to_short_hex_string write_key)
                (U256.to_short_hex_string read_key_1)
                (U256.to_short_hex_string read_key_2) )
             `Quick

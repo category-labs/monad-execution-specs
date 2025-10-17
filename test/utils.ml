@@ -6,18 +6,23 @@ open Monad_lib.Numeric
 module Revision = struct
   let rev = Chain.Monad.Revision.Four
 end
-module EvmcHost = Evmc.Dummy (Revision)
-module Vm = Vm.Make (Revision) (EvmcHost)
+
+module DummyHost = Evmc.Dummy (Revision)
+module rec HostImpl : DummyHost.SIG = DummyHost.Make (VmRec)
+
+and VmRec : DummyHost.VM_SIG = Vm.Make (Revision) (HostImpl)
+module Vm = Vm.Make(Revision)(HostImpl)
 
 (* U256.t generator *)
 module QCheck2 = struct
   include QCheck2
   module Print = struct
     include Print
-    let u256 x = Format.sprintf "%s (0x%s)" (U256.to_string x) (U256.to_short_hex_string x)
+    let u256 x = Format.sprintf "%s (%s)" (U256.to_string x) (U256.to_short_hex_string x)
+    let i256 x = Format.sprintf "%s (%s)" (I256.to_string x) (I256.to_short_hex_string x)
     let z : Z.t t =
      fun x ->
-      (if Z.(x < zero) then Format.sprintf "%s (-0x%s)" (Z.to_string x) else Format.sprintf "0x%s")
+      (if Z.(x < zero) then Format.sprintf "%s (-%s)" (Z.to_string x) else Format.sprintf "%s")
         (Bytes.to_hex_string (Z.to_bits x))
   end
 
@@ -40,6 +45,10 @@ module QCheck2 = struct
         else string_size ~gen:uint8 (int_bound 32)
       in
       return (U256.of_bytes_be bytes_be)
+
+    let i256 : I256.t t =
+      let* num = u256 in
+      return (U256.as_signed num)
 
     let z : Z.t t =
       let* negative = bool in
@@ -70,9 +79,9 @@ let status_code =
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
-let test_message ?(prepare_env : unit EvmcHost.t = EvmcHost.return ())
+let test_message ?(prepare_env : unit DummyHost.M.t = DummyHost.M.return ())
     ?(prepare_vm : unit Vm.M.t = Vm.M.return ()) ?(check_vm_state : unit Vm.M.t option)
-    ?(check_env_state : unit EvmcHost.t = EvmcHost.return ())
+    ?(check_env_state : unit DummyHost.M.t = DummyHost.M.return ())
     ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
     (msg : Evmc.Message.t) =
   (*
@@ -80,9 +89,9 @@ let test_message ?(prepare_env : unit EvmcHost.t = EvmcHost.return ())
    * With better VM instrumentation we can remove the duplucation
    *)
   let action =
-    EvmcHost.(
+    DummyHost.(
       let$ () = prepare_env in
-      let$ tx_context = get_tx_context in
+      let$ tx_context = HostImpl.get_tx_context in
       let ctx = Vm.Context.make tx_context msg in
       let$ res, ctx =
         Vm.M.(
@@ -110,7 +119,7 @@ let test_message ?(prepare_env : unit EvmcHost.t = EvmcHost.return ())
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None } ) )
   in
-  let result, state = action EvmcHost.State.empty in
+  let result, state = action DummyHost.State.empty in
   (*
    * If the caller specified a VM postcondition but execution finished with an early abort,
    * the postcondition did not get checked and so the test preemptively fails
@@ -159,7 +168,7 @@ let test_bytecode_pure bc ~input_stack ~output_stack =
 
 let opcode_test_name opcode inputs output =
   let inputs = List.map U256.to_short_hex_string inputs |> String.concat ", " in
-  Format.sprintf "%s(%s) -> 0x%s" (Opcode.to_string opcode) inputs (U256.to_short_hex_string output)
+  Format.sprintf "%s(%s) -> %s" (Opcode.to_string opcode) inputs (U256.to_short_hex_string output)
 
 let test_case_opcode_1 opcode x_0 y =
   let test_name = opcode_test_name opcode [x_0] y in
