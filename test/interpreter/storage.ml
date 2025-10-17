@@ -10,7 +10,7 @@ let () =
     [ ( "Unset values" (* Check that uninitialized keys contain zero *)
       , let test k =
           test_case
-            (Format.sprintf "Sload(0x%s)" (U256.to_short_hex_string k))
+            (Format.sprintf "Sload(%s)" (U256.to_short_hex_string k))
             `Quick
             (fun () -> test_bytecode_pure ~input_stack:[] Program.(sload (Lit k)) ~output_stack:[U256.zero])
         in
@@ -20,7 +20,7 @@ let () =
       , let test_keys = U256.[~$0; ~$1; ~$2; ~$2 ** 128; max_t] in
         let test k =
           test_case
-            (Format.sprintf "Sload(0x%s)" (U256.to_short_hex_string k))
+            (Format.sprintf "Sload(%s)" (U256.to_short_hex_string k))
             `Quick
             (fun () ->
               test_bytecode_pure ~input_stack:[]
@@ -36,7 +36,7 @@ let () =
           let read_key_1 = U256.(write_key - one) in
           let read_key_2 = U256.(write_key + one) in
           test_case
-            (Format.sprintf "Sload(0x%s); Sload(0x%s); Sload(0x%s)" (U256.to_short_hex_string write_key)
+            (Format.sprintf "Sload(%s); Sload(%s); Sload(%s)" (U256.to_short_hex_string write_key)
                (U256.to_short_hex_string read_key_1)
                (U256.to_short_hex_string read_key_2) )
             `Quick
@@ -56,10 +56,10 @@ let () =
            let bc_write = Program.(sstore (Lit addr) (Lit value)) in
            let bc_read = Program.(sload (Lit addr)) in
            test_case
-             (Format.sprintf "Sload(0x%s)" U256.(to_short_hex_string zero))
+             (Format.sprintf "Sload(%s)" U256.(to_short_hex_string zero))
              `Quick
              (fun () ->
                let _, state = test_message (bytecode_to_call_message bc_write) in
                ignore
-                 (test_message ~prepare_env:(EvmcHost.put state) ~check_vm_state:(expect_stack [value])
+                 (test_message ~prepare_env:(DummyHost.put state) ~check_vm_state:(expect_stack [value])
                     (bytecode_to_call_message bc_read) ) ) ) ] ) ]

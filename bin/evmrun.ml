@@ -41,9 +41,13 @@ module Revision = struct
   let rev = Chain.Monad.Revision.Four
 end
 
-module EvmcHost = Evmc.Dummy (Revision)
+module DummyHost = Evmc.Dummy (Revision)
 
-module Vm = Vm.Make (Revision) (EvmcHost)
+(* Mutual recursion between host and vm *)
+module rec HostImpl : DummyHost.SIG = DummyHost.Make (VmImpl)
+
+and VmImpl : DummyHost.VM_SIG = Vm.Make (Revision) (HostImpl)
+
 
 let msg =
   Evmc.(
@@ -60,7 +64,7 @@ let msg =
       ; code_address = Address.zero
       ; code = bytecode } )
 
-let result, _state = Vm.call ~trace:!trace msg EvmcHost.State.empty
+let result, _state = VmImpl.call ~trace:!trace msg DummyHost.State.empty
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"

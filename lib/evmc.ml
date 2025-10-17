@@ -168,7 +168,6 @@ end
 
 (* Dummy implementation *)
 module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
-  open Utils
   open Chain.Ethereum
   open Lens
   open Lens.Infix
@@ -228,73 +227,100 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
   end
   open State
 
-  include Utils.Monad.State (State)
+  module M = Utils.Monad.State (State)
+  include M
 
-  let touch_account addr = update_field (substate |-- accessed_addresses) (Address.Set.add addr)
+  let touch_account addr = M.update_field (substate |-- accessed_addresses) (Address.Set.add addr)
 
   let touch_storage addr key =
-    let$ () = touch_account addr in
-    update_field (substate |-- accessed_keys) (StorageKey.Set.add (addr, key))
+    M.(
+      let$ () = touch_account addr in
+      update_field (substate |-- accessed_keys) (StorageKey.Set.add (addr, key)) )
 
   let account addr = accounts |-- Address.Map.at addr |-- get_or_default Account.empty
 
-  (* EVMC *)
-  let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
+  module type VM_SIG = sig
+    val call : ?trace:bool -> Message.t -> Result.t M.t
+  end
+  module type SIG = Host.SIG with type 'a t = 'a M.t
 
-  let get_storage addr key = !(account addr |-- storage |-- U256.Map.at key |-- get_or_default U256.zero)
+  (*
+   * EVMC host interface
+   * Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
+   * VM module are mutually recursive
+   *)
+  module Make (VmEntryPoint : VM_SIG) : SIG = struct
+    include M
+    let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
 
-  let set_storage addr key v = account addr |-- storage |-- U256.Map.at key := Some v
+    let get_storage addr key = !(account addr |-- storage |-- U256.Map.at key |-- get_or_default U256.zero)
 
-  let get_balance addr = !(account addr |-- balance)
+    let set_storage addr key v = account addr |-- storage |-- U256.Map.at key := Some v
 
-  let get_code_size addr =
-    let$ code = !(account addr |-- code) in
-    return (U256.of_int (Bytes.length code))
-  let get_code_hash _addr = todo ()
-  let copy_code addr = !(account addr |-- code)
+    let get_balance addr = !(account addr |-- balance)
 
-  let selfdestruct ~address ~beneficiary =
-    Stdlib.ignore (address, beneficiary) ;
-    todo ()
-  let call _msg = todo ()
+    let get_code_size addr =
+      let$ code = !(account addr |-- code) in
+      return (U256.of_int (Bytes.length code))
+    let get_code_hash _addr = todo ()
+    let copy_code addr = !(account addr |-- code)
 
-  let get_tx_context =
-    return
-      TxContext.
-        { tx_gas_price = U256.zero
-        ; tx_origin = Address.zero
-        ; block_coinbase = Address.zero
-        ; block_number = 0L
-        ; block_timestamp = 0L
-        ; block_gas_limit = 99999L
-        ; block_prev_randao = Address.zero
-        ; chain_id = U256.of_int Traits.chain_id
-        ; block_base_fee = U256.zero
-        ; blob_base_fee = U256.zero
-        ; blob_hashes = []
-        ; initcodes = [] }
+    let selfdestruct ~address ~beneficiary =
+      Stdlib.ignore (address, beneficiary) ;
+      todo ()
+    let call msg =
+      let$ before_transaction = get in
+      let$ result = VmEntryPoint.call msg in
+      let$ () =
+        match result.status_code with
+        | Success -> todo () (* refund gas, changes are not reverted *)
+        | Revert ->
+            let$ () = put before_transaction in
+            todo () (* refund gas *)
+        | _ ->
+            (* Restore pre-transaction state, no refund *)
+            put before_transaction
+      in
+      return result
 
-  let get_block_hash _i = todo ()
+    let get_tx_context =
+      return
+        TxContext.
+          { tx_gas_price = U256.zero
+          ; tx_origin = Address.zero
+          ; block_coinbase = Address.zero
+          ; block_number = 0L
+          ; block_timestamp = 0L
+          ; block_gas_limit = 99999L
+          ; block_prev_randao = Address.zero
+          ; chain_id = U256.of_int Traits.chain_id
+          ; block_base_fee = U256.zero
+          ; blob_base_fee = U256.zero
+          ; blob_hashes = []
+          ; initcodes = [] }
 
-  let emit_log _addr ~data ~topics =
-    Stdlib.ignore (data, topics) ;
-    todo ()
+    let get_block_hash _i = todo ()
 
-  let access_account addr : [`Warm | `Cold] t =
-    let$ accessed = !(substate |-- accessed_addresses) in
-    if Option.is_some (Address.Set.find_opt addr accessed) then return `Warm
-    else
-      let$ () = touch_account addr in
-      return `Cold
+    let emit_log _addr ~data ~topics =
+      Stdlib.ignore (data, topics) ;
+      todo ()
 
-  let access_storage addr key =
-    let$ accessed = !(substate |-- accessed_keys) in
-    if Option.is_some (StorageKey.Set.find_opt (addr, key) accessed) then return `Warm
-    else
-      let$ () = touch_storage addr key in
-      return `Cold
+    let access_account addr : [`Warm | `Cold] t =
+      let$ accessed = !(substate |-- accessed_addresses) in
+      if Option.is_some (Address.Set.find_opt addr accessed) then return `Warm
+      else
+        let$ () = touch_account addr in
+        return `Cold
 
-  let get_transient_storage key = !(transient_storage |-- U256.Map.at key |-- get_or_default U256.zero)
+    let access_storage addr key =
+      let$ accessed = !(substate |-- accessed_keys) in
+      if Option.is_some (StorageKey.Set.find_opt (addr, key) accessed) then return `Warm
+      else
+        let$ () = touch_storage addr key in
+        return `Cold
 
-  let set_transient_storage key value = transient_storage |-- U256.Map.at key := Some value
+    let get_transient_storage key = !(transient_storage |-- U256.Map.at key |-- get_or_default U256.zero)
+
+    let set_transient_storage key value = transient_storage |-- U256.Map.at key := Some value
+  end
 end

@@ -126,7 +126,9 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
     if Z.fits_int x then Some (Z.to_int x) else None
 
   let of_uint64 i = of_z_exn (Z.of_int64_unsigned i)
+  let of_int64 i = of_z_exn (Z.of_int64 i)
   let to_uint64 x = Z.to_int64_unsigned (to_z x)
+  let to_int64 x = Z.to_int64 (to_z x)
 
   (* Will be signed or unsigned depending on the signedness of the module *)
   let compare (x : t) (y : t) = Z.compare (to_z x) (to_z y)
@@ -261,17 +263,17 @@ module TwosComplement (B : IS_BOUNDED) = struct
     include S
     let as_unsigned (x : t) : U.t =
       let x = to_z x in
-      U.of_z_exn Z.(if gt x zero then x else max_unsigned + x + one)
+      U.of_z_exn Z.(if geq x zero then x else max_unsigned + x + one)
   end
   module Unsigned = struct
     include U
     let as_signed (x : t) : Signed.t =
       let x = to_z x in
-      Signed.of_z_exn Z.(if lt x max_signed then x else x - max_unsigned - one)
+      Signed.of_z_exn Z.(if leq x max_signed then x else x - max_unsigned - one)
 
     let sign_extend byte_i (x : t) : Signed.t =
       let bit_i = Stdlib.(7 + (8 * byte_i)) in
-      Signed.of_z_exn (Z.signed_extract (to_z x) 0 bit_i)
+      Signed.of_z_exn (Z.signed_extract (to_z x) 0 Stdlib.(1 + bit_i))
 
     let to_unbounded (x : t) : Uint.t = Uint.of_z_exn (to_z x)
     let of_unbounded (x : Uint.t) : t = of_z_exn (Uint.to_z x)

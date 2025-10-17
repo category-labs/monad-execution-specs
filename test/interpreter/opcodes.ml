@@ -28,7 +28,7 @@ let test_cases_keccak test_cases =
   ( "Keccak"
   , ListLabels.map test_cases ~f:(fun (input, output) ->
         test_case
-          (Format.sprintf "Keccak(0x%s) -> 0x%s" (Bytes.to_hex_string input) (U256.to_short_hex_string output))
+          (Format.sprintf "Keccak(%s) -> %s" (Bytes.to_hex_string input) (U256.to_short_hex_string output))
           `Quick
           (fun () -> test_keccak input output) ) )
 

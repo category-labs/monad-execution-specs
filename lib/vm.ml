@@ -775,7 +775,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let block =
       match (U256.to_int_opt src_start, U256.to_int_opt size) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
-      | _, Some size -> Bytes.init size (fun _ -> '\x00')
+      | _, Some size -> Bytes.make size '\x00'
       | _, None -> raise Internal_error
     in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
@@ -827,7 +827,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let block =
       match (U256.to_int_opt src_start, U256.to_int_opt size) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
-      | _, Some size -> Bytes.init size (fun _ -> '\x00')
+      | _, Some size -> Bytes.make size '\x00'
       | _, None -> raise Internal_error
     in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
@@ -1269,14 +1269,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let create s = ignore s; todo()
+  let create s = ignore s ; todo ()
   let calculate_message_call_gas value gas gas_left memory_extension_gas sum_total =
-    ignore value;
-    ignore gas;
-    ignore gas_left;
-    ignore memory_extension_gas;
-    ignore sum_total;
-    todo()
+    ignore value ; ignore gas ; ignore gas_left ; ignore memory_extension_gas ; ignore sum_total ; todo ()
 
   let generic_call_impl ~call_gas ~value ~caller ~target ~code_address ~delegated ~static ~input_start
       ~input_size ~output_start ~output_size =
@@ -1311,7 +1306,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
         | None -> result.output_data
         | Some i -> Bytes.sub result.output_data 0 (min i (Bytes.length result.output_data))
       in
-      let$ () = if result.status_code = Success then todo () else todo () in
+      let$ () = update_field (machine_state |-- gas) (fun g -> U256.(g + of_int64 result.gas_left)) in
       update_field (machine_state |-- memory) (Memory.write_block_at output_start truncated_output)
 
   let call =
@@ -1540,7 +1535,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* Write one word at a time *)
     let rec loop pos =
       if U256.(pos < ms.active_memory_words) then (
-        Format.printf "%s: 0x%s\n" (U256.to_short_hex_string pos)
+        Format.printf "%s: %s\n" (U256.to_short_hex_string pos)
           (Bytes.to_hex_string (Memory.read_block_at pos U256.(~$32) ms.memory)) ;
         loop U256.(pos + ~$32) )
     in
@@ -1585,13 +1580,25 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
               ; gas_refund = 0L
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
-        | Error err ->
-            if err = Success then raise Internal_error
-            else
+        | Error err -> (
+          match err with
+          | Success -> raise Internal_error
+          | Revert ->
+             (*
+              * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+              * buffer is read, see YP (152)
+              *)
+              Evmc.Result.
+                { status_code = err
+                ; gas_left = U256.to_uint64 ctx.machine_state.gas
+                ; gas_refund = 0L
+                ; output_data = ctx.machine_state.output_buffer
+                ; create_address = None }
+          | _ ->
               Evmc.Result.
                 { status_code = err
                 ; gas_left = 0L
                 ; gas_refund = 0L
-                ; output_data = ctx.machine_state.output_buffer
-                ; create_address = None } ) )
+                ; output_data = Bytes.empty
+                ; create_address = None } ) ) )
 end
