@@ -193,7 +193,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     include ErrStHost
     include St.Lift (ErrStHost) (StHost)
-    include Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+    module HostAPI = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
   end
   open M
 
@@ -292,6 +292,34 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       {caller_spent_gas; callee_available_gas}
 
     let sclear_refund = ~$4_800
+  end
+
+  module Delegation = struct
+    type t = {code_address : Address.t; delegated_access_gas : Uint.t}
+
+    let set_code_tx_magic : Bytes.t = "\x05"
+    let eoa_delegation_prefix : Bytes.t = "\xef\x01\x00"
+    let eoa_delegated_code_length = Bytes.length eoa_delegation_prefix + Address.byte_width
+    let () = assert (eoa_delegated_code_length = 23)
+
+    let per_empty_account_cost = Uint.(~$25_000)
+    let per_auth_base_cost = Uint.(~$12_500)
+
+    let get_delegated_address (code : Bytes.t) : Address.t option =
+      if Bytes.length code = eoa_delegated_code_length && Bytes.starts_with ~prefix:eoa_delegation_prefix code
+      then Some (Address.of_bytes_be (Bytes.sub code (Bytes.length eoa_delegation_prefix) Address.byte_width))
+      else None
+
+    let access_delegation (addr : Address.t) =
+      let$ code = HostAPI.copy_code addr in
+      match get_delegated_address code with
+      | None -> return {code_address = addr; delegated_access_gas = Uint.zero}
+      | Some address ->
+          let$ access = HostAPI.access_account address in
+          let delegated_access_gas =
+            GasCosts.(match access with `Warm -> warm_access_cost | `Cold -> cold_account_access_cost)
+          in
+          return {code_address = address; delegated_access_gas}
   end
 
   let finish_execution : bool M.t = return false
@@ -734,13 +762,13 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ address = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = access_account address in
+    let$ access = HostAPI.access_account address in
     let$ () =
       spend GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
 
     (* Operation *)
-    let$ balance = get_balance address in
+    let$ balance = HostAPI.get_balance address in
     let$ () = push balance in
 
     (* PC *)
@@ -824,13 +852,13 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ address = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = access_account address in
+    let$ access = HostAPI.access_account address in
     let$ () =
       spend GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
 
     (* Operation *)
-    let$ size = get_code_size address in
+    let$ size = HostAPI.get_code_size address in
     let$ () = push size in
 
     (* PC *)
@@ -844,7 +872,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ size = pop in
 
     (* Gas *)
-    let$ access = access_account address in
+    let$ access = HostAPI.access_account address in
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
@@ -853,7 +881,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas + access_gas) in
 
     (* Operation *)
-    let$ data = copy_code address in
+    let$ data = HostAPI.copy_code address in
     let block =
       match (U256.to_int_opt src_start, U256.to_int_opt size) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
@@ -870,14 +898,14 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ address = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = access_account address in
+    let$ access = HostAPI.access_account address in
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
     let$ () = spend access_gas in
 
     (* Operation *)
-    let$ hash = get_code_hash address in
+    let$ hash = HostAPI.get_code_hash address in
     let$ () = push hash in
 
     (* PC *)
@@ -925,7 +953,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ current_block_num = !(execution_environment |-- header |-- number) in
     let$ hash =
       if U256.(current_block_num <= block_num || current_block_num - ~$256 > block_num) then return U256.zero
-      else get_block_hash block_num
+      else HostAPI.get_block_hash block_num
     in
     let$ () = push hash in
 
@@ -960,7 +988,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ self_addr = self in
-    let$ balance = get_balance self_addr in
+    let$ balance = HostAPI.get_balance self_addr in
     let$ () = push balance in
 
     (* PC *)
@@ -1126,11 +1154,11 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Gas *)
     let$ self_addr = self in
-    let$ access = access_storage self_addr key in
+    let$ access = HostAPI.access_storage self_addr key in
     let$ () = spend GasCosts.(match access with `Cold -> cold_sload_cost | `Warm -> warm_access_cost) in
 
     (* Operation *)
-    let$ value = get_storage self_addr key in
+    let$ value = HostAPI.get_storage self_addr key in
     let$ () = push value in
 
     (* PC *)
@@ -1143,8 +1171,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Gas *)
     let$ self_addr = self in
-    let$ access = access_storage self_addr key in
-    let$ value = get_storage self_addr key in
+    let$ access = HostAPI.access_storage self_addr key in
+    let$ value = HostAPI.get_storage self_addr key in
     let$ value0 = !(initial_storage |-- U256.Map.at key |-- Lens.get_or_default value) in
     (*
      * If the storage slot had already been written to, then initial_storage contained an entry for it and so
@@ -1164,7 +1192,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ () = check_write_permissions in
-    let$ () = set_storage self_addr key value' in
+    let$ () = HostAPI.set_storage self_addr key value' in
     (* The refund here can be negative as we may be undoing a previous positive refund *)
     let refund : Integer.t =
       match () with
@@ -1259,7 +1287,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.warm_access_cost in
 
     (* Operation *)
-    let$ value = get_transient_storage key in
+    let$ value = HostAPI.get_transient_storage key in
     let$ () = push value in
 
     (* PC *)
@@ -1275,7 +1303,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ () = check_write_permissions in
-    let$ () = set_transient_storage key value in
+    let$ () = HostAPI.set_transient_storage key value in
 
     (* PC *)
     increase_pc_and_continue
@@ -1322,7 +1350,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = check_write_permissions in
     let$ self_addr = self in
     let$ data = Memory.read_block_at src_start size <$> !(machine_state |-- memory) in
-    let$ () = emit_log self_addr ~data ~topics in
+    let$ () = HostAPI.emit_log self_addr ~data ~topics in
 
     (* PC *)
     increase_pc_and_continue
@@ -1333,7 +1361,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       update_field (machine_state |-- MachineState.gas_refund) (fun g -> Uint.(g + of_int64 gas_refund))
     else return (assert (Int64.(gas_refund = zero)))
 
-  let generic_call_impl ~(call_gas : U256.t) ~(value : U256.t) ~(caller : Address.t) ~(target : Address.t)
+  let generic_call_impl ~(call_gas : U256.t) ~(value : U256.t) ~(sender : Address.t) ~(recipient : Address.t)
       ~(code_address : Address.t) ~(delegated : bool) ~(static : bool) ~(input_start : U256.t)
       ~(input_size : U256.t) ~(output_start : U256.t) ~(output_size : U256.t) =
     let$ () = machine_state |-- output_buffer := Bytes.empty in
@@ -1344,7 +1372,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       push U256.zero
     else
       let$ input_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
-      let$ code = copy_code code_address in
+      let$ code = HostAPI.copy_code code_address in
       let flags = Evmc.Flags.((if delegated then [Delegated] else []) @ if static then [Static] else []) in
       let message =
         Evmc.(
@@ -1353,15 +1381,15 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
             ; flags
             ; depth
             ; gas = U256.to_uint64 call_gas
-            ; recipient = target
-            ; sender = caller
+            ; recipient
+            ; sender
             ; input_data
             ; value
             ; create2_salt = U256.zero
             ; code_address
             ; code } )
       in
-      let$ {status_code; gas_left; gas_refund; output_data; create_address} = M.call message in
+      let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       assert (Option.is_none create_address) ;
       if status_code = Evmc.Result.StatusCode.Success then
@@ -1378,7 +1406,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   let call =
     (* Stack *)
     let$ gas = U256.to_unbounded <$> pop in
-    let$ target = Address.of_u256_truncating <$> pop in
+    let$ recipient = Address.of_u256_truncating <$> pop in
     let$ value = pop in
     let$ input_start = pop in
     let$ input_size = pop in
@@ -1389,12 +1417,12 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = access_account target in
+    let$ access = HostAPI.access_account recipient in
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
-    let$ code_address = (* TODO: handle delegation *) return target in
-    let$ target_is_alive = account_exists target in
+    let$ code_address = (* TODO: handle delegation *) return recipient in
+    let$ target_is_alive = HostAPI.account_exists recipient in
     let create_gas = GasCosts.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
     let transfer_gas = GasCosts.(if U256.(value = zero) then zero else call_value) in
     let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
@@ -1406,10 +1434,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ () = when_ U256.(value <> zero) check_write_permissions in
-    let$ caller = self in
-    let$ caller_balance = get_balance caller in
+    let$ self_addr = self in
+    let$ self_balance = HostAPI.get_balance self_addr in
     let$ () =
-      if U256.(caller_balance < value) then
+      if U256.(self_balance < value) then
         let$ () = push U256.zero in
         let$ () =
           update_field (machine_state |-- MachineState.gas) (fun g ->
@@ -1419,8 +1447,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       else
         generic_call_impl
           ~call_gas:U256.(of_unbounded callee_available_gas)
-          ~value ~caller ~target ~code_address ~input_start ~input_size ~output_start ~output_size
-          ~delegated:false ~static:false
+          ~value ~sender:self_addr ~recipient:self_addr ~code_address ~input_start ~input_size ~output_start
+          ~output_size ~delegated:false ~static:false
     in
 
     (* PC *)
@@ -1440,7 +1468,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = access_account code_address in
+    let$ access = HostAPI.access_account code_address in
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
@@ -1454,11 +1482,11 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Operation *)
     let$ () = when_ U256.(value <> zero) check_write_permissions in
-    let$ caller = self in
-    let$ caller_balance = get_balance caller in
+    let$ self_addr = self in
+    let$ self_balance = HostAPI.get_balance self_addr in
 
     let$ () =
-      if U256.(caller_balance < value) then
+      if U256.(self_balance < value) then
         let$ () = push U256.zero in
         let$ () =
           update_field (machine_state |-- MachineState.gas) (fun g ->
@@ -1468,8 +1496,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       else
         generic_call_impl
           ~call_gas:U256.(of_unbounded callee_available_gas)
-          ~value ~caller ~target:caller ~code_address ~input_start ~input_size ~output_start ~output_size
-          ~delegated:false ~static:false
+          ~value ~sender:self_addr ~recipient:self_addr ~code_address ~input_start ~input_size ~output_start
+          ~output_size ~delegated:false ~static:false
     in
 
     (* PC *)
@@ -1496,7 +1524,45 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     finish_execution
 
-  let delegatecall _s = todo ()
+  let delegatecall =
+    (* Stack *)
+    let$ gas = U256.to_unbounded <$> pop in
+    let$ code_address = Address.of_u256_truncating <$> pop in
+    let$ input_start = pop in
+    let$ input_size = pop in
+    let$ output_start = pop in
+    let$ output_size = pop in
+
+    (* Gas *)
+    let$ memory_extension_gas =
+      extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
+    in
+    let$ access = HostAPI.access_account code_address in
+    let access_gas =
+      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    in
+    let$ Delegation.{code_address; delegated_access_gas} = Delegation.access_delegation code_address in
+    let access_gas = GasCosts.(access_gas + delegated_access_gas) in
+    let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
+    let GasCosts.{caller_spent_gas; callee_available_gas} =
+      GasCosts.call_gas ~value:U256.zero ~gas ~gas_left ~memory_cost:memory_extension_gas
+        ~extra_cost:access_gas
+    in
+    let$ () = spend GasCosts.(caller_spent_gas + memory_extension_gas) in
+
+    (* Operation *)
+    let$ original_sender = !(execution_environment |-- sender) in
+    let$ original_value = !(execution_environment |-- value) in
+    let$ self_addr = self in
+    let$ () =
+      generic_call_impl
+        ~call_gas:U256.(of_unbounded callee_available_gas)
+        ~value:original_value ~sender:original_sender ~recipient:self_addr ~code_address ~input_start
+        ~input_size ~output_start ~output_size ~delegated:true ~static:false
+    in
+
+    (* PC *)
+    increase_pc_and_continue
 
   let create2 _s = todo ()
 
@@ -1513,7 +1579,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = access_account target in
+    let$ access = HostAPI.access_account target in
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
@@ -1566,11 +1632,11 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ beneficiary = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = access_account beneficiary in
+    let$ access = HostAPI.access_account beneficiary in
     let access_gas = GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> zero) in
     let$ self_addr = self in
-    let$ self_balance = get_balance self_addr in
-    let$ beneficiary_exists = account_exists beneficiary in
+    let$ self_balance = HostAPI.get_balance self_addr in
+    let$ beneficiary_exists = HostAPI.account_exists beneficiary in
     let new_account_gas =
       GasCosts.(
         if (not beneficiary_exists) && U256.(self_balance <> zero) then self_destruct_new_account_cost
@@ -1726,7 +1792,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let call ?(trace = false) (msg : Evmc.Message.t) : Evmc.Result.t Host.t =
     Host.(
-      let$ tx_context = Host.get_tx_context in
+      let$ tx_context = get_tx_context in
       let ctx = Context.make tx_context msg in
       let$ res, ctx = run ~trace msg.code ctx in
       return
