@@ -111,7 +111,7 @@ let test_message ?(prepare_env : unit DummyHost.M.t = DummyHost.M.return ())
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
         | Error err ->
-            if err = Success then raise Internal_error ;
+            if err = Success then assert false;
             Evmc.Result.
               { status_code = err
               ; gas_left = 0L

@@ -1,5 +1,4 @@
 exception Unimplemented
-exception Internal_error
 
 let todo () = raise Unimplemented
 

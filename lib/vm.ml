@@ -29,7 +29,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   end = struct
     type t = char U256.Map.t
     let read_block_at start size (mem : t) =
-      let size = match U256.to_int_opt size with None -> raise Internal_error | Some sz -> sz in
+      let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
       Bytes.init size (fun byte_i ->
           U256.Map.find_opt U256.(start + ~$byte_i) mem |> Option.value ~default:'\x00' )
 
@@ -64,7 +64,15 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; memory : Memory.t (* mu_m *)
       ; active_memory_words : U256.t (* mu_i *)
       ; stack : U256.t list (* mu_s *)
-      ; output_buffer : Bytes.t (* mu_o *) }
+      ; output_buffer : Bytes.t (* mu_o *)
+      ; gas_refund : Uint.t
+            (* A_r *)
+            (*
+             * Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
+             * most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
+             * EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter
+             *)
+      }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
@@ -74,7 +82,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       ; memory = Memory.empty
       ; active_memory_words = U256.zero
       ; stack = []
-      ; output_buffer = Bytes.empty }
+      ; output_buffer = Bytes.empty
+      ; gas_refund = Uint.zero }
   end
   open MachineState
 
@@ -166,7 +175,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       loop 0 U256.Set.empty
 
     let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
-      if U256.(ctx.chain_id <> ~$Traits.chain_id) then raise Internal_error ;
+      assert (U256.(ctx.chain_id = ~$Traits.chain_id)) ;
       { execution_environment = ExecutionEnvironment.make ctx msg
       ; machine_state = {MachineState.initial with gas = U256.of_uint64 msg.gas}
       ; jump_destinations = valid_jump_destinations msg.code
@@ -262,6 +271,27 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     let new_account_cost = ~$25_000
     let call_value = ~$9_000
+
+    let call_stipend = ~$2_300
+
+    (* YP C_gascap *)
+    (* YP is buggy here, see https://github.com/ethereum/yellowpaper/issues/889 *)
+    let c_gascap ~gas ~gas_left ~memory_cost ~extra_cost =
+      if Uint.(gas_left >= memory_cost + extra_cost) then
+        let available_gas = Uint.(gas_left - memory_cost - extra_cost) in
+        Uint.(min gas (minus_1_64th available_gas))
+      else gas
+
+    type call_gas =
+      {caller_spent_gas : Uint.t (* YP C_call *); callee_available_gas : Uint.t (* YP C_callgas *)}
+
+    let call_gas ~value ~gas ~gas_left ~memory_cost ~extra_cost =
+      let c_gascap = c_gascap ~gas ~gas_left ~memory_cost ~extra_cost in
+      let caller_spent_gas = Uint.(c_gascap + extra_cost) in
+      let callee_available_gas = if U256.(value <> zero) then Uint.(c_gascap + call_stipend) else c_gascap in
+      {caller_spent_gas; callee_available_gas}
+
+    let sclear_refund = ~$4_800
   end
 
   let finish_execution : bool M.t = return false
@@ -776,7 +806,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       match (U256.to_int_opt src_start, U256.to_int_opt size) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
       | _, Some size -> Bytes.make size '\x00'
-      | _, None -> raise Internal_error
+      | _, None -> assert false
     in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
 
@@ -828,7 +858,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       match (U256.to_int_opt src_start, U256.to_int_opt size) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
       | _, Some size -> Bytes.make size '\x00'
-      | _, None -> raise Internal_error
+      | _, None -> assert false
     in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
 
@@ -1124,17 +1154,45 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = initial_storage |-- U256.Map.at key := Some value0 in
     let access_gas = GasCosts.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
-      GasCosts.(
-        if U256.(value = value' || value0 <> value) then warm_access_cost
-        else if U256.(value <> value' && value0 = value && value0 == zero) then sset_cost
-        else if not U256.(value <> value' && value0 = value && value0 <> zero) then raise Internal_error
-        else sreset_cost )
+      match () with
+      | () when U256.(value = value' || value0 <> value) -> GasCosts.warm_access_cost
+      | () when U256.(value <> value' && value0 = value && value0 = zero) -> GasCosts.sset_cost
+      | () when not U256.(value <> value' && value0 = value && value0 <> zero) -> assert false
+      | () -> GasCosts.sreset_cost
     in
     let$ () = spend GasCosts.(access_gas + update_gas) in
 
     (* Operation *)
     let$ () = check_write_permissions in
     let$ () = set_storage self_addr key value' in
+    (* The refund here can be negative as we may be undoing a previous positive refund *)
+    let refund : Integer.t =
+      match () with
+      | () when U256.(value <> value' && value0 = value && value' = zero) -> GasCosts.(as_signed sclear_refund)
+      | () when U256.(value <> value' && value0 <> value) ->
+          let r_dirtyclear =
+            match () with
+            | () when U256.(value0 <> zero && value = zero) ->
+                Integer.(zero - GasCosts.(as_signed sclear_refund))
+            | () when U256.(value0 <> zero && value' = zero) -> GasCosts.(as_signed sclear_refund)
+            | () -> Integer.zero
+          in
+          let r_dirtyreset =
+            match () with
+            | () when U256.(value0 = value' && value0 = zero) ->
+                Integer.(GasCosts.(as_signed sset_cost) - GasCosts.(as_signed warm_access_cost))
+            | () when U256.(value0 = value' && value0 <> zero) ->
+                Integer.(GasCosts.(as_signed sreset_cost) - GasCosts.(as_signed warm_access_cost))
+            | () -> Integer.zero
+          in
+          Integer.(r_dirtyclear + r_dirtyreset)
+      | () -> Integer.zero
+    in
+    let$ () =
+      (* Overall gas refund is non-negative, but we have to do signed addition here *)
+      update_field (machine_state |-- gas_refund) (fun r ->
+          Integer.(as_unsigned_exn (Uint.as_signed r + refund)) )
+    in
 
     (* PC *)
     increase_pc_and_continue
@@ -1242,7 +1300,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     increase_pc_and_continue
 
   let log n_topics =
-    if n_topics < 0 || n_topics > 4 then raise Internal_error ;
+    assert (n_topics >= 0 && n_topics <= 4) ;
     (* Stack *)
     let$ src_start = pop in
     let$ size = pop in
@@ -1269,12 +1327,15 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let create s = ignore s ; todo ()
-  let calculate_message_call_gas value gas gas_left memory_extension_gas sum_total =
-    ignore value ; ignore gas ; ignore gas_left ; ignore memory_extension_gas ; ignore sum_total ; todo ()
+  let merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund =
+    let$ () = update_field (machine_state |-- gas) (fun g -> U256.(g + of_int64 gas_left)) in
+    if status_code = Evmc.Result.StatusCode.Success then
+      update_field (machine_state |-- MachineState.gas_refund) (fun g -> Uint.(g + of_int64 gas_refund))
+    else return (assert (Int64.(gas_refund = zero)))
 
-  let generic_call_impl ~call_gas ~value ~caller ~target ~code_address ~delegated ~static ~input_start
-      ~input_size ~output_start ~output_size =
+  let generic_call_impl ~(call_gas : U256.t) ~(value : U256.t) ~(caller : Address.t) ~(target : Address.t)
+      ~(code_address : Address.t) ~(delegated : bool) ~(static : bool) ~(input_start : U256.t)
+      ~(input_size : U256.t) ~(output_start : U256.t) ~(output_size : U256.t) =
     let$ () = machine_state |-- output_buffer := Bytes.empty in
 
     let$ depth = ( + ) 1 <$> !(execution_environment |-- depth) in
@@ -1300,18 +1361,23 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
             ; code_address
             ; code } )
       in
-      let$ result = call message in
-      let truncated_output =
-        match U256.to_int_opt output_size with
-        | None -> result.output_data
-        | Some i -> Bytes.sub result.output_data 0 (min i (Bytes.length result.output_data))
-      in
-      let$ () = update_field (machine_state |-- gas) (fun g -> U256.(g + of_int64 result.gas_left)) in
-      update_field (machine_state |-- memory) (Memory.write_block_at output_start truncated_output)
+      let$ {status_code; gas_left; gas_refund; output_data; create_address} = M.call message in
+      let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
+      assert (Option.is_none create_address) ;
+      if status_code = Evmc.Result.StatusCode.Success then
+        let truncated_output =
+          match U256.to_int_opt output_size with
+          | None -> output_data
+          | Some i -> Bytes.sub output_data 0 (min i (Bytes.length output_data))
+        in
+        update_field (machine_state |-- memory) (Memory.write_block_at output_start truncated_output)
+      else return (assert (Bytes.length output_data = 0))
+
+  let create s = ignore s ; todo ()
 
   let call =
     (* Stack *)
-    let$ gas = pop in
+    let$ gas = U256.to_unbounded <$> pop in
     let$ target = Address.of_u256_truncating <$> pop in
     let$ value = pop in
     let$ input_start = pop in
@@ -1327,15 +1393,16 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
+    let$ code_address = (* TODO: handle delegation *) return target in
     let$ target_is_alive = account_exists target in
     let create_gas = GasCosts.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
     let transfer_gas = GasCosts.(if U256.(value = zero) then zero else call_value) in
-    let$ gas_left = !(machine_state |-- MachineState.gas) in
-    let gas_cost, sub_call_gas =
-      calculate_message_call_gas value gas gas_left memory_extension_gas
-        GasCosts.(access_gas + create_gas + transfer_gas)
+    let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
+    let GasCosts.{caller_spent_gas; callee_available_gas} =
+      GasCosts.call_gas ~value ~gas ~gas_left ~memory_cost:memory_extension_gas
+        ~extra_cost:Uint.(access_gas + transfer_gas + create_gas)
     in
-    let$ () = spend GasCosts.(gas_cost + memory_extension_gas) in
+    let$ () = spend GasCosts.(caller_spent_gas + memory_extension_gas) in
 
     (* Operation *)
     let$ () = when_ U256.(value <> zero) check_write_permissions in
@@ -1344,12 +1411,18 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () =
       if U256.(caller_balance < value) then
         let$ () = push U256.zero in
-        let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> U256.(g + sub_call_gas)) in
+        let$ () =
+          update_field (machine_state |-- MachineState.gas) (fun g ->
+              U256.(g + of_unbounded caller_spent_gas) )
+        in
         machine_state |-- output_buffer := Bytes.empty
       else
-        generic_call_impl ~call_gas:sub_call_gas ~value ~caller ~target ~code_address:target ~input_start
-          ~input_size ~output_start ~output_size ~delegated:false ~static:false
+        generic_call_impl
+          ~call_gas:U256.(of_unbounded callee_available_gas)
+          ~value ~caller ~target ~code_address ~input_start ~input_size ~output_start ~output_size
+          ~delegated:false ~static:false
     in
+
     (* PC *)
     increase_pc_and_continue
 
@@ -1582,12 +1655,12 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
               ; create_address = None }
         | Error err -> (
           match err with
-          | Success -> raise Internal_error
+          | Success -> assert false
           | Revert ->
-             (*
-              * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
-              * buffer is read, see YP (152)
-              *)
+              (*
+               * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+               * buffer is read, see YP (152)
+               *)
               Evmc.Result.
                 { status_code = err
                 ; gas_left = U256.to_uint64 ctx.machine_state.gas
