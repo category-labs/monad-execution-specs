@@ -59,7 +59,7 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
       fun x -> big_enough x && small_enough x
 
     let of_z_exn (x : Z.t) =
-      if not (in_range x) then raise (Domain_error x);
+      if not (in_range x) then raise (Domain_error x) ;
       x
 
     let of_z_truncating =
@@ -233,7 +233,21 @@ module Signedness = struct
   end
 end
 
-module Uint = Make (Size.Unbounded) (Signedness.Unsigned)
+module IntegerBase = Make (Size.Unbounded) (Signedness.Signed)
+module UintBase = Make (Size.Unbounded) (Signedness.Unsigned)
+
+module Uint = struct
+  include UintBase
+
+  (* YP 331 *)
+  let minus_1_64th (x : t) : t = x - (x / ~$64)
+  let as_signed (x : t) : IntegerBase.t = IntegerBase.of_z_exn (to_z x)
+end
+module Integer = struct
+  include IntegerBase
+
+  let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
+end
 
 module TwosComplement (B : IS_BOUNDED) = struct
   module SI = Make (B) (Signedness.Signed)
@@ -278,7 +292,7 @@ module TwosComplement (B : IS_BOUNDED) = struct
     let to_unbounded (x : t) : Uint.t = Uint.of_z_exn (to_z x)
     let of_unbounded (x : Uint.t) : t = of_z_exn (Uint.to_z x)
 
-    let of_signed_int (x: int) = Signed.(as_unsigned ~$x)
+    let of_signed_int (x : int) = Signed.(as_unsigned ~$x)
   end
 end
 
@@ -290,5 +304,5 @@ module Bits160 = TwosComplement (Size.Bits160)
 module U160 = struct
   include Bits160.Unsigned
   let to_u256 (x : t) : U256.t = U256.of_z_exn (to_z x)
-  let of_u256_truncating (x: U256.t) = of_z_truncating (U256.to_z x)
+  let of_u256_truncating (x : U256.t) = of_z_truncating (U256.to_z x)
 end
