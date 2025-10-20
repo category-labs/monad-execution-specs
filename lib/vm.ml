@@ -1426,7 +1426,55 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* PC *)
     increase_pc_and_continue
 
-  let callcode _s = todo ()
+  let callcode =
+    (* Stack *)
+    let$ gas = U256.to_unbounded <$> pop in
+    let$ code_address = Address.of_u256_truncating <$> pop in
+    let$ value = pop in
+    let$ input_start = pop in
+    let$ input_size = pop in
+    let$ output_start = pop in
+    let$ output_size = pop in
+
+    (* Gas *)
+    let$ memory_extension_gas =
+      extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
+    in
+    let$ access = access_account code_address in
+    let access_gas =
+      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    in
+    let transfer_gas = GasCosts.(if U256.(value = zero) then zero else call_value) in
+    let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
+    let GasCosts.{caller_spent_gas; callee_available_gas} =
+      GasCosts.call_gas ~value ~gas ~gas_left ~memory_cost:memory_extension_gas
+        ~extra_cost:Uint.(access_gas + transfer_gas)
+    in
+    let$ () = spend GasCosts.(caller_spent_gas + memory_extension_gas) in
+
+    (* Operation *)
+    let$ () = when_ U256.(value <> zero) check_write_permissions in
+    let$ caller = self in
+    let$ caller_balance = get_balance caller in
+
+    let$ () =
+      if U256.(caller_balance < value) then
+        let$ () = push U256.zero in
+        let$ () =
+          update_field (machine_state |-- MachineState.gas) (fun g ->
+              U256.(g + of_unbounded caller_spent_gas) )
+        in
+        machine_state |-- output_buffer := Bytes.empty
+      else
+        generic_call_impl
+          ~call_gas:U256.(of_unbounded callee_available_gas)
+          ~value ~caller ~target:caller ~code_address ~input_start ~input_size ~output_start ~output_size
+          ~delegated:false ~static:false
+    in
+
+    (* PC *)
+    increase_pc_and_continue
+
   let return_ =
     (* Stack *)
     let$ pos = pop in
@@ -1449,8 +1497,45 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     finish_execution
 
   let delegatecall _s = todo ()
+
   let create2 _s = todo ()
-  let staticcall _s = todo ()
+
+  let staticcall =
+    (* Stack *)
+    let$ gas = U256.to_unbounded <$> pop in
+    let$ target = Address.of_u256_truncating <$> pop in
+    let$ input_start = pop in
+    let$ input_size = pop in
+    let$ output_start = pop in
+    let$ output_size = pop in
+
+    (* Gas *)
+    let$ memory_extension_gas =
+      extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
+    in
+    let$ access = access_account target in
+    let access_gas =
+      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    in
+    let$ code_address = (* TODO: handle delegation *) return target in
+    let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
+    let GasCosts.{caller_spent_gas; callee_available_gas} =
+      GasCosts.call_gas ~value:U256.zero ~gas ~gas_left ~memory_cost:memory_extension_gas
+        ~extra_cost:access_gas
+    in
+    let$ () = spend GasCosts.(caller_spent_gas + memory_extension_gas) in
+
+    (* Operation *)
+    let$ caller = self in
+    let$ () =
+      generic_call_impl
+        ~call_gas:U256.(of_unbounded callee_available_gas)
+        ~value:U256.zero ~caller ~target ~code_address ~input_start ~input_size ~output_start ~output_size
+        ~delegated:false ~static:true
+    in
+
+    (* PC *)
+    increase_pc_and_continue
 
   let revert =
     let$ () = fail Stack_underflow in
