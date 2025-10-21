@@ -201,6 +201,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   module Address = Ethereum.Address
 
   let max_stack_depth = 1024
+  let max_code_size = 0x6000
+  let max_init_code_size = 2 * max_code_size
 
   let spend (amount : Uint.t) =
     let$ gas_remaining = !(machine_state |-- gas) in
@@ -292,6 +294,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       {caller_spent_gas; callee_available_gas}
 
     let sclear_refund = ~$4_800
+
+    let create_cost = ~$32_000
+    let create_cost_per_initcode_word = ~$2
   end
 
   module Delegation = struct
@@ -707,8 +712,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
        increase_pc_and_continue )
 
   let extend_memory_to (new_address : U256.t) : Uint.t M.t =
+    let new_size = U256.(new_address + one) in
     let$ current_memory_words = !(machine_state |-- active_memory_words) in
-    let new_memory_words = U256.((new_address + ~$31) / ~$32) in
+    let new_memory_words = U256.bytes_to_whole_words new_size in
     if U256.(current_memory_words >= new_memory_words) then return Uint.zero
     else
       let$ () = machine_state |-- active_memory_words := new_memory_words in
@@ -716,12 +722,12 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   let keccak =
     (* Stack *)
-    let$ start_index = pop in
-    let$ size = pop in
+    let$ input_start = pop in
+    let$ input_size = pop in
 
     (* Gas *)
-    let num_hashed_words = U256.((size + ~$31) / ~$32) in
-    let$ memory_extension_gas = extend_memory_to U256.(start_index + size) in
+    let num_hashed_words = U256.bytes_to_whole_words input_size in
+    let$ memory_extension_gas = extend_memory_to U256.(input_start + input_size) in
     let$ () =
       spend
         GasCosts.(
@@ -731,7 +737,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     in
 
     (* Operation *)
-    let$ bytes = Memory.read_block_at start_index size <$> !(machine_state |-- memory) in
+    let$ bytes = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
     let$ () = push (Crypto.keccak_256 bytes) in
 
     (* PC *)
@@ -824,7 +830,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ size = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded ((size + ~$31) / ~$32)) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
     let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas) in
 
@@ -876,7 +882,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
-    let n_words = U256.(to_unbounded ((size + ~$31) / ~$32)) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
     let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas + access_gas) in
 
@@ -922,7 +928,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ size = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded ((size + ~$31) / ~$32)) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
     let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas) in
 
@@ -1315,7 +1321,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ size = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded ((size + ~$31) / ~$32)) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let copy_cost = GasCosts.(n_words * word_copy_cost) in
     let$ memory_expansion_cost = extend_memory_to U256.(max src_start dst_start + size) in
     let$ () = spend GasCosts.(very_low + copy_cost + memory_expansion_cost) in
@@ -1361,13 +1367,23 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       update_field (machine_state |-- MachineState.gas_refund) (fun g -> Uint.(g + of_int64 gas_refund))
     else return (assert (Int64.(gas_refund = zero)))
 
-  let generic_call_impl ~(call_gas : U256.t) ~(value : U256.t) ~(sender : Address.t) ~(recipient : Address.t)
-      ~(code_address : Address.t) ~(delegated : bool) ~(static : bool) ~(input_start : U256.t)
-      ~(input_size : U256.t) ~(output_start : U256.t) ~(output_size : U256.t) =
+  let generic_call_impl
+      ~(kind : Evmc.CallKind.t)
+      ~(call_gas : U256.t)
+      ~(value : U256.t)
+      ~(sender : Address.t)
+      ~(recipient : Address.t)
+      ~(code_address : Address.t)
+      ~(delegated : bool)
+      ~(static : bool)
+      ~(input_start : U256.t)
+      ~(input_size : U256.t)
+      ~(output_start : U256.t)
+      ~(output_size : U256.t) =
     let$ () = machine_state |-- output_buffer := Bytes.empty in
 
-    let$ depth = ( + ) 1 <$> !(execution_environment |-- depth) in
-    if depth > max_stack_depth then
+    let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
+    if new_depth > max_stack_depth then
       let$ () = update_field (machine_state |-- gas) (fun g -> U256.(g + call_gas)) in
       push U256.zero
     else
@@ -1377,9 +1393,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       let message =
         Evmc.(
           Message.
-            { kind = CallKind.Call
+            { kind
             ; flags
-            ; depth
+            ; depth = new_depth
             ; gas = U256.to_uint64 call_gas
             ; recipient
             ; sender
@@ -1392,16 +1408,88 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       assert (Option.is_none create_address) ;
+
+      let$ () = machine_state |-- output_buffer := output_data in
       if status_code = Evmc.Result.StatusCode.Success then
+        let$ () = push U256.one in
         let truncated_output =
           match U256.to_int_opt output_size with
           | None -> output_data
           | Some i -> Bytes.sub output_data 0 (min i (Bytes.length output_data))
         in
         update_field (machine_state |-- memory) (Memory.write_block_at output_start truncated_output)
-      else return (assert (Bytes.length output_data = 0))
+      else push U256.zero
 
-  let create s = ignore s ; todo ()
+  let generic_create_impl
+      ~(kind : Evmc.CallKind.t)
+      ~(create2_salt : U256.t)
+      ~(endowment : U256.t)
+      ~(input_start : U256.t)
+      ~(input_size : U256.t) =
+    let$ () = when_ U256.(input_size > ~$max_init_code_size) (fail Out_of_gas) in
+
+    let$ () = check_write_permissions in
+
+    let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
+    let$ self_addr = self in
+    let$ self_balance = HostAPI.get_balance self_addr in
+    if self_balance < endowment || new_depth > max_stack_depth then push U256.zero
+    else
+      let$ create_message_gas = U256.minus_1_64th <$> !(machine_state |-- gas) in
+      let$ () = update_field (machine_state |-- gas) (fun g -> U256.(g - create_message_gas)) in
+
+      let$ () = machine_state |-- output_buffer := Bytes.empty in
+      let$ call_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
+
+      let message =
+        Evmc.(
+          Message.
+            { kind
+            ; flags = []
+            ; depth = new_depth
+            ; gas = U256.to_int64 create_message_gas
+            ; recipient = Address.zero
+            ; sender = self_addr
+            ; input_data = Bytes.empty
+            ; value = endowment
+            ; create2_salt
+            ; code_address = Address.zero
+            ; code = call_data } )
+      in
+      let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
+      let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
+      if status_code = Evmc.Result.StatusCode.Success then (
+        assert (Option.is_some create_address) ;
+        let$ () = machine_state |-- output_buffer := Bytes.empty in
+        push (Address.to_u256 (Option.get create_address)) )
+      else
+        let$ () = machine_state |-- output_buffer := output_data in
+        push U256.zero
+
+  let create =
+    (* Stack *)
+    let$ endowment = pop in
+    let$ input_start = pop in
+    let$ input_size = pop in
+
+    (* Gas *)
+    let$ memory_extension_gas = extend_memory_to U256.(input_start + input_size) in
+    let$ () =
+      spend
+        GasCosts.(
+          memory_extension_gas
+          + create_cost
+          + (create_cost_per_initcode_word * U256.(to_unbounded (bytes_to_whole_words input_size))) )
+    in
+
+    (* Operation *)
+    let$ () =
+      generic_create_impl ~create2_salt:U256.zero ~kind:Evmc.CallKind.Create ~endowment ~input_start
+        ~input_size
+    in
+
+    (* PC *)
+    increase_pc_and_continue
 
   let call =
     (* Stack *)
@@ -1445,7 +1533,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
         in
         machine_state |-- output_buffer := Bytes.empty
       else
-        generic_call_impl
+        generic_call_impl ~kind:Evmc.CallKind.Call
           ~call_gas:U256.(of_unbounded callee_available_gas)
           ~value ~sender:self_addr ~recipient:self_addr ~code_address ~input_start ~input_size ~output_start
           ~output_size ~delegated:false ~static:false
@@ -1494,7 +1582,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
         in
         machine_state |-- output_buffer := Bytes.empty
       else
-        generic_call_impl
+        generic_call_impl ~kind:Evmc.CallKind.CallCode
           ~call_gas:U256.(of_unbounded callee_available_gas)
           ~value ~sender:self_addr ~recipient:self_addr ~code_address ~input_start ~input_size ~output_start
           ~output_size ~delegated:false ~static:false
@@ -1514,7 +1602,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       when_
         U256.(size > zero)
         (let$ memory_extension_gas = extend_memory_to U256.(pos + size - one) in
-         spend GasCosts.(zero + memory_extension_gas) )
+         spend memory_extension_gas )
     in
 
     (* Operation *)
@@ -1555,21 +1643,46 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ original_value = !(execution_environment |-- value) in
     let$ self_addr = self in
     let$ () =
-      generic_call_impl
+      generic_call_impl ~kind:Evmc.CallKind.DelegateCall
         ~call_gas:U256.(of_unbounded callee_available_gas)
         ~value:original_value ~sender:original_sender ~recipient:self_addr ~code_address ~input_start
-        ~input_size ~output_start ~output_size ~delegated:true ~static:false
+        ~input_size ~output_start ~output_size ~delegated:false ~static:false
     in
 
     (* PC *)
     increase_pc_and_continue
 
-  let create2 _s = todo ()
+  let create2 =
+    (* Stack *)
+    let$ endowment = pop in
+    let$ input_start = pop in
+    let$ input_size = pop in
+    let$ create2_salt = pop in
+
+    (* Gas *)
+    let$ memory_extension_gas = extend_memory_to U256.(input_start + input_size) in
+    let input_size_in_words = U256.(to_unbounded (bytes_to_whole_words input_size)) in
+    let$ () =
+      spend
+        GasCosts.(
+          memory_extension_gas
+          + create_cost
+          + (keccak256_cost_per_word * input_size_in_words)
+          + (create_cost_per_initcode_word * input_size_in_words) )
+    in
+
+    (* Operation *)
+    let$ () =
+      generic_create_impl ~kind:Evmc.CallKind.Create2 ~endowment ~input_start ~input_size ~create2_salt
+    in
+
+    (* PC *)
+    increase_pc_and_continue
 
   let staticcall =
     (* Stack *)
     let$ gas = U256.to_unbounded <$> pop in
-    let$ target = Address.of_u256_truncating <$> pop in
+    let$ recipient = Address.of_u256_truncating <$> pop in
     let$ input_start = pop in
     let$ input_size = pop in
     let$ output_start = pop in
@@ -1579,11 +1692,11 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = HostAPI.access_account target in
+    let$ access = HostAPI.access_account recipient in
     let access_gas =
       GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
     in
-    let$ code_address = (* TODO: handle delegation *) return target in
+    let$ code_address = (* TODO: handle delegation *) return recipient in
     let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
     let GasCosts.{caller_spent_gas; callee_available_gas} =
       GasCosts.call_gas ~value:U256.zero ~gas ~gas_left ~memory_cost:memory_extension_gas
@@ -1592,32 +1705,29 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () = spend GasCosts.(caller_spent_gas + memory_extension_gas) in
 
     (* Operation *)
-    let$ caller = self in
+    let$ self_addr = self in
     let$ () =
-      generic_call_impl
+      generic_call_impl ~kind:Evmc.CallKind.Call
         ~call_gas:U256.(of_unbounded callee_available_gas)
-        ~value:U256.zero ~caller ~target ~code_address ~input_start ~input_size ~output_start ~output_size
-        ~delegated:false ~static:true
+        ~value:U256.zero ~sender:self_addr ~recipient ~code_address ~input_start ~input_size ~output_start
+        ~output_size ~delegated:false ~static:true
     in
 
     (* PC *)
     increase_pc_and_continue
 
   let revert =
-    let$ () = fail Stack_underflow in
-    let$ () = return (failwith "REVERT") in
     (* Stack *)
     let$ pos = pop in
     let$ size = pop in
 
     (* Gas *)
     let$ () =
-      (* TODO: this is a copy of identical code in `return_`, maybe abstract over it *)
       (* We do not spend gas when copying a zero-size return value *)
       when_
         U256.(size > zero)
         (let$ memory_extension_gas = extend_memory_to U256.(pos + size - one) in
-         spend GasCosts.(zero + memory_extension_gas) )
+         spend memory_extension_gas )
     in
 
     (* Operation *)
