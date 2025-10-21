@@ -259,6 +259,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let cold_account_access_cost = Uint.of_uint64 Traits.cold_costs.Traits.cold_account_cost
     let warm_access_cost = ~$100
 
+    let account_access_cost = function `Warm -> warm_access_cost | `Cold -> cold_account_access_cost
+
     let cold_sload_cost = ~$2_100
 
     let sset_cost = ~$20_000
@@ -300,7 +302,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
   end
 
   module Delegation = struct
-    type t = {code_address : Address.t; delegated_access_gas : Uint.t}
+    type t = {delegated : bool; code_address : Address.t; delegation_access_gas : Uint.t}
 
     let set_code_tx_magic : Bytes.t = "\x05"
     let eoa_delegation_prefix : Bytes.t = "\xef\x01\x00"
@@ -318,13 +320,10 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let access_delegation (addr : Address.t) =
       let$ code = HostAPI.copy_code addr in
       match get_delegated_address code with
-      | None -> return {code_address = addr; delegated_access_gas = Uint.zero}
+      | None -> return {delegated = false; code_address = addr; delegation_access_gas = GasCosts.zero}
       | Some address ->
-          let$ access = HostAPI.access_account address in
-          let delegated_access_gas =
-            GasCosts.(match access with `Warm -> warm_access_cost | `Cold -> cold_account_access_cost)
-          in
-          return {code_address = address; delegated_access_gas}
+          let$ delegation_access_gas = GasCosts.account_access_cost <$> HostAPI.access_account address in
+          return {delegated = true; code_address = address; delegation_access_gas}
   end
 
   let finish_execution : bool M.t = return false
@@ -768,10 +767,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ address = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = HostAPI.access_account address in
-    let$ () =
-      spend GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
-    in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account address in
+    let$ () = spend access_gas in
 
     (* Operation *)
     let$ balance = HostAPI.get_balance address in
@@ -858,10 +855,8 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ address = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = HostAPI.access_account address in
-    let$ () =
-      spend GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
-    in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account address in
+    let$ () = spend access_gas in
 
     (* Operation *)
     let$ size = HostAPI.get_code_size address in
@@ -878,10 +873,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ size = pop in
 
     (* Gas *)
-    let$ access = HostAPI.access_account address in
-    let access_gas =
-      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
-    in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account address in
     let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
     let$ () = spend GasCosts.(very_low + (n_words * word_copy_cost) + memory_extension_gas + access_gas) in
@@ -904,10 +896,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ address = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = HostAPI.access_account address in
-    let access_gas =
-      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
-    in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account address in
     let$ () = spend access_gas in
 
     (* Operation *)
@@ -1505,10 +1494,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = HostAPI.access_account recipient in
-    let access_gas =
-      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
-    in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account recipient in
     let$ code_address = (* TODO: handle delegation *) return recipient in
     let$ target_is_alive = HostAPI.account_exists recipient in
     let create_gas = GasCosts.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
@@ -1556,10 +1542,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = HostAPI.access_account code_address in
-    let access_gas =
-      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
-    in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account code_address in
     let transfer_gas = GasCosts.(if U256.(value = zero) then zero else call_value) in
     let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
     let GasCosts.{caller_spent_gas; callee_available_gas} =
@@ -1625,12 +1608,13 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = HostAPI.access_account code_address in
-    let access_gas =
-      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account code_address in
+
+    let$ Delegation.{delegated; code_address; delegation_access_gas} =
+      Delegation.access_delegation code_address
     in
-    let$ Delegation.{code_address; delegated_access_gas} = Delegation.access_delegation code_address in
-    let access_gas = GasCosts.(access_gas + delegated_access_gas) in
+    let access_gas = GasCosts.(access_gas + delegation_access_gas) in
+
     let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
     let GasCosts.{caller_spent_gas; callee_available_gas} =
       GasCosts.call_gas ~value:U256.zero ~gas ~gas_left ~memory_cost:memory_extension_gas
@@ -1646,7 +1630,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       generic_call_impl ~kind:Evmc.CallKind.DelegateCall
         ~call_gas:U256.(of_unbounded callee_available_gas)
         ~value:original_value ~sender:original_sender ~recipient:self_addr ~code_address ~input_start
-        ~input_size ~output_start ~output_size ~delegated:false ~static:false
+        ~input_size ~output_start ~output_size ~delegated ~static:false
     in
 
     (* PC *)
@@ -1692,10 +1676,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ memory_extension_gas =
       extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
     in
-    let$ access = HostAPI.access_account recipient in
-    let access_gas =
-      GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> warm_access_cost)
-    in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account recipient in
     let$ code_address = (* TODO: handle delegation *) return recipient in
     let$ gas_left = U256.to_unbounded <$> !(machine_state |-- MachineState.gas) in
     let GasCosts.{caller_spent_gas; callee_available_gas} =
@@ -1742,8 +1723,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ beneficiary = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access = HostAPI.access_account beneficiary in
-    let access_gas = GasCosts.(match access with `Cold -> cold_account_access_cost | `Warm -> zero) in
+    let$ access_gas = GasCosts.account_access_cost <$> HostAPI.access_account beneficiary in
     let$ self_addr = self in
     let$ self_balance = HostAPI.get_balance self_addr in
     let$ beneficiary_exists = HostAPI.account_exists beneficiary in
