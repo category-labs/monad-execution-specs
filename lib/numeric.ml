@@ -207,6 +207,9 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
             loop acc mul y
         in
         loop ~$1 x y
+
+  (* YP 331 *)
+  let minus_1_64th (x : t) : t = x - (x / ~$64)
 end
 
 module Size = struct
@@ -239,8 +242,6 @@ module UintBase = Make (Size.Unbounded) (Signedness.Unsigned)
 module Uint = struct
   include UintBase
 
-  (* YP 331 *)
-  let minus_1_64th (x : t) : t = x - (x / ~$64)
   let as_signed (x : t) : IntegerBase.t = IntegerBase.of_z_exn (to_z x)
 end
 module Integer = struct
@@ -297,7 +298,12 @@ module TwosComplement (B : IS_BOUNDED) = struct
 end
 
 module Bits256 = TwosComplement (Size.Bits256)
-module U256 = Bits256.Unsigned
+module U256 = struct
+  include Bits256.Unsigned
+  let bytes_to_whole_words (x : t) =
+    let (q, r) = Z.div_rem (to_z x) (Z.of_int 32) in
+    of_z_exn q + if Z.(equal r zero) then zero else one
+end
 module I256 = Bits256.Signed
 
 module Bits160 = TwosComplement (Size.Bits160)

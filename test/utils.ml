@@ -11,7 +11,7 @@ module DummyHost = Evmc.Dummy (Revision)
 module rec HostImpl : DummyHost.SIG = DummyHost.Make (VmRec)
 
 and VmRec : DummyHost.VM_SIG = Vm.Make (Revision) (HostImpl)
-module Vm = Vm.Make(Revision)(HostImpl)
+module Vm = Vm.Make (Revision) (HostImpl)
 
 (* U256.t generator *)
 module QCheck2 = struct
@@ -79,8 +79,10 @@ let status_code =
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
-let test_message ?(prepare_env : unit DummyHost.M.t = DummyHost.M.return ())
-    ?(prepare_vm : unit Vm.M.t = Vm.M.return ()) ?(check_vm_state : unit Vm.M.t option)
+let test_message
+    ?(prepare_env : unit DummyHost.M.t = DummyHost.M.return ())
+    ?(prepare_vm : unit Vm.M.t = Vm.M.return ())
+    ?(check_vm_state : unit Vm.M.t option)
     ?(check_env_state : unit DummyHost.M.t = DummyHost.M.return ())
     ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
     (msg : Evmc.Message.t) =
@@ -111,7 +113,7 @@ let test_message ?(prepare_env : unit DummyHost.M.t = DummyHost.M.return ())
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
         | Error err ->
-            if err = Success then assert false;
+            if err = Success then assert false ;
             Evmc.Result.
               { status_code = err
               ; gas_left = 0L
