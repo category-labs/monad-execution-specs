@@ -6,3 +6,5 @@ sequence-blank-line = preserve-one
 margin = 110
 field-space = loose
 break-cases = fit
+break-fun-decl = smart
+break-fun-sig = smart
