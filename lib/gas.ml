@@ -45,7 +45,7 @@ let block_hash_cost = ~$20
 
 let sset_cost = ~$20_000
 let sclear_refund = ~$4_800
-let sreset_cost = ~$2_900 (* INCONSISTENT WITH GAS_STORAGE_UPDATE *)
+let sreset_cost = ~$2_900 (* Equal to GAS_STORAGE_UPDATE - GAS_COLD_SLOAD in the executable EVM spec *)
 
 (* As of Monad 5, the only difference with Ethereum *)
 let create_cost = ~$160_000

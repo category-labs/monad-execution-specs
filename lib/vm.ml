@@ -1070,10 +1070,9 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
       match () with
-      | () when U256.(value = value' || value0 <> value) -> Gas.warm_access_cost
-      | () when U256.(value <> value' && value0 = value && value0 = zero) -> Gas.sset_cost
-      | () when not U256.(value <> value' && value0 = value && value0 <> zero) -> assert false
-      | () -> Gas.sreset_cost
+      | () when U256.(value0 = value && value' <> value && value0 = zero) -> Gas.sset_cost
+      | () when U256.(value0 = value && value' <> value && value0 <> zero) -> Gas.sreset_cost
+      | () -> Gas.warm_access_cost
     in
     let$ () = spend Gas.(access_gas + update_gas) in
 
