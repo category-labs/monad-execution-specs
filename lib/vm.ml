@@ -389,7 +389,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     (* Gas *)
     let exponent_bytes = Uint.of_int (U256.significant_bytes exponent) in
-    let$ () = spend Gas.(base_exp_cost + (exp_cost_per_byte * exponent_bytes)) in
+    let$ () = spend Gas.(exp_base_cost + (exp_cost_per_byte * exponent_bytes)) in
 
     (* Operation *)
     let$ () = push U256.(exp base exponent) in
@@ -634,7 +634,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () =
       spend
         Gas.(
-          base_keccak256_cost
+          keccak256_base_cost
           + (keccak256_cost_per_word * U256.to_unbounded num_hashed_words)
           + memory_extension_gas )
     in
@@ -717,7 +717,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* Gas *)
     let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
-    let$ () = spend Gas.(very_low + (n_words * word_copy_cost) + memory_extension_gas) in
+    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
     (* Operation *)
     let$ data = !data_location in
@@ -764,7 +764,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account address in
     let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
-    let$ () = spend Gas.(very_low + (n_words * word_copy_cost) + memory_extension_gas + access_gas) in
+    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
 
     (* Operation *)
     let$ data = HostAPI.copy_code address in
@@ -807,7 +807,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* Gas *)
     let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
-    let$ () = spend Gas.(very_low + (n_words * word_copy_cost) + memory_extension_gas) in
+    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
     (* Operation *)
     let$ data = !(machine_state |-- output_buffer) in
@@ -1203,7 +1203,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     (* Gas *)
     let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
     let$ memory_expansion_gas = extend_memory_to U256.(max src_start dst_start + size) in
-    let$ () = spend Gas.(very_low + (n_words * word_copy_cost) + memory_expansion_gas) in
+    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_expansion_gas) in
 
     (* Operation *)
     let$ block = Memory.read_block_at src_start size <$> !(machine_state |-- memory) in
@@ -1429,10 +1429,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     let$ () =
       if U256.(self_balance < value) then
         let$ () = push U256.zero in
-        let$ () =
-          update_field (machine_state |-- MachineState.gas) (fun g ->
-              Uint.(g + caller_spent_gas) )
-        in
+        let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + caller_spent_gas)) in
         machine_state |-- output_buffer := Bytes.empty
       else
         generic_call_impl ~kind

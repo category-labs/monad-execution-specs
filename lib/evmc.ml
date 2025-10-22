@@ -60,10 +60,6 @@ module Result = struct
     ; create_address : Address.t option }
 end
 
-module Flags = struct
-  type t = Static | Delegated
-end
-
 module CallKind = struct
   (* EOFCreate is unsupported as of Monad V4 *)
   type t = Call | DelegateCall | CallCode | Create | Create2 | EOFCreate
@@ -72,7 +68,8 @@ end
 module Message = struct
   type t =
     { kind : CallKind.t
-    ; flags : Flags.t list
+    ; static : bool
+    ; delegated:  bool (* Represents EIP-7702 delegated calls, not the DELEGATECALL opcode *)
     ; depth : int
     ; gas : Uint64.t
     ; recipient : Address.t
