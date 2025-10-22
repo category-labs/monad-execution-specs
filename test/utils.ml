@@ -108,18 +108,31 @@ let test_message
         | Ok () ->
             Evmc.Result.
               { status_code = Success
-              ; gas_left = U256.to_uint64 ctx.machine_state.gas
+              ; gas_left = Uint.to_uint64 ctx.machine_state.gas
               ; gas_refund = 0L
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
-        | Error err ->
-            if err = Success then assert false ;
-            Evmc.Result.
-              { status_code = err
-              ; gas_left = 0L
-              ; gas_refund = 0L
-              ; output_data = ctx.machine_state.output_buffer
-              ; create_address = None } ) )
+        | Error err -> (
+          match err with
+          | Success -> assert false
+          | Revert ->
+              (*
+               * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+               * buffer is read, see YP (152)
+               *)
+              Evmc.Result.
+                { status_code = err
+                ; gas_left = Uint.to_uint64 ctx.machine_state.gas
+                ; gas_refund = 0L
+                ; output_data = ctx.machine_state.output_buffer
+                ; create_address = None }
+          | _ ->
+              Evmc.Result.
+                { status_code = err
+                ; gas_left = 0L
+                ; gas_refund = 0L
+                ; output_data = Bytes.empty
+                ; create_address = None } ) ) )
   in
   let result, state = action DummyHost.State.empty in
   (*
@@ -134,7 +147,8 @@ let bytecode_to_call_message code =
   Evmc.(
     Message.
       { kind = CallKind.Call
-      ; flags = []
+      ; delegated = false
+      ; static = false
       ; depth = 0
       ; gas = 100_000_000L
       ; recipient = Address.zero
