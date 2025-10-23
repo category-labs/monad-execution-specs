@@ -47,9 +47,10 @@ let sset_cost = ~$20_000
 let sclear_refund = ~$4_800
 let sreset_cost = ~$2_900 (* Equal to GAS_STORAGE_UPDATE - GAS_COLD_SLOAD in the executable EVM spec *)
 
-(* As of Monad 5, the only difference with Ethereum *)
+(* As of Monad 5, the only difference with Ethereum is create_cost *)
 let create_cost = ~$160_000
 let create_cost_per_initcode_word = ~$2
+let code_deposit_per_byte = ~$200
 
 (* YP C_gascap *)
 let c_gascap ~gas ~gas_left ~memory_cost ~extra_cost =

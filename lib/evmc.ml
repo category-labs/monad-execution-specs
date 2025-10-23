@@ -69,7 +69,7 @@ module Message = struct
   type t =
     { kind : CallKind.t
     ; static : bool
-    ; delegated:  bool (* Represents EIP-7702 delegated calls, not the DELEGATECALL opcode *)
+    ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGATECALL opcode *)
     ; depth : int
     ; gas : Uint64.t
     ; recipient : Address.t
@@ -172,11 +172,11 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
   module Traits = Chain.Monad.Traits (Rev)
 
   module Account = struct
-    type t = {balance : U256.t; storage : U256.t U256.Map.t; code : Bytes.t}
+    type t = {balance : U256.t; storage : U256.t U256.Map.t; code : Bytes.t; nonce : Uint.t}
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
-    let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty}
+    let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty; nonce = Uint.zero}
   end
   open Account
 
@@ -191,11 +191,18 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
     module Set = Set.Make (Impl)
   end
 
+  module Log = struct
+    type t = {address : Address.t; topics : U256.t list; data : Bytes.t}
+    [@@deriving lens {submodule = true; prefix = true}]
+
+    include TLens
+  end
+
   module AccruedSubstate = struct
-    (* TODO: logs *)
     (** YP 6.1 *)
     type t =
       { self_destruct : Address.Set.t  (** A_s *)
+      ; logs : Log.t list (* A_l *)
       ; touched : Address.Set.t  (** A_t *)
       ; refund : U256.t  (** A_r *)
       ; accessed_addresses : Address.Set.t  (** A_a *)
@@ -206,6 +213,7 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
 
     let empty =
       { self_destruct = Address.Set.empty
+      ; logs = []
       ; touched = Address.Set.empty
       ; refund = U256.zero
       ; accessed_addresses = Address.Set.empty
@@ -241,12 +249,34 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
   end
   module type SIG = Host.SIG with type 'a t = 'a M.t
 
+  let move_ether sender recipient amount =
+    let$ () =
+      update_field
+        (account sender |-- balance)
+        (fun eth ->
+          (* It is the VM's responsibility to avoid triggering this assertion *)
+          assert (U256.(eth >= amount)) ;
+          U256.(eth - amount) )
+    in
+    update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount))
+
+  let should_transfer (msg : Message.t) =
+    U256.(msg.value > zero)
+    && ( match msg.kind with
+       | Call | CallCode | Create | Create2 -> true
+       | DelegateCall -> false
+       | EOFCreate ->
+           (* Osaka is unsupported *)
+           assert false )
+    (* According to the Ethereum spec, static calls can transfer value, but they always transfer zero *)
+    && not msg.static
+
   (*
    * EVMC host interface
    * Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
    * VM module are mutually recursive
    *)
-  module Make (VmEntryPoint : VM_SIG) : SIG = struct
+  module Make (VmEntryPoint : VM_SIG) = struct
     include M
     let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
 
@@ -259,26 +289,80 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
     let get_code_size addr =
       let$ code = !(account addr |-- code) in
       return (U256.of_int (Bytes.length code))
-    let get_code_hash _addr = todo ()
+
+    let get_code_hash addr =
+      let$ code = !(account addr |-- code) in
+      return (Crypto.keccak_256 code)
+
     let copy_code addr = !(account addr |-- code)
 
     let selfdestruct ~address ~beneficiary =
       Stdlib.ignore (address, beneficiary) ;
       todo ()
-    let call msg =
+
+    let process_transaction (_msg : Message.t) = todo ()
+
+    let process_call (msg : Message.t) =
       let$ before_transaction = get in
+      let$ () = when_ (should_transfer msg) (move_ether msg.sender msg.recipient msg.value) in
+      (* TODO: check whether it's a precompile *)
       let$ result = VmEntryPoint.call msg in
-      let$ () =
-        match result.status_code with
-        | Success -> todo () (* refund gas, changes are not reverted *)
-        | Revert ->
-            let$ () = put before_transaction in
-            todo () (* refund gas *)
-        | _ ->
-            (* Restore pre-transaction state, no refund *)
-            put before_transaction
-      in
+      let$ () = when_ (result.status_code <> Result.StatusCode.Success) (put before_transaction) in
       return result
+
+    let process_create (msg : Message.t) =
+      let$ before_transaction = get in
+
+      (* TODO: correct this once RLP is done *)
+      let$ create_address =
+        match msg.kind with
+        | Create ->
+            let$ nonce = !(account msg.sender |-- nonce) in
+            let bytes = Address.to_bytes_be msg.sender ^ Uint.to_bytes_be nonce in
+            return (Address.of_u256_truncating (Crypto.keccak_256 bytes))
+        | Create2 ->
+            let bytes =
+              Bytes.make 1 '\xff'
+              ^ Address.to_bytes_be msg.sender
+              ^ U256.to_bytes_be msg.create2_salt
+              ^ (U256.to_bytes_be (Crypto.keccak_256 msg.code))
+            in
+            return (Address.of_u256_truncating (Crypto.keccak_256 bytes))
+        | _ -> assert false
+      in
+      (* TODO: maybe destroy pre-existing storage, as in Ethereum spec -- do we need to? *)
+      let$ () = update_field (account create_address |-- nonce) (fun n -> Uint.(n + one)) in
+
+      let$ result : Result.t = process_call msg in
+      match result.status_code with
+      | Success ->
+          let contract_code = result.output_data in
+          let contract_length = Bytes.length contract_code in
+          let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
+          if
+            (contract_length = 0 && contract_code.[0] = '\xef')
+            || Uint.(contract_code_gas > of_int64 result.gas_left)
+          then
+            let$ () = put before_transaction in
+            return
+              { result with
+                gas_left = Int64.zero
+              ; output_data = Bytes.empty
+              ; status_code =
+                  Result.StatusCode.(
+                    if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
+          else
+            let$ () = account create_address |-- code := contract_code in
+            return {result with create_address = Some create_address}
+      | _ ->
+          let$ () = put before_transaction in
+          return result
+
+    let call (msg : Message.t) =
+      match msg.kind with
+      | Call | DelegateCall | CallCode -> process_call msg
+      | Create | Create2 -> process_create msg
+      | EOFCreate -> assert false
 
     let get_tx_context =
       return
@@ -296,11 +380,16 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
           ; blob_hashes = []
           ; initcodes = [] }
 
-    let get_block_hash _i = todo ()
+    let get_block_hash i =
+      (*
+       * This host is not backed by an actual block database, so we return the hash of i which is enough for
+       * testing
+       *)
+      return (Crypto.keccak_256 (U256.to_bytes_be i))
 
-    let emit_log _addr ~data ~topics =
-      Stdlib.ignore (data, topics) ;
-      todo ()
+    let emit_log address ~(data : Bytes.t) ~(topics : U256.t list) =
+      let log : Log.t = {address; topics; data} in
+      update_field (substate |-- logs) (fun logs -> log :: logs)
 
     let access_account addr : [`Warm | `Cold] t =
       let$ accessed = !(substate |-- accessed_addresses) in
