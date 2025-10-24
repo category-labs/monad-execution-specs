@@ -338,10 +338,11 @@ struct
     let copy_code addr = !(account addr |-- code)
 
     let selfdestruct ~address ~beneficiary =
-      Stdlib.ignore (address, beneficiary) ;
-      todo ()
+      let$ account_balance = !(account address |-- balance) in
+      let$ () = move_ether address beneficiary account_balance in
 
-    let process_transaction (_msg : Message.t) = todo ()
+      let$ created_in_current_tx = Address.Set.mem address <$> !accounts_created_in_current_transaction in
+      when_ created_in_current_tx (account address |-- balance := U256.zero)
 
     let process_call (msg : Message.t) =
       let$ before_transaction = get in
