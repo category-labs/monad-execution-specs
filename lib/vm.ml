@@ -6,13 +6,13 @@ module Bytecode = struct
   type instr
 end
 
-module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
-  module Host = struct
-    include Host
-    include Monad.Make (Host)
-  end
-  module Traits = Chain.Monad.Traits (Rev)
-
+module Make
+    (Params : sig
+      val trace : bool
+      val chain_id : U256.t
+    end)
+    (Host : Evmc.Host.SIG) =
+struct
   module Memory : sig
     type t
     val empty : t
@@ -175,7 +175,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       loop 0 U256.Set.empty
 
     let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
-      assert (U256.(ctx.chain_id = ~$Traits.chain_id)) ;
+      assert (U256.(ctx.chain_id = Params.chain_id)) ;
       { execution_environment = ExecutionEnvironment.make ctx msg
       ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
       ; jump_destinations = valid_jump_destinations msg.code
@@ -193,6 +193,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
     include ErrStHost
     include St.Lift (ErrStHost) (StHost)
+
     module HostAPI = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
   end
   open M
@@ -240,9 +241,6 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   (* General undefined opcode *)
   let undefined : opcode_impl = fail Undefined_instruction
-
-  (* Enable an instruction only from a certain EVM revision *)
-  let since rev impl = if Traits.evm_rev >= rev then impl else undefined
 
   (* Designated invalid opcode 0xfe *)
   let invalid : opcode_impl = fail Invalid_instruction
@@ -862,7 +860,7 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
    * from a specific field in the execution environment. The executable specs, on the other hand, does get
    * it from an environment field
    *)
-  let chainid = fetch_environment_variable_opcode_impl (fun _ -> U256.of_int Traits.chain_id)
+  let chainid = fetch_environment_variable_opcode_impl (fun _ -> Params.chain_id)
 
   let selfbalance =
     (* Stack *)
@@ -881,38 +879,36 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
 
   (* EIP-4844 *)
   let blobhash =
-    since Chain.Ethereum.Revision.Cancun
-      ((* Stack *)
-       let$ index = pop in
+    (* Stack *)
+    let$ index = pop in
 
-       (* Gas *)
-       let$ () = spend Gas.very_low in
+    (* Gas *)
+    let$ () = spend Gas.very_low in
 
-       (* Operation *)
-       let$ hashes = !(execution_environment |-- blob_versioned_hashes) in
-       let hash =
-         match U256.to_int_opt index with
-         | None -> U256.zero
-         | Some i -> Option.value ~default:U256.zero (List.nth_opt hashes i)
-       in
-       let$ () = push hash in
+    (* Operation *)
+    let$ hashes = !(execution_environment |-- blob_versioned_hashes) in
+    let hash =
+      match U256.to_int_opt index with
+      | None -> U256.zero
+      | Some i -> Option.value ~default:U256.zero (List.nth_opt hashes i)
+    in
+    let$ () = push hash in
 
-       (* PC *)
-       increase_pc_and_continue )
+    (* PC *)
+    increase_pc_and_continue
 
   (* EIP-7516 *)
   let blobbasefee =
-    since Chain.Ethereum.Revision.Cancun
-      ((* Stack *)
-       (* Gas *)
-       let$ () = spend Gas.base in
+    (* Stack *)
+    (* Gas *)
+    let$ () = spend Gas.base in
 
-       (* Operation *)
-       let$ fee = !(execution_environment |-- blob_base_fee) in
-       let$ () = push fee in
+    (* Operation *)
+    let$ fee = !(execution_environment |-- blob_base_fee) in
+    let$ () = push fee in
 
-       (* PC *)
-       increase_pc_and_continue )
+    (* PC *)
+    increase_pc_and_continue
 
   let pop_ =
     (* Stack *)
@@ -1732,33 +1728,39 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
     in
     impl
 
-  let trace_stack stack =
-    Format.printf "<top>\n" ;
-    List.iter (fun elt -> Format.printf "%s\n" (U256.to_string elt)) stack ;
-    Format.printf "<bottom>\n"
+  let trace_stack =
+    if Params.trace then ( fun stack ->
+      Format.printf "<top>\n" ;
+      List.iter (fun elt -> Format.printf "%s\n" (U256.to_string elt)) stack ;
+      Format.printf "<bottom>\n" )
+    else fun _ -> ()
 
-  let trace_memory ms =
-    (* Write one word at a time *)
-    let rec loop pos =
-      if U256.(pos < ms.active_memory_words) then (
-        Format.printf "%s: %s\n" (U256.to_short_hex_string pos)
-          (Bytes.to_hex_string (Memory.read_block_at pos U256.(~$32) ms.memory)) ;
-        loop U256.(pos + ~$32) )
-    in
-    loop U256.zero
+  let trace_memory =
+    if Params.trace then fun ms ->
+      (* Write one word at a time *)
+      let rec loop pos =
+        if U256.(pos < ms.active_memory_words) then (
+          Format.printf "%s: %s\n" (U256.to_short_hex_string pos)
+            (Bytes.to_hex_string (Memory.read_block_at pos U256.(~$32) ms.memory)) ;
+          loop U256.(pos + ~$32) )
+      in
+      loop U256.zero
+    else fun _ -> ()
 
   let trace_state =
-    let$ ms = !machine_state in
-    Format.printf "PC: %s\n" (U256.to_string ms.pc) ;
-    Format.printf "Gas: %s\n" (Uint.to_string ms.gas) ;
-    Format.printf "Stack: \n" ;
-    trace_stack ms.stack ;
-    Format.printf "Memory: \n" ;
-    trace_memory ms ;
-    return ()
+    if Params.trace then (
+      let$ ms = !machine_state in
+      Format.printf "PC: %s\n" (U256.to_string ms.pc) ;
+      Format.printf "Gas: %s\n" (Uint.to_string ms.gas) ;
+      Format.printf "Stack: \n" ;
+      trace_stack ms.stack ;
+      Format.printf "Memory: \n" ;
+      trace_memory ms ;
+      return () )
+    else return ()
 
-  let rec run ?(trace = false) (code : Bytes.t) : unit M.t =
-    let$ () = when_ trace trace_state in
+  let rec run (code : Bytes.t) : unit M.t =
+    let$ () = trace_state in
     let$ pc = !(machine_state |-- pc) in
     let opcode =
       (* YP (157) *)
@@ -1766,45 +1768,46 @@ module Make (Rev : Chain.Monad.Revision.SIG) (Host : Evmc.Host.SIG) = struct
       | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
       | _ -> Opcode.Stop
     in
-    ( if trace then
+    ( if Params.trace then
         let info = Opcode.info opcode in
         Format.printf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
     let$ continue = execute_opcode opcode in
-    if continue then run ~trace code else return ()
+    if continue then run code else return ()
 
-  let call ?(trace = false) (msg : Evmc.Message.t) : Evmc.Result.t Host.t =
-    Host.(
-      let$ tx_context = get_tx_context in
-      let ctx = Context.make tx_context msg in
-      let$ res, ctx = run ~trace msg.code ctx in
-      return
-        ( match res with
-        | Ok () ->
+  let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
+    let open Host in
+    let open Monad.Make (Host) in
+    let$ tx_context = get_tx_context in
+    let ctx = Context.make tx_context msg in
+    let$ res, ctx = run code ctx in
+    return
+      ( match res with
+      | Ok () ->
+          Evmc.Result.
+            { status_code = Success
+            ; gas_left = Uint.to_uint64 ctx.machine_state.gas
+            ; gas_refund = 0L
+            ; output_data = ctx.machine_state.output_buffer
+            ; create_address = None }
+      | Error err -> (
+        match err with
+        | Success -> assert false
+        | Revert ->
+            (*
+             * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+             * buffer is read, see YP (152)
+             *)
             Evmc.Result.
-              { status_code = Success
+              { status_code = err
               ; gas_left = Uint.to_uint64 ctx.machine_state.gas
               ; gas_refund = 0L
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
-        | Error err -> (
-          match err with
-          | Success -> assert false
-          | Revert ->
-              (*
-               * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
-               * buffer is read, see YP (152)
-               *)
-              Evmc.Result.
-                { status_code = err
-                ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-                ; gas_refund = 0L
-                ; output_data = ctx.machine_state.output_buffer
-                ; create_address = None }
-          | _ ->
-              Evmc.Result.
-                { status_code = err
-                ; gas_left = 0L
-                ; gas_refund = 0L
-                ; output_data = Bytes.empty
-                ; create_address = None } ) ) )
+        | _ ->
+            Evmc.Result.
+              { status_code = err
+              ; gas_left = 0L
+              ; gas_refund = 0L
+              ; output_data = Bytes.empty
+              ; create_address = None } ) )
 end
