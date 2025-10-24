@@ -1,3 +1,4 @@
+open Monad_lib
 open Monad_lib.Utils
 open Monad_lib.Opcode
 open Monad_lib.Numeric
@@ -32,22 +33,74 @@ let test_cases_keccak test_cases =
           `Quick
           (fun () -> test_keccak input output) ) )
 
+let test_cases_pop =
+  let bc = Program.(to_bytecode [Pop]) in
+  ( "Pop"
+  , [ test_case "Pop 1 -> 0" `Quick (fun () ->
+          test_bytecode_pure bc ~input_stack:U256.[~$0xff] ~output_stack:[] )
+    ; test_case "Pop 2 -> 1" `Quick (fun () ->
+          test_bytecode_pure bc ~input_stack:U256.[~$0xff; ~$0xabcd] ~output_stack:U256.[~$0xabcd] )
+    ; test_case "Pop underflow" `Quick (fun () ->
+          ignore
+            (test_message (bytecode_to_call_message bc)
+               ~check_result:(expect_result_status Evmc.Result.StatusCode.Stack_underflow) ) ) ] )
+
+let test_cases_push =
+  let template = U256.of_string "0x0102030405060708090a0b0c0d0e0f1112131415161718191a1b1c1d1e1f2122" in
+  let test_cases =
+    Seq.ints 0
+    |> Seq.take 33
+    |> Seq.map (fun bytes ->
+           let value = U256.shift_right template ((32 - bytes) * 8) in
+           assert (U256.significant_bytes value = bytes) ;
+           let bc = Program.push value in
+           test_case (Format.sprintf "Push %d" bytes) `Quick (fun () ->
+               check' int
+                 ~msg:(Format.sprintf "Push %d takes %d" bytes (bytes + 1))
+                 ~expected:(bytes + 1) ~actual:(Bytes.length bc) ;
+               test_bytecode_pure bc ~input_stack:[] ~output_stack:[value] ) )
+    |> List.of_seq
+  in
+  ("Push", test_cases)
+
+let test_cases_dup =
+  let input_stack = Seq.(take 16 (ints 1) |> map U256.of_int |> List.of_seq) in
+  let test_cases =
+    Seq.ints 1
+    |> Seq.take 16
+    |> Seq.map (fun depth ->
+           let output_stack = U256.of_int depth :: input_stack in
+           test_case (Format.sprintf "Dup %d" depth) `Quick (fun () ->
+               test_bytecode_pure (Program.to_bytecode [Dup depth]) ~input_stack ~output_stack ) )
+    |> List.of_seq
+  in
+  ("Dup", test_cases)
+
+let test_cases_swap =
+  let input_stack = Seq.(take 17 (ints 1) |> map U256.of_int |> List.of_seq) in
+  let test_cases =
+    Seq.ints 1
+    |> Seq.take 16
+    |> Seq.map (fun depth ->
+           let swap_x = List.nth input_stack 0 in
+           let swap_y = List.nth input_stack depth in
+           let output_stack =
+             List.mapi (fun d elt -> if d = 0 then swap_y else if d = depth then swap_x else elt) input_stack
+           in
+           test_case (Format.sprintf "Swap %d" depth) `Quick (fun () ->
+               test_bytecode_pure (Program.to_bytecode [Swap depth]) ~input_stack ~output_stack ) )
+    |> List.of_seq
+  in
+  ("Swap", test_cases)
+
 let () =
   run "Individual opcode tests"
     [ test_cases_opcode_2 Add
-        U256.
-          [ ((~$1, ~$2), ~$3)
-          ; ((~$0, max_t), max_t)
-          ; ((~$1, max_t), ~$0)
-          ; ((~$0xfffff1, max_t), ~$0xfffff0) ]
+        U256.[((~$1, ~$2), ~$3); ((~$0, max_t), max_t); ((~$1, max_t), ~$0); ((~$0xfffff1, max_t), ~$0xfffff0)]
     ; test_cases_opcode_2 Mul [U256.((~$2, ~$3), ~$6)]
     ; test_cases_opcode_2 Sub
         U256.
-          [ ((~$2, ~$1), ~$1)
-          ; ((~$1, ~$2), max_t)
-          ; ((~$0, max_t), ~$1)
-          ; ((~$1, max_t), ~$2)
-          ; ((~$1, ~$1), ~$0) ]
+          [((~$2, ~$1), ~$1); ((~$1, ~$2), max_t); ((~$0, max_t), ~$1); ((~$1, max_t), ~$2); ((~$1, ~$1), ~$0)]
     ; test_cases_opcode_2 Udiv
         U256.
           [ ((~$16, ~$8), ~$2)
@@ -262,4 +315,7 @@ let () =
           ; ( Bytes.of_hex_string "0xdeadbeef"
             , ~@"0xd4fd4e189132273036449fc9e11198c739161b4c0116a9a2dccdfa1c492006f1" )
           ; (Bytes.make 128 '\xff', ~@"0x9ba516f6d50a9e61e3c197ae0f258483b03d7eb87d3c40becd88fa4a9ebfad0f") ]
-    ]
+    ; test_cases_pop
+    ; test_cases_push
+    ; test_cases_dup
+    ; test_cases_swap ]
