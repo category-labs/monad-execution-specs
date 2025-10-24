@@ -3,6 +3,10 @@
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
 
 (test
+ (name control)
+ (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
  (name memory)
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
 
