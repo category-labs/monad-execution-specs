@@ -37,23 +37,28 @@ let read_source place =
 let bytecode = read_source bytecode_source
 let calldata = read_source calldata_source
 
-module Revision = struct
-  let rev = Chain.Monad.Revision.Four
+module Params = struct
+  let chain_id = U256.(~$10_143) (* Testnet *)
+  let trace = !trace
 end
 
-module DummyHost = Evmc.Dummy (Revision)
+module HostImpl = Evmc.DummyHost (Params)
 
-(* Mutual recursion between host and vm *)
-module rec HostImpl : DummyHost.SIG = DummyHost.Make (VmImpl)
+module Evm = struct
+  module Evm0 = Evmc.Instantiate (HostImpl.M) (HostImpl.Make) (Vm.Make (Params))
 
-and VmImpl : DummyHost.VM_SIG = Vm.Make (Revision) (HostImpl)
+  (* Unfold one level of recursion to get access to the full signature of Vm and Host *)
+  module Vm = Vm.Make (Params) (Evm0.Host)
+  module Host = HostImpl.Make (Vm)
+end
 
 
 let msg =
   Evmc.(
     Message.
       { kind = CallKind.Call
-      ; flags = []
+      ; static = false
+      ; delegated = false
       ; depth = 0
       ; gas = !gas_limit
       ; recipient = Address.zero
@@ -64,7 +69,7 @@ let msg =
       ; code_address = Address.zero
       ; code = bytecode } )
 
-let result, _state = VmImpl.call ~trace:!trace msg DummyHost.State.empty
+let result, _state = Evm.Vm.execute msg msg.code HostImpl.State.empty
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"

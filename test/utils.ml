@@ -7,11 +7,20 @@ module Revision = struct
   let rev = Chain.Monad.Revision.Four
 end
 
-module DummyHost = Evmc.Dummy (Revision)
-module rec HostImpl : DummyHost.SIG = DummyHost.Make (VmRec)
+module Params = struct
+  let chain_id = U256.(~$10_143) (* Testnet *)
+  let trace = false
+end
 
-and VmRec : DummyHost.VM_SIG = Vm.Make (Revision) (HostImpl)
-module Vm = Vm.Make (Revision) (HostImpl)
+module HostImpl = Evmc.DummyHost (Params)
+
+module Evm = struct
+  module Evm0 = Evmc.Instantiate (HostImpl.M) (HostImpl.Make) (Vm.Make (Params))
+
+  (* Unfold one level of recursion to get access to the full signature of Vm and Host *)
+  module Vm = Vm.Make (Params) (Evm0.Host)
+  module Host = HostImpl.Make (Vm)
+end
 
 (* U256.t generator *)
 module QCheck2 = struct
@@ -80,10 +89,10 @@ let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Resu
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
 let test_message
-    ?(prepare_env : unit DummyHost.M.t = DummyHost.M.return ())
-    ?(prepare_vm : unit Vm.M.t = Vm.M.return ())
-    ?(check_vm_state : unit Vm.M.t option)
-    ?(check_env_state : unit DummyHost.M.t = DummyHost.M.return ())
+    ?(prepare_env : unit Evm.Host.t = Evm.Host.return ())
+    ?(prepare_vm : unit Evm.Vm.M.t = Evm.Vm.M.return ())
+    ?(check_vm_state : unit Evm.Vm.M.t option)
+    ?(check_env_state : unit Evm.Host.t = Evm.Host.return ())
     ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
     (msg : Evmc.Message.t) =
   (*
@@ -91,14 +100,14 @@ let test_message
    * With better VM instrumentation we can remove the duplucation
    *)
   let action =
-    DummyHost.(
+    Evm.Host.(
       let$ () = prepare_env in
-      let$ tx_context = HostImpl.get_tx_context in
-      let ctx = Vm.Context.make tx_context msg in
+      let$ tx_context = get_tx_context in
+      let ctx = Evm.Vm.Context.make tx_context msg in
       let$ res, ctx =
-        Vm.M.(
+        Evm.Vm.M.(
           let$ () = prepare_vm in
-          let$ () = Vm.run msg.code in
+          let$ () = Evm.Vm.run msg.code in
           match check_vm_state with None -> return () | Some check -> check )
           ctx
       in
@@ -134,7 +143,7 @@ let test_message
                 ; output_data = Bytes.empty
                 ; create_address = None } ) ) )
   in
-  let result, state = action DummyHost.State.empty in
+  let result, state = action HostImpl.State.empty in
   (*
    * If the caller specified a VM postcondition but execution finished with an early abort,
    * the postcondition did not get checked and so the test preemptively fails
@@ -161,21 +170,21 @@ let bytecode_to_call_message code =
 
 let expect_stack expected_stack =
   let open Lens.Infix in
-  Vm.(
-    M.(
-      let$ stack = !(Context.machine_state |-- MachineState.stack) in
-      Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
-        ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
-      return
-        (List.iteri
-           (fun i (expected, actual) ->
-             Alcotest.check' u256 ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
-           (List.combine expected_stack stack) ) ) )
+  let open Evm.Vm in
+  let open Evm.Vm.M in
+  let$ stack = !(Context.machine_state |-- MachineState.stack) in
+  Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
+    ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
+  return
+    (List.iteri
+       (fun i (expected, actual) ->
+         Alcotest.check' u256 ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
+       (List.combine expected_stack stack) )
 
 let test_bytecode_pure bc ~input_stack ~output_stack =
   let open Lens.Infix in
-  let open Vm in
-  let open Vm.M in
+  let open Evm.Vm in
+  let open Evm.Vm.M in
   let msg = bytecode_to_call_message bc in
   ignore
     (test_message

@@ -14,14 +14,14 @@ let test_keccak (input : Bytes.t) (output : U256.t) =
   let msg =
     bytecode_to_call_message (Program.keccak (Lit U256.zero) (Lit (U256.of_int (Bytes.length input))))
   in
-  let open Vm in
+  let open Evm.Vm in
   ignore
     (test_message
        ~prepare_vm:
-         Vm.M.(
+         M.(
            update_field
              (Context.machine_state |-- MachineState.memory)
-             (Vm.Memory.write_block_at U256.zero input) )
+             (Evm.Vm.Memory.write_block_at U256.zero input) )
        ~check_vm_state:(expect_stack [output]) msg )
 
 let test_cases_keccak test_cases =

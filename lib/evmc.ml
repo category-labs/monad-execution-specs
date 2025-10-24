@@ -101,6 +101,7 @@ module TxContext = struct
 end
 
 module Host = struct
+  (* The type of monads that can provide the EVMC host API *)
   module type SIG = sig
     include Monad.SIG
     val account_exists : Address.t -> bool t
@@ -163,13 +164,37 @@ module Host = struct
   end
 end
 
-(* Dummy implementation *)
-module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
+(* The type of EVMC VMs over monad M *)
+module Vm (M : Monad.SIG) = struct
+  module type SIG = sig
+    val execute : Message.t -> Bytes.t -> Result.t M.t
+  end
+end
+
+(* Instantiate a mutually recursive host and VM over the same monad *)
+module Instantiate
+    (M : Monad.SIG)
+    (HostF : functor (Vm : Vm(M).SIG) -> Host.SIG with type 'a t = 'a M.t)
+    (VmF : functor (Host : Host.SIG with type 'a t = 'a M.t) -> Vm(M).SIG) : sig
+  module Host : Host.SIG with type 'a t = 'a M.t
+  module Vm : Vm(M).SIG
+end = struct
+  module H = Host
+  module V = Vm
+
+  module rec Host : (H.SIG with type 'a t = 'a M.t) = HostF (Vm)
+
+  and Vm : V(M).SIG = VmF (Host)
+end
+
+(* A dummy OCaml implementation for testing. *)
+module DummyHost (Params : sig
+  val chain_id : U256.t
+end) =
+struct
   open Chain.Ethereum
   open Lens
   open Lens.Infix
-
-  module Traits = Chain.Monad.Traits (Rev)
 
   module Account = struct
     type t = {balance : U256.t; storage : U256.t U256.Map.t; code : Bytes.t; nonce : Uint.t}
@@ -223,12 +248,18 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
 
   module State = struct
     type t =
-      {accounts : Account.t Address.Map.t; substate : AccruedSubstate.t; transient_storage : U256.t U256.Map.t}
+      { accounts : Account.t Address.Map.t
+      ; substate : AccruedSubstate.t
+      ; transient_storage : U256.t U256.Map.t
+      ; accounts_created_in_current_transaction : Address.Set.t (* Needed for EIP-6780 *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
     let empty =
-      {accounts = Address.Map.empty; substate = AccruedSubstate.empty; transient_storage = U256.Map.empty}
+      { accounts = Address.Map.empty
+      ; substate = AccruedSubstate.empty
+      ; transient_storage = U256.Map.empty
+      ; accounts_created_in_current_transaction = Address.Set.empty }
   end
   open State
 
@@ -243,11 +274,6 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
       update_field (substate |-- accessed_keys) (StorageKey.Set.add (addr, key)) )
 
   let account addr = accounts |-- Address.Map.at addr |-- get_or_default Account.empty
-
-  module type VM_SIG = sig
-    val call : ?trace:bool -> Message.t -> Result.t M.t
-  end
-  module type SIG = Host.SIG with type 'a t = 'a M.t
 
   let move_ether sender recipient amount =
     let$ () =
@@ -268,15 +294,30 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
        | EOFCreate ->
            (* Osaka is unsupported *)
            assert false )
-    (* According to the Ethereum spec, static calls can transfer value, but they always transfer zero *)
     && not msg.static
+
+  (* YP (95) *)
+  let address_for ~sender ~create2_salt ~code =
+    let$ nonce = !(account sender |-- nonce) in
+    return
+      (Address.of_u256_truncating
+         (Crypto.keccak_256
+            ( match create2_salt with
+            | None ->
+                (* TODO: correct this once RLP is in place *)
+                Address.to_bytes_be sender ^ Uint.to_bytes_be nonce
+            | Some salt ->
+                Bytes.make 1 '\xff'
+                ^ Address.to_bytes_be sender
+                ^ U256.to_bytes_be salt
+                ^ U256.to_bytes_be (Crypto.keccak_256 code) ) ) )
 
   (*
    * EVMC host interface
    * Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
    * VM module are mutually recursive
    *)
-  module Make (VmEntryPoint : VM_SIG) = struct
+  module Make (Vm : Vm(M).SIG) = struct
     include M
     let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
 
@@ -306,63 +347,68 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
       let$ before_transaction = get in
       let$ () = when_ (should_transfer msg) (move_ether msg.sender msg.recipient msg.value) in
       (* TODO: check whether it's a precompile *)
-      let$ result = VmEntryPoint.call msg in
+      let$ result = Vm.execute msg msg.code in
       let$ () = when_ (result.status_code <> Result.StatusCode.Success) (put before_transaction) in
       return result
 
     let process_create (msg : Message.t) =
-      let$ before_transaction = get in
-
-      (* TODO: correct this once RLP is done *)
       let$ create_address =
-        match msg.kind with
-        | Create ->
-            let$ nonce = !(account msg.sender |-- nonce) in
-            let bytes = Address.to_bytes_be msg.sender ^ Uint.to_bytes_be nonce in
-            return (Address.of_u256_truncating (Crypto.keccak_256 bytes))
-        | Create2 ->
-            let bytes =
-              Bytes.make 1 '\xff'
-              ^ Address.to_bytes_be msg.sender
-              ^ U256.to_bytes_be msg.create2_salt
-              ^ (U256.to_bytes_be (Crypto.keccak_256 msg.code))
-            in
-            return (Address.of_u256_truncating (Crypto.keccak_256 bytes))
-        | _ -> assert false
+        (* Note that we use the sender nonce _before_ increasing it *)
+        address_for ~sender:msg.sender
+          ~create2_salt:(if msg.kind = Create2 then Some msg.create2_salt else None)
+          ~code:msg.code
       in
-      (* TODO: maybe destroy pre-existing storage, as in Ethereum spec -- do we need to? *)
-      let$ () = update_field (account create_address |-- nonce) (fun n -> Uint.(n + one)) in
+      let$ pre_existent_account = !(account create_address) in
+      if Uint.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
+        (* EIP-684 *)
+        return
+          Result.
+            { status_code = Result.StatusCode.Contract_validation_failure
+            ; gas_left = 0L
+            ; gas_refund = 0L
+            ; output_data = Bytes.empty
+            ; create_address = None }
+      else
+        let$ before_transaction = get in
 
-      let$ result : Result.t = process_call msg in
-      match result.status_code with
-      | Success ->
-          let contract_code = result.output_data in
-          let contract_length = Bytes.length contract_code in
-          let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
-          if
-            (contract_length = 0 && contract_code.[0] = '\xef')
-            || Uint.(contract_code_gas > of_int64 result.gas_left)
-          then
+        let$ () =
+          update_field accounts_created_in_current_transaction (fun addresses ->
+              Address.Set.add create_address addresses )
+        in
+        let$ () = account create_address |-- storage := U256.Map.empty in
+        let$ () = account create_address |-- nonce := Uint.one in
+
+        (* Ether, if any, is transferred by process_call *)
+        let$ result : Result.t = process_call msg in
+        match result.status_code with
+        | Success ->
+            let contract_code = result.output_data in
+            let contract_length = Bytes.length contract_code in
+            let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
+            if
+              (contract_length = 0 && contract_code.[0] = '\xef')
+              || Uint.(contract_code_gas > of_int64 result.gas_left)
+            then
+              let$ () = put before_transaction in
+              return
+                { result with
+                  gas_left = Int64.zero
+                ; output_data = Bytes.empty
+                ; status_code =
+                    Result.StatusCode.(
+                      if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
+            else
+              let$ () = account create_address |-- code := contract_code in
+              return {result with create_address = Some create_address}
+        | _ ->
             let$ () = put before_transaction in
-            return
-              { result with
-                gas_left = Int64.zero
-              ; output_data = Bytes.empty
-              ; status_code =
-                  Result.StatusCode.(
-                    if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
-          else
-            let$ () = account create_address |-- code := contract_code in
-            return {result with create_address = Some create_address}
-      | _ ->
-          let$ () = put before_transaction in
-          return result
+            return result
 
     let call (msg : Message.t) =
       match msg.kind with
       | Call | DelegateCall | CallCode -> process_call msg
       | Create | Create2 -> process_create msg
-      | EOFCreate -> assert false
+      | EOFCreate -> assert false (* Osaka is not yet supported *)
 
     let get_tx_context =
       return
@@ -374,7 +420,7 @@ module Dummy (Rev : Chain.Monad.Revision.SIG) = struct
           ; block_timestamp = 0L
           ; block_gas_limit = 99999L
           ; block_prev_randao = Address.zero
-          ; chain_id = U256.of_int Traits.chain_id
+          ; chain_id = Params.chain_id
           ; block_base_fee = U256.zero
           ; blob_base_fee = U256.zero
           ; blob_hashes = []
