@@ -100,48 +100,49 @@ let test_message
    * With better VM instrumentation we can remove the duplucation
    *)
   let action =
-    Evm.Host.(
-      let$ () = prepare_env in
-      let$ tx_context = get_tx_context in
-      let ctx = Evm.Vm.Context.make tx_context msg in
-      let$ res, ctx =
-        Evm.Vm.M.(
-          let$ () = prepare_vm in
-          let$ () = Evm.Vm.run msg.code in
-          match check_vm_state with None -> return () | Some check -> check )
-          ctx
-      in
-      let$ () = check_env_state in
-      return
-        ( match res with
-        | Ok () ->
+    let open HostImpl in
+    let open Evm.Host in
+    let$ () = prepare_env in
+    let$ tx_context = get_tx_context in
+    let ctx = Evm.Vm.Context.make tx_context msg in
+    let$ res, ctx =
+      Evm.Vm.M.(
+        let$ () = prepare_vm in
+        let$ () = Evm.Vm.run msg.code in
+        match check_vm_state with None -> return () | Some check -> check )
+        ctx
+    in
+    let$ () = check_env_state in
+    return
+      ( match res with
+      | Ok () ->
+          Evmc.Result.
+            { status_code = Success
+            ; gas_left = Uint.to_uint64 ctx.machine_state.gas
+            ; gas_refund = 0L
+            ; output_data = ctx.machine_state.output_buffer
+            ; create_address = None }
+      | Error err -> (
+        match err with
+        | Success -> assert false
+        | Revert ->
+            (*
+             * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+             * buffer is read, see YP (152)
+             *)
             Evmc.Result.
-              { status_code = Success
+              { status_code = err
               ; gas_left = Uint.to_uint64 ctx.machine_state.gas
               ; gas_refund = 0L
               ; output_data = ctx.machine_state.output_buffer
               ; create_address = None }
-        | Error err -> (
-          match err with
-          | Success -> assert false
-          | Revert ->
-              (*
-               * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
-               * buffer is read, see YP (152)
-               *)
-              Evmc.Result.
-                { status_code = err
-                ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-                ; gas_refund = 0L
-                ; output_data = ctx.machine_state.output_buffer
-                ; create_address = None }
-          | _ ->
-              Evmc.Result.
-                { status_code = err
-                ; gas_left = 0L
-                ; gas_refund = 0L
-                ; output_data = Bytes.empty
-                ; create_address = None } ) ) )
+        | _ ->
+            Evmc.Result.
+              { status_code = err
+              ; gas_left = 0L
+              ; gas_refund = 0L
+              ; output_data = Bytes.empty
+              ; create_address = None } ) )
   in
   let result, state = action HostImpl.State.empty in
   (*

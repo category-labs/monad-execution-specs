@@ -112,7 +112,7 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
     let bytes = to_bytes_be x in
     bytes.[i]
 
-  let significant_bytes x = Z.numbits (to_z x)
+  let significant_bytes x = (Z.numbits (to_z x) + 7) / 8
 
   let of_bool b = if b then one else zero
 
@@ -301,7 +301,7 @@ module Bits256 = TwosComplement (Size.Bits256)
 module U256 = struct
   include Bits256.Unsigned
   let bytes_to_whole_words (x : t) =
-    let (q, r) = Z.div_rem (to_z x) (Z.of_int 32) in
+    let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
     of_z_exn q + if Z.(equal r zero) then zero else one
 end
 module I256 = Bits256.Signed

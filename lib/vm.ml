@@ -968,7 +968,7 @@ struct
     (* Stack *)
     let$ first = pop in
     let$ nth, stack' =
-      !(machine_state |-- stack) |> M.fmap (replace_list i first) >>= Option.or_fail Stack_underflow
+      !(machine_state |-- stack) |> M.fmap (replace_list (i - 1) first) >>= Option.or_fail Stack_underflow
     in
     let$ () = machine_state |-- stack := stack' in
 

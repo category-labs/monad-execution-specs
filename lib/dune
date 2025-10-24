@@ -5,4 +5,4 @@
  (public_name monad-spec.monad_lib)
  (libraries zarith lens digestif)
  (preprocess
-    (pps lens.ppx_deriving)))
+  (pps lens.ppx_deriving)))

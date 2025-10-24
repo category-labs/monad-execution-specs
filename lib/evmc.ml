@@ -317,7 +317,7 @@ struct
    * Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
    * VM module are mutually recursive
    *)
-  module Make (Vm : Vm(M).SIG) = struct
+  module Make (Vm : Vm(M).SIG) : Host.SIG with type 'a t = 'a M.t = struct
     include M
     let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
 
@@ -342,7 +342,12 @@ struct
       let$ () = move_ether address beneficiary account_balance in
 
       let$ created_in_current_tx = Address.Set.mem address <$> !accounts_created_in_current_transaction in
-      when_ created_in_current_tx (account address |-- balance := U256.zero)
+      if created_in_current_tx then
+        (* Delete the account as per EIP-6780 *)
+        let$ alive_before_selfdestruct = account_exists address in
+        let$ () = accounts |-- Address.Map.at address := None in
+        return alive_before_selfdestruct
+      else return false
 
     let process_call (msg : Message.t) =
       let$ before_transaction = get in
