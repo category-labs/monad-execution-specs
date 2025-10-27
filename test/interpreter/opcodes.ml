@@ -1,5 +1,4 @@
 open Monad_lib
-open Monad_lib.Utils
 open Monad_lib.Opcode
 open Monad_lib.Numeric
 

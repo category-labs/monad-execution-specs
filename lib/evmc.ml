@@ -1,10 +1,12 @@
-(* EVMC interface, OCaml side *)
-open Utils
+(** A high-level version of the {{:https://evmc.ethereum.org/}EVMC interface}. *)
+
 open Numeric
 open Chain.Ethereum
 
 module Result = struct
   module StatusCode = struct
+    (** Equivalent to
+        {{:https://evmc.ethereum.org/group__EVMC.html#ga4c0be97f333c050ff45321fcaa34d920}[evmc_status_code]}. *)
     type t =
       | Success
       | Failure
@@ -52,6 +54,7 @@ module Result = struct
       | Out_of_memory -> "Out of memory"
   end
 
+  (** Equivalent to {{:https://evmc.ethereum.org/structevmc__result.html}[evmc_result]}. *)
   type t =
     { status_code : StatusCode.t
     ; gas_left : Int64.t
@@ -61,11 +64,12 @@ module Result = struct
 end
 
 module CallKind = struct
-  (* EOFCreate is unsupported as of Monad V4 *)
+  (* EOFCreate is unsupported as of Monad V4. *)
   type t = Call | DelegateCall | CallCode | Create | Create2 | EOFCreate
 end
 
 module Message = struct
+  (** Equivalent to {{:https://evmc.ethereum.org/structevmc__message.html}[evmc_message]}. *)
   type t =
     { kind : CallKind.t
     ; static : bool
@@ -82,9 +86,11 @@ module Message = struct
 end
 
 module TxInitcode = struct
+  (** Equivalent to {{:https://evmc.ethereum.org/structevmc__tx__initcode.html}[evmc_tx_initcode]}. *)
   type t = {hash : U256.t; code : Bytes.t}
 end
 module TxContext = struct
+  (** Equivalent to {{:https://evmc.ethereum.org/structevmc__tx__context.html}[evmc_tx_context]}. *)
   type t =
     { tx_gas_price : U256.t
     ; tx_origin : Address.t
@@ -101,7 +107,10 @@ module TxContext = struct
 end
 
 module Host = struct
-  (* The type of monads that can provide the EVMC host API *)
+  (** The type of monads that can provide the EVMC host API. This mirrors the structure
+      of {{:https://evmc.ethereum.org/structevmc__host__interface.html}[evmc_host_interface]}, replacing
+      the explicit [evmc_host_context*] parameter with a monad which may be equivalent to a
+      [evmc_host_context ->] reader monad. *)
   module type SIG = sig
     include Monad.SIG
     val account_exists : Address.t -> bool t
@@ -133,7 +142,7 @@ module Host = struct
   end
 
   (* Lift a host monad through a transformer stack *)
-  module Lift (MT : Monad.TRANS) (M : SIG with type 'a t = 'a MT.Underlying.t) = struct
+  module Lift (MT : Monad.TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
     include MT
     let account_exists acc = MT.lift (M.account_exists acc)
 
@@ -164,14 +173,16 @@ module Host = struct
   end
 end
 
-(* The type of EVMC VMs over monad M *)
+(** The type of EVMC VMs over monad M, broadly based on
+    {{:https://evmc.ethereum.org/structevmc__vm.html}[evmc_vm]}, minus the ancilliary introspection
+    operations. *)
 module Vm (M : Monad.SIG) = struct
   module type SIG = sig
     val execute : Message.t -> Bytes.t -> Result.t M.t
   end
 end
 
-(* Instantiate a mutually recursive host and VM over the same monad *)
+(** Helper module to instantiate a host and VM over the same monad.  *)
 module Instantiate
     (M : Monad.SIG)
     (HostF : functor (Vm : Vm(M).SIG) -> Host.SIG with type 'a t = 'a M.t)
@@ -187,13 +198,13 @@ end = struct
   and Vm : V(M).SIG = VmF (Host)
 end
 
-(* A dummy OCaml implementation for testing. *)
+(** A dummy OCaml implementation for testing, backed by a simple mapping of accounts to storage. Does not
+    use a MPT or store any cross-transaction state. *)
 module DummyHost (Params : sig
   val chain_id : U256.t
 end) =
 struct
   open Chain.Ethereum
-  open Lens
   open Lens.Infix
 
   module Account = struct
@@ -224,7 +235,7 @@ struct
   end
 
   module AccruedSubstate = struct
-    (** YP 6.1 *)
+    (** YP 6.1. *)
     type t =
       { self_destruct : Address.Set.t  (** A_s *)
       ; logs : Log.t list (* A_l *)
@@ -263,7 +274,7 @@ struct
   end
   open State
 
-  module M = Utils.Monad.State (State)
+  module M = Monad.State (State)
   include M
 
   let touch_account addr = M.update_field (substate |-- accessed_addresses) (Address.Set.add addr)
@@ -273,7 +284,7 @@ struct
       let$ () = touch_account addr in
       update_field (substate |-- accessed_keys) (StorageKey.Set.add (addr, key)) )
 
-  let account addr = accounts |-- Address.Map.at addr |-- get_or_default Account.empty
+  let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
 
   let move_ether sender recipient amount =
     let$ () =
@@ -312,16 +323,16 @@ struct
                 ^ U256.to_bytes_be salt
                 ^ U256.to_bytes_be (Crypto.keccak_256 code) ) ) )
 
-  (*
-   * EVMC host interface
-   * Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
-   * VM module are mutually recursive
+  (** EVMC host interface.
+    Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
+    VM module are mutually recursive.
    *)
   module Make (Vm : Vm(M).SIG) : Host.SIG with type 'a t = 'a M.t = struct
     include M
     let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
 
-    let get_storage addr key = !(account addr |-- storage |-- U256.Map.at key |-- get_or_default U256.zero)
+    let get_storage addr key =
+      !(account addr |-- storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
     let set_storage addr key v = account addr |-- storage |-- U256.Map.at key := Some v
 
@@ -433,10 +444,8 @@ struct
           ; initcodes = [] }
 
     let get_block_hash i =
-      (*
-       * This host is not backed by an actual block database, so we return the hash of i which is enough for
-       * testing
-       *)
+      (* This host is not backed by an actual block database, so we return the hash of i which is enough for
+         testing *)
       return (Crypto.keccak_256 (U256.to_bytes_be i))
 
     let emit_log address ~(data : Bytes.t) ~(topics : U256.t list) =
@@ -457,7 +466,8 @@ struct
         let$ () = touch_storage addr key in
         return `Cold
 
-    let get_transient_storage key = !(transient_storage |-- U256.Map.at key |-- get_or_default U256.zero)
+    let get_transient_storage key =
+      !(transient_storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
     let set_transient_storage key value = transient_storage |-- U256.Map.at key := Some value
   end

@@ -1,5 +1,4 @@
 open Monad_lib
-open Utils
 open Chain.Ethereum
 open Monad_lib.Numeric
 
@@ -39,10 +38,8 @@ module QCheck2 = struct
     include Gen
     let uint8 = char_range '\x00' '\xff'
     let u256 : U256.t t =
-      (*
-       * Uniformly distributed random strings are very unlikely to be negative.
-       * Bool shrinks towards false so this generator will shrink towards positive numbers.
-       *)
+      (* Uniformly distributed random strings are very unlikely to be negative.
+         Bool shrinks towards false so this generator will shrink towards positive numbers. *)
       let* negative = bool in
       let* bytes_be =
         if negative then (
@@ -95,10 +92,8 @@ let test_message
     ?(check_env_state : unit Evm.Host.t = Evm.Host.return ())
     ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
     (msg : Evmc.Message.t) =
-  (*
-   * This is partially duplicated from vm.ml as it needs to inject assertion-checking.
-   * With better VM instrumentation we can remove the duplucation
-   *)
+  (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
+     With better VM instrumentation we can remove the duplucation *)
   let action =
     let open HostImpl in
     let open Evm.Host in
@@ -126,10 +121,8 @@ let test_message
         match err with
         | Success -> assert false
         | Revert ->
-            (*
-             * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
-             * buffer is read, see YP (152)
-             *)
+            (* If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+               buffer is returned, see YP (152) *)
             Evmc.Result.
               { status_code = err
               ; gas_left = Uint.to_uint64 ctx.machine_state.gas
@@ -145,10 +138,8 @@ let test_message
               ; create_address = None } ) )
   in
   let result, state = action HostImpl.State.empty in
-  (*
-   * If the caller specified a VM postcondition but execution finished with an early abort,
-   * the postcondition did not get checked and so the test preemptively fails
-   *)
+  (* If the caller specified a VM postcondition but execution finished with an early abort,
+     the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
   check_result result ;
   (result, state)

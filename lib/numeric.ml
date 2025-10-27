@@ -1,5 +1,10 @@
-(* Generic number types backed by Zarith *)
-open Utils
+(** Generic number types backed by Zarith unbounded integers. The functor {!Numeric.Make} can be instantiated
+    with a choice of signedness and bit width to produce an opaque type representing (un)signed integers of
+    the corresponding width.
+
+    Note that the {!Numeric.Make} functor is applicative, therefore multiple instantiations with the same
+    parameter result in interchangeable numeric types.
+ *)
 
 exception Domain_error of Z.t
 exception Invalid_operation
@@ -250,6 +255,8 @@ module Integer = struct
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
 end
 
+(** Helper functor to create pairs of signed and unsigned types for a given bit width, together with conversion
+    functions via two's complement. *)
 module TwosComplement (B : IS_BOUNDED) = struct
   module SI = Make (B) (Signedness.Signed)
   module UI = Make (B) (Signedness.Unsigned)
@@ -276,16 +283,21 @@ module TwosComplement (B : IS_BOUNDED) = struct
   let max_signed = S.(to_z max_t)
   module Signed = struct
     include S
+    (** [as_unsigned x] reinterprets the binary representation of [x] (in two's complement) as an unsigned
+        integer of the same bit-width. *)
     let as_unsigned (x : t) : U.t =
       let x = to_z x in
       U.of_z_exn Z.(if geq x zero then x else max_unsigned + x + one)
   end
   module Unsigned = struct
     include U
+    (** [as_signed x] reinterprets the binary representation of [x] as a two's complement signed integer
+        of the same bit-width. *)
     let as_signed (x : t) : Signed.t =
       let x = to_z x in
       Signed.of_z_exn Z.(if leq x max_signed then x else x - max_unsigned - one)
 
+    (** [sign_extend i x] fills the bytes after [i] with the most significant bit of the [i]th bit of x. *)
     let sign_extend byte_i (x : t) : Signed.t =
       let bit_i = Stdlib.(7 + (8 * byte_i)) in
       Signed.of_z_exn (Z.signed_extract (to_z x) 0 Stdlib.(1 + bit_i))
@@ -298,15 +310,18 @@ module TwosComplement (B : IS_BOUNDED) = struct
 end
 
 module Bits256 = TwosComplement (Size.Bits256)
+(** Unsigned 256-bit integers. {!U256.t} is used to represent Ethereum 256-bit words. *)
 module U256 = struct
   include Bits256.Unsigned
   let bytes_to_whole_words (x : t) =
     let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
     of_z_exn q + if Z.(equal r zero) then zero else one
 end
+(** Signed 256-bit integers. {!I256.t} is used for signed arithmetic on Ethereum 256-bit words. *)
 module I256 = Bits256.Signed
 
 module Bits160 = TwosComplement (Size.Bits160)
+(** Unsigned 160-bit integers. {!U160.t} is used to represent 160-bit Ethereum addresses. *)
 module U160 = struct
   include Bits160.Unsigned
   let to_u256 (x : t) : U256.t = U256.of_z_exn (to_z x)

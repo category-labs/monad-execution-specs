@@ -1,3 +1,6 @@
+(** Constants and functions involved in computing gas costs. All gas costs are computed as arbitrary-precision
+    unsigned integers [Uint.t]. *)
+
 open Numeric
 
 (* Bring Uint into scope so the operators are all available to users *)

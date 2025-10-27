@@ -1,4 +1,4 @@
-open Utils
+(** Automatically derived monomorphic comparison operators on types implementing [compare]. *)
 
 module Make (T : sig
   type t

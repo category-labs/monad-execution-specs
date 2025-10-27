@@ -1,4 +1,3 @@
-open Utils
 open Numeric
 open Lens.Infix
 
@@ -67,11 +66,9 @@ struct
       ; output_buffer : Bytes.t (* mu_o *)
       ; gas_refund : Uint.t
             (* A_r *)
-            (*
-             * Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
-             * most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
-             * EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter
-             *)
+            (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
+               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
+               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
       }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
@@ -91,12 +88,9 @@ struct
     open Chain.Ethereum
 
     module ExecutionBlockHeader = struct
-      (*
-       * The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
-       * does not give us the full block header information, only those fields required for executing EVM
-       * bytecode
-       * Otherwise, this is as YP 4.4
-       *)
+      (* The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
+         does not give us the full block header information, only those fields required for executing EVM
+         bytecode. Otherwise, this is as YP 4.4. *)
       type t =
         { coinbase : Address.t (* H_c *)
         ; number : U256.t (* H_i *)
@@ -191,8 +185,8 @@ struct
     module StHost = St.Trans (Host)
     module ErrStHost = Err.Trans (StHost)
 
-    include ErrStHost
     include St.Lift (ErrStHost) (StHost)
+    include ErrStHost
 
     module HostAPI = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
   end
@@ -855,11 +849,9 @@ struct
 
   let gaslimit = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- gas_limit).get
 
-  (*
-   * The yellow paper gets the chain ID directly as the ambient variable Beta, as opposed to fetching it
-   * from a specific field in the execution environment. The executable specs, on the other hand, does get
-   * it from an environment field
-   *)
+  (* The yellow paper gets the chain ID directly as the ambient variable Beta, as opposed to fetching it
+     from a specific field in the execution environment. The executable specs, on the other hand, does get
+     it from an environment field *)
   let chainid = fetch_environment_variable_opcode_impl (fun _ -> Params.chain_id)
 
   let selfbalance =
@@ -943,7 +935,7 @@ struct
     let$ nth_elt =
       !(machine_state |-- stack)
       |> M.fmap (fun l -> List.nth_opt l (i - 1))
-      >>= Option.or_fail Stack_underflow
+      >>= M.Option.or_fail Stack_underflow
     in
 
     (* Gas *)
@@ -1056,12 +1048,10 @@ struct
     let$ self_addr = self in
     let$ access = HostAPI.access_storage self_addr key in
     let$ value = HostAPI.get_storage self_addr key in
-    let$ value0 = !(initial_storage |-- U256.Map.at key |-- Lens.get_or_default value) in
-    (*
-     * If the storage slot had already been written to, then initial_storage contained an entry for it and so
-     * this code does not change its value. If it had not been written to, then we store the value we get from
-     * storage, before the first update
-     *)
+    let$ value0 = !(initial_storage |-- U256.Map.at key |-- Option.get_or_default value) in
+    (* If the storage slot had already been written to, then initial_storage contained an entry for it and so
+       this code does not change its value. If it had not been written to, then we store the value we get from
+       storage, before the first update *)
     let$ () = initial_storage |-- U256.Map.at key := Some value0 in
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
@@ -1793,10 +1783,8 @@ struct
         match err with
         | Success -> assert false
         | Revert ->
-            (*
-             * If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
-             * buffer is read, see YP (152)
-             *)
+            (* If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+               buffer is returned, see YP (152) *)
             Evmc.Result.
               { status_code = err
               ; gas_left = Uint.to_uint64 ctx.machine_state.gas
