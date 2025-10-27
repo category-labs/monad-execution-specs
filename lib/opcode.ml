@@ -1,5 +1,3 @@
-open Utils
-
 type t =
   (* 0x0X *)
   | Stop

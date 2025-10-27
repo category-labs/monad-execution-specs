@@ -2,7 +2,7 @@ open Test_utils
 open Test_utils.Utils
 open Alcotest
 
-open Monad_lib.Utils
+open Monad_lib
 open Monad_lib.Numeric
 
 let () =

@@ -1,3 +1,5 @@
+(** As [Int64] but all operations are unsigned *)
+
 include Int64
 
 let div = Stdlib.Int64.unsigned_div

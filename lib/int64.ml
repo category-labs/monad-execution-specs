@@ -1,3 +1,6 @@
+(** As [Stdlib.Int64] but exposing overloaded operators for arithmetic and monomorphic comparisons, and
+    submodules for maps and sets. *)
+
 include Stdlib.Int64
 let ( + ) = Stdlib.Int64.add
 let ( - ) = Stdlib.Int64.sub
