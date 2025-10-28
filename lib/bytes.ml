@@ -24,3 +24,13 @@ let of_hex_string str =
 let reverse (bs : t) : t =
   let l = length bs in
   init l (fun i -> bs.[l - i - 1])
+
+let of_chars chrs =
+  of_seq (List.to_seq chrs)
+
+let reverse (bs : t) : t =
+  let l = length bs in
+  init l (fun i -> bs.[l - i - 1])
+
+let pp_print (fmt : Format.formatter) (obj: t) =
+  Format.fprintf fmt "%s" (to_hex_string obj)

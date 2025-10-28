@@ -33,6 +33,7 @@ module QCheck2 = struct
      fun x ->
       (if Z.(x < zero) then Format.sprintf "%s (-%s)" (Z.to_string x) else Format.sprintf "%s")
         (Bytes.to_hex_string (Z.to_bits x))
+    let rlp x = Rlp.to_string x
   end
 
   module Gen = struct
@@ -62,6 +63,18 @@ module QCheck2 = struct
       let* bytes_le = string_size ~gen:uint8 nat in
       let abs = Z.of_bits bytes_le in
       return (if negative then Z.neg abs else abs)
+
+    let rlp : Rlp.t t =
+      let rec rlp () : Rlp.t t =
+        let* is_list = return false in
+        if is_list then
+          let* elts = list (rlp ()) in
+          return (Rlp.List elts)
+        else
+          let* bytes = string_size ~gen:uint8 nat in
+          return (Rlp.Bytes bytes)
+      in
+      rlp ()
   end
 end
 
@@ -71,9 +84,16 @@ let check_prop ~name ?print ?(count = 10000) generator property =
 let u256 =
   ( module struct
     include U256
-    let pp = Fmt.of_to_string (fun w -> U256.to_short_hex_string w)
+    let pp = Fmt.of_to_string U256.to_short_hex_string
   end : Alcotest.TESTABLE
     with type t = U256.t )
+
+let rlp =
+  ( module struct
+    include Rlp
+    let pp = Fmt.of_to_string to_string
+  end : Alcotest.TESTABLE
+    with type t = Rlp.t )
 
 let status_code =
   ( module struct

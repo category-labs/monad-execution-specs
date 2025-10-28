@@ -318,8 +318,8 @@ struct
                 ^ U256.to_bytes_be (Crypto.keccak_256 code) ) ) )
 
   (** EVMC host interface.
-    Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
-    VM module are mutually recursive.
+      Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
+      VM module are mutually recursive.
    *)
   module Make (Vm : Vm(M).SIG) : Host.SIG with type 'a t = 'a M.t = struct
     include M
