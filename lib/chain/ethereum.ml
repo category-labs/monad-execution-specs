@@ -1,6 +1,6 @@
-open Numeric
-
-module Address = U160
+(** Definitions for Ethereum types: accounts, blocks, transactions.
+    Work in progress, will be expanded as needed. *)
+module Address = Numeric.U160
 
 module Revision = struct
   type t =
@@ -53,10 +53,4 @@ module Revision = struct
     (* The unspecified EVM revision used for EVM implementations to expose
        experimental features. *)
     | Experimental
-end
-
-module Block = struct
-  module Header = struct
-    type t
-  end
 end
