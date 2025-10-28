@@ -32,8 +32,10 @@ let new_account_cost = ~$25_000
 let call_value = ~$9_000
 let call_stipend = ~$2_300
 
-let cold_sload_cost = ~$2_100
-let cold_account_access_cost = ~$2_600
+(* Different from Ethereum, see Monad Spec 4.1 *)
+let cold_sload_cost = ~$8_100
+let cold_account_access_cost = ~$10_100
+
 let warm_access_cost = ~$100
 let account_access_cost = function `Warm -> warm_access_cost | `Cold -> cold_account_access_cost
 
@@ -50,8 +52,7 @@ let sset_cost = ~$20_000
 let sclear_refund = ~$4_800
 let sreset_cost = ~$2_900 (* Equal to GAS_STORAGE_UPDATE - GAS_COLD_SLOAD in the executable EVM spec *)
 
-(* As of Monad 5, the only difference with Ethereum is create_cost *)
-let create_cost = ~$160_000
+let create_cost = ~$32_000
 let create_cost_per_initcode_word = ~$2
 let code_deposit_per_byte = ~$200
 
