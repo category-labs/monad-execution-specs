@@ -1510,6 +1510,7 @@ struct
       ~output_start
       ~output_size
       ~static_call =
+
     (* Gas *)
     let$ input_memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size in
     let$ output_memory_extension_gas = extend_memory_to ~start:output_start ~size_bytes:output_size in

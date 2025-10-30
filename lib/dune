@@ -3,6 +3,6 @@
 (library
  (name monad_lib)
  (public_name monad-spec.monad_lib)
- (libraries zarith lens digestif)
+ (libraries zarith lens digestif ctypes ctypes.stubs ctypes-foreign)
  (preprocess
   (pps lens.ppx_deriving)))
