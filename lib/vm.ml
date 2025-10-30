@@ -1269,7 +1269,7 @@ struct
     else return (assert (Int64.(gas_refund = zero)))
 
   let generic_call_impl
-      ~(kind : Evmc.CallKind.t)
+      ~(kind : Evmc.Message.CallKind.t)
       ~(call_gas : U256.t)
       ~(value : U256.t)
       ~(sender : Address.t)
@@ -1322,7 +1322,7 @@ struct
       else push U256.zero
 
   let generic_create_impl
-      ~(kind : Evmc.CallKind.t)
+      ~(kind : Evmc.Message.CallKind.t)
       ~(create2_salt : U256.t)
       ~(endowment : U256.t)
       ~(input_start : U256.t)
@@ -1386,7 +1386,7 @@ struct
 
     (* Operation *)
     let$ () =
-      generic_create_impl ~create2_salt:U256.zero ~kind:Evmc.CallKind.Create ~endowment ~input_start
+      generic_create_impl ~create2_salt:U256.zero ~kind:Evmc.Message.CallKind.Create ~endowment ~input_start
         ~input_size_bytes
     in
 
@@ -1415,7 +1415,8 @@ struct
       ~output_start
       ~output_size
       ~static_call =
-    if U256.(value > zero) then assert (kind = Evmc.CallKind.Call || kind = Evmc.CallKind.CallCode) ;
+    if U256.(value > zero) then
+      assert (kind = Evmc.Message.CallKind.Call || kind = Evmc.Message.CallKind.CallCode) ;
 
     (* Gas *)
     let$ input_memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size in
@@ -1427,7 +1428,7 @@ struct
     let access_gas = Gas.(access_gas + delegation_access_gas) in
 
     let$ target_is_alive = HostAPI.account_exists recipient in
-    if kind <> Evmc.CallKind.Call then assert target_is_alive ;
+    if kind <> Evmc.Message.CallKind.Call then assert target_is_alive ;
     let create_gas = Gas.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
 
     let transfer_gas = Gas.(if U256.(value = zero) then zero else call_value) in
@@ -1475,7 +1476,7 @@ struct
 
     let$ self_addr = self in
     call_opcode_impl
-      ~kind:Evmc.CallKind.Call
+      ~kind:Evmc.Message.CallKind.Call
       ~gas
       ~sender:self_addr
       ~recipient
@@ -1500,7 +1501,7 @@ struct
 
     let$ self_addr = self in
     call_opcode_impl
-      ~kind:Evmc.CallKind.CallCode
+      ~kind:Evmc.Message.CallKind.CallCode
       ~gas
       ~value
       ~sender:self_addr
@@ -1548,7 +1549,7 @@ struct
 
     let$ self_addr = self in
 
-    call_opcode_impl ~kind:Evmc.CallKind.DelegateCall
+    call_opcode_impl ~kind:Evmc.Message.CallKind.DelegateCall
       ~gas
       ~sender:original_sender
       ~recipient:self_addr
@@ -1582,7 +1583,8 @@ struct
 
     (* Operation *)
     let$ () =
-      generic_create_impl ~kind:Evmc.CallKind.Create2 ~endowment ~input_start ~input_size_bytes ~create2_salt
+      generic_create_impl ~kind:Evmc.Message.CallKind.Create2 ~endowment ~input_start ~input_size_bytes
+        ~create2_salt
     in
 
     (* PC *)
@@ -1599,7 +1601,7 @@ struct
 
     let$ self_addr = self in
     call_opcode_impl
-      ~kind:Evmc.CallKind.Call
+      ~kind:Evmc.Message.CallKind.Call
       ~gas
       ~sender:self_addr
       ~recipient
