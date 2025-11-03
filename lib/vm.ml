@@ -1762,7 +1762,9 @@ struct
     if Params.trace then ( fun stack ->
       Format.printf "<top>\n" ;
       List.iter (fun elt -> Format.printf "%s\n" (U256.to_string elt)) stack ;
-      Format.printf "<bottom>\n" )
+      Format.printf "<bottom>\n";
+      Format.print_flush ()
+                         )
     else fun _ -> ()
 
   let trace_state =
@@ -1789,7 +1791,7 @@ struct
     in
     ( if Params.trace then
         let info = Opcode.info opcode in
-        Format.printf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
+        Format.printf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name; Format.print_flush() ) ;
     let$ continue = execute_opcode opcode in
     if continue then run code else return ()
 
@@ -1799,6 +1801,7 @@ struct
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg in
     let$ res, ctx = run code ctx in
+    (if Params.trace then (Format.printf "Finished execution\n"; Format.print_flush ()));
     return
       ( match res with
       | Ok () ->
