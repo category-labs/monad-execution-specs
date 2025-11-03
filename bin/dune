@@ -3,9 +3,3 @@
  (public_name evmrun)
  (modes byte exe)
  (libraries monad_lib))
-
-(executable
- (name gen_evmc_bindings)
- (public_name gen_evmc_bindings)
- (modes byte exe)
- (libraries monad_lib ctypes.stubs))
