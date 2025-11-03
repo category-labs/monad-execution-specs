@@ -877,7 +877,7 @@ struct
     let$ () = spend access_gas in
 
     (* Operation *)
-    let$ size = U256.of_int64 <$> HostAPI.get_code_size address in
+    let$ size = U256.of_int64 <$> (HostAPI.get_code_size address) in
     let$ () = push size in
 
     (* PC *)
@@ -1394,7 +1394,7 @@ struct
             { kind
             ; delegated
             ; static
-            ; depth = Int32.of_int new_depth
+            ; depth = (Int32.of_int new_depth)
             ; gas = U256.to_uint64 call_gas
             ; recipient
             ; sender
