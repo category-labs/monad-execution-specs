@@ -72,8 +72,8 @@ module Message = struct
   type t =
     { kind : CallKind.t
     ; static : bool
-    ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGATECALL opcode *)
-    ; depth : int
+    ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGAECALL opcode *)
+    ; depth : Int32.t
     ; gas : Uint64.t
     ; recipient : Address.t
     ; sender : Address.t
@@ -97,7 +97,7 @@ module TxContext = struct
     ; block_number : Uint64.t
     ; block_timestamp : Uint64.t
     ; block_gas_limit : Uint64.t
-    ; block_prev_randao : Address.t
+    ; block_prev_randao : U256.t
     ; chain_id : U256.t
     ; block_base_fee : U256.t
     ; blob_base_fee : U256.t
@@ -119,7 +119,7 @@ module Host = struct
 
     val get_balance : Address.t -> U256.t t
 
-    val get_code_size : Address.t -> U256.t t
+    val get_code_size : Address.t -> Uint64.t t
     val get_code_hash : Address.t -> U256.t t
     val copy_code : Address.t -> Bytes.t t
 
@@ -129,7 +129,7 @@ module Host = struct
 
     val get_tx_context : TxContext.t t
 
-    val get_block_hash : U256.t -> U256.t t
+    val get_block_hash : Uint64.t -> U256.t t
 
     val emit_log : Address.t -> data:Bytes.t -> topics:U256.t list -> unit t
 
@@ -334,7 +334,7 @@ struct
 
     let get_code_size addr =
       let$ code = !(account addr |-- code) in
-      return (U256.of_int (Bytes.length code))
+      return (Uint64.of_int (Bytes.length code))
 
     let get_code_hash addr =
       let$ code = !(account addr |-- code) in
@@ -426,7 +426,7 @@ struct
           ; block_number = 0L
           ; block_timestamp = 0L
           ; block_gas_limit = 99999L
-          ; block_prev_randao = Address.zero
+          ; block_prev_randao = U256.zero
           ; chain_id = Params.chain_id
           ; block_base_fee = U256.zero
           ; blob_base_fee = U256.zero
@@ -436,7 +436,7 @@ struct
     let get_block_hash i =
       (* This host is not backed by an actual block database, so we return the hash of i which is enough for
          testing *)
-      return (Crypto.keccak_256 (U256.to_bytes_be i))
+      return (Crypto.keccak_256 U256.(to_bytes_be (of_uint64 i)))
 
     let emit_log address ~(data : Bytes.t) ~(topics : U256.t list) =
       let log : Log.t = {address; topics; data} in
@@ -460,211 +460,5 @@ struct
       !(transient_storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
     let set_transient_storage key value = transient_storage |-- U256.Map.at key := Some value
-  end
-end
-
-(** C versions of the EVMC types. *)
-module C(F : Ctypes.FOREIGN) = struct
-  open Ctypes
-  (*open F*)
-
-  (* TODO: this is not portable as it assumes that every struct is 32 bits. *)
-  let enum_view ~name mapping =
-    let ocaml_of_c (i : Int32.t) =
-      match List.find_opt (fun (index, _) -> index = i) mapping with
-      | None -> failwith (Format.sprintf "Unexpected value %ld in enum %s" i name)
-      | Some (_, value) -> value
-    in
-    let c_of_ocaml v = fst (List.find (fun (_, value) -> value = v) mapping) in
-    view ~read:ocaml_of_c ~write:c_of_ocaml int32_t
-
-  module type NUMERIC = sig
-                      type t
-                      val byte_width : int
-                      val to_bytes_be : t -> Bytes.t
-                      val of_bytes_be : Bytes.t -> t
-                    end
-  let numeric_view (type t) (module M : NUMERIC with type t = t) =
-      let c_of_ocaml (value : M.t) : Unsigned.UInt8.t carray =
-        let bytes = M.to_bytes_be value in
-        let arr = CArray.make uint8_t M.byte_width in
-        for i = 0 to M.byte_width-1 do
-          CArray.set arr i (Unsigned.UInt8.of_int (Char.code bytes.[i]))
-        done ;
-        arr
-      in
-      let ocaml_of_c (bytes : Unsigned.UInt8.t carray) : M.t =
-        let bytes = Bytes.init M.byte_width (fun i -> Char.chr (Unsigned.UInt8.to_int (CArray.get bytes i))) in
-        M.of_bytes_be bytes
-      in
-      view ~write:c_of_ocaml ~read:ocaml_of_c (array M.byte_width uint8_t)
-
-  module Address = struct
-    let t = numeric_view (module U160:NUMERIC with type t = U160.t)
-  end
-  module Bytes32 = struct
-    let t = numeric_view (module U256: NUMERIC with type t = U256.t)
-  end
-  module Uint256be = Bytes32
-
-  module HostContext = struct
-    type t
-    let t : t structure typ = structure "evmc_host_context"
-  end
-
-  module Message = struct
-    module CallKind = struct
-      let mapping =
-        Message.CallKind.
-          [(0l, Call); (1l, DelegateCall); (2l, CallCode); (3l, Create); (4l, Create2)]
-
-      let t = enum_view ~name:"evmc_call_kind" mapping
-    end
-
-    type t
-    let t : t structure typ = structure "evmc_message"
-    let kind = field t "kind" CallKind.t
-    let () = seal t
-  end
-
-  module Result = struct
-    module StatusCode = struct
-      let mapping =
-        Result.StatusCode.
-          [ (0l, Success)
-          ; (1l, Failure)
-          ; (2l, Revert)
-          ; (3l, Out_of_gas)
-          ; (4l, Invalid_instruction)
-          ; (5l, Undefined_instruction)
-          ; (6l, Stack_overflow)
-          ; (7l, Stack_underflow)
-          ; (8l, Bad_jump_destination)
-          ; (9l, Invalid_memory_access)
-          ; (10l, Call_depth_exceeded)
-          ; (11l, Static_mode_violation)
-          ; (12l, Precompile_failure)
-          ; (13l, Contract_validation_failure)
-          ; (14l, Argument_out_of_range)
-          ; (15l, Wasm_unreachable_instruction)
-          ; (16l, Wasm_trap)
-          ; (17l, Insufficient_balance)
-          ; (-1l, Internal_error)
-          ; (-2l, Rejected)
-          ; (-3l, Out_of_memory) ]
-
-      let t = enum_view ~name:"evmc_status_code" mapping
-    end
-
-    type t
-    let t : t structure typ = structure "evmc_result"
-    let status_code = field t "status_code" StatusCode.t
-    let () = seal t
-  end
-
-  module TxContext = struct
-    type t
-    let t : t structure typ = structure "evmc_tx_context"
-    let gas_price = field t "tx_gas_price" Uint256be.t
-    let () = seal t
-  end
-
-  module HostInterface = struct
-    type t
-    let t : t structure typ = structure "evmc_host_interface"
-
-    let foo = field t "foo" (Foreign.funptr Ctypes.(int @-> returning int))
-    let account_exists =
-      field t "account_exists" (static_funptr Ctypes.(ptr HostContext.t @-> ptr Address.t @-> returning bool))
-
-    let get_storage =
-      field t "get_storage"
-        (static_funptr
-           Ctypes.( ptr HostContext.t
-           @-> const (ptr Address.t)
-           @-> const (ptr Bytes32.t)
-           @-> returning Bytes32.t ) )
-    let set_storage =
-      field t "set_storage"
-        (static_funptr
-           Ctypes.( ptr HostContext.t
-           @-> const (ptr Address.t)
-           @-> const (ptr Bytes32.t)
-           @-> const (ptr Bytes32.t)
-           @-> returning void ) )
-
-    let get_balance =
-      field t "get_balance"
-        (static_funptr Ctypes.(ptr HostContext.t @-> const (ptr Address.t) @-> returning Uint256be.t))
-
-    let get_code_size =
-      field t "get_code_size"
-        (static_funptr Ctypes.(ptr HostContext.t @-> const (ptr Address.t) @-> returning size_t))
-    let get_code_hash =
-      field t "get_code_hash"
-        (static_funptr Ctypes.(ptr HostContext.t @-> const (ptr Address.t) @-> returning Bytes32.t))
-    let copy_code =
-      field t "copy_code"
-        (static_funptr
-           Ctypes.( ptr HostContext.t
-           @-> const (ptr Address.t)
-           @-> size_t
-           @-> ptr uint8_t
-           @-> size_t
-           @-> returning size_t ) )
-
-    let selfdestruct =
-      field t "selfdestruct"
-        (static_funptr Ctypes.
-           (ptr HostContext.t @-> const (ptr Address.t) @-> const (ptr Address.t) @-> returning bool) )
-
-    let call =
-      field t "call" (static_funptr Ctypes.(ptr HostContext.t @-> const (ptr Message.t) @-> returning Result.t))
-
-    let get_tx_context =
-      field t "get_tx_context" (static_funptr Ctypes. (ptr HostContext.t @-> returning TxContext.t))
-
-    let get_block_hash =
-      field t "get_block_hash" (static_funptr Ctypes.(ptr HostContext.t @-> int64_t @-> returning Bytes32.t))
-
-    let emit_log =
-      field t "emit_log"
-        (static_funptr Ctypes.
-           ( ptr HostContext.t
-           @-> const (ptr Address.t)
-           @-> const (ptr uint8_t)
-           @-> size_t
-           @-> const (ptr Bytes32.t)
-           @-> size_t
-           @-> returning void ) )
-
-    let access_status : [`Cold | `Warm] typ = enum_view ~name:"evmc_access_status" [(0l, `Cold); (1l, `Warm)]
-
-    let access_account =
-      field t "access_account"
-        (static_funptr Ctypes. (ptr HostContext.t @-> const (ptr Address.t) @-> returning access_status))
-    let access_storage =
-      field t "access_storage"
-        (static_funptr Ctypes.
-           ( ptr HostContext.t
-           @-> const (ptr Address.t)
-           @-> const (ptr Bytes32.t)
-           @-> returning access_status ) )
-
-    let get_transient_storage =
-      field t "get_transient_storage"
-        (static_funptr Ctypes.
-           ( ptr HostContext.t
-           @-> const (ptr Address.t)
-           @-> const (ptr Bytes32.t)
-           @-> returning Bytes32.t ) )
-    let set_transient_storage =
-      field t "set_transient_storage"
-        (static_funptr Ctypes.
-           ( ptr HostContext.t
-           @-> const (ptr Address.t)
-           @-> const (ptr Bytes32.t)
-           @-> const (ptr Bytes32.t)
-           @-> returning void ) )
   end
 end

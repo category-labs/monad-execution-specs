@@ -775,7 +775,7 @@ struct
     let$ () = spend access_gas in
 
     (* Operation *)
-    let$ size = HostAPI.get_code_size address in
+    let$ size = U256.of_int64 <$> (HostAPI.get_code_size address) in
     let$ () = push size in
 
     (* PC *)
@@ -864,7 +864,7 @@ struct
     let$ current_block_num = !(execution_environment |-- header |-- number) in
     let$ hash =
       if U256.(current_block_num <= block_num || current_block_num - ~$256 > block_num) then return U256.zero
-      else HostAPI.get_block_hash block_num
+      else HostAPI.get_block_hash (U256.to_int64 block_num)
     in
     let$ () = push hash in
 
@@ -880,8 +880,7 @@ struct
   let number = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- number).get
 
   let prevrandao =
-    fetch_environment_variable_opcode_impl (fun ctx ->
-        Address.to_u256 ctx.execution_environment.header.prev_randao )
+    fetch_environment_variable_opcode_impl (execution_environment |-- header |-- prev_randao).get
 
   let gaslimit = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- gas_limit).get
 
@@ -1296,7 +1295,7 @@ struct
             { kind
             ; delegated
             ; static
-            ; depth = new_depth
+            ; depth = (Int32.of_int new_depth)
             ; gas = U256.to_uint64 call_gas
             ; recipient
             ; sender
@@ -1348,7 +1347,7 @@ struct
             { kind
             ; delegated = false
             ; static = false
-            ; depth = new_depth
+            ; depth = Int32.of_int new_depth
             ; gas = Uint.to_int64 create_message_gas
             ; recipient = Address.zero
             ; sender = self_addr

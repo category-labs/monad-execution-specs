@@ -223,3 +223,44 @@ struct
 
   include Trans (Identity)
 end
+
+module Reader (T : sig
+  type t
+end) =
+struct
+  module type SIG = sig
+    include SIG_MONAD
+    val read : T.t t
+  end
+
+  module Make (S : SIG) = struct
+    include S
+    include Make_Monad (S)
+  end
+
+  module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) : SIG = Make (struct
+    include MT
+    let read = MT.lift M.read
+  end)
+
+  module Trans (Inner : SIG_MONAD) = struct
+    module Inner = Make_Monad (Inner)
+
+    include Make (struct
+      type 'a t = T.t -> 'a Inner.t
+      let return (x : 'a) : 'a t = fun _ -> Inner.return x
+      let ( >>= ) (x : T.t -> 'a Inner.t) (f : 'a -> T.t -> 'b Inner.t) =
+       fun s -> Inner.(
+         let$ x = x s in
+         let$ fx = f x s in
+         return fx)
+
+      let read = fun s -> Inner.return s
+    end)
+
+    let lower (x : T.t -> 'a) : 'a t = fun s -> Inner.return (x s)
+    let lift (x : 'a Inner.t) : 'a t = fun _ -> x
+  end
+
+  include Trans (Identity)
+end
