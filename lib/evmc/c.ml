@@ -1,5 +1,6 @@
 (** C versions of the EVMC types. *)
 open Numeric
+
 open Ctypes
 open Foreign
 open Ocaml
@@ -14,29 +15,41 @@ let enum_view ~name mapping =
   let c_of_ocaml v = fst (List.find (fun (_, value) -> value = v) mapping) in
   view ~read:ocaml_of_c ~write:c_of_ocaml int32_t
 
+let is_flag_set flags flag = Int32.(zero <> logand flags flag)
+
 module type NUMERIC = sig
   type t
   val byte_width : int
+  val signed : bool
   val to_bytes_be : t -> Bytes.t
   val of_bytes_be : Bytes.t -> t
 end
 module Numeric_View (M : NUMERIC) = struct
   type t = M.t
 
-  (* TODO: this is technically not right, since C cannot actually return arrays *)
-  type repr = Unsigned.UInt8.t carray
-  let repr : repr typ = array M.byte_width uint8_t
+  (* TODO: due to a quirk of the implementation, Ctypes does not allow passing structs that contain arrays *)
+  type repr
+  let repr : repr structure typ =
+    structure (Format.sprintf "%s%d_t" (if M.signed then "int" else "uint") (8 * M.byte_width))
+  let fields =
+    Seq.(take M.byte_width (ints 0))
+    |> Seq.map (fun i -> field repr (Format.sprintf "byte_%d" i) uint8_t)
+    |> Array.of_seq
+  let byte i = fields.(i)
 
-  let c_of_ocaml (value : M.t) : repr =
+  (*let bytes = field repr "bytes" (array M.byte_width uint8_t)*)
+  let () = seal repr
+
+  let c_of_ocaml (value : M.t) : repr structure =
     let bytes = M.to_bytes_be value in
-    let arr = CArray.make uint8_t M.byte_width in
+    let c = make repr in
     for i = 0 to M.byte_width - 1 do
-      CArray.set arr i (Unsigned.UInt8.of_int (Char.code bytes.[i]))
+      setf c (byte i) (Unsigned.UInt8.of_int (Char.code bytes.[i]))
     done ;
-    arr
+    c
 
-  let ocaml_of_c (bytes : repr) : M.t =
-    let bytes = Bytes.init M.byte_width (fun i -> Char.chr (Unsigned.UInt8.to_int (CArray.get bytes i))) in
+  let ocaml_of_c (value : repr structure) : M.t =
+    let bytes = Bytes.init M.byte_width (fun i -> Char.chr (Unsigned.UInt8.to_int (getf value (byte i)))) in
     M.of_bytes_be bytes
 
   let t = view ~write:c_of_ocaml ~read:ocaml_of_c repr
@@ -84,6 +97,28 @@ module List = struct
   let ocaml_of_c (type t) (c_buf : t ptr) (c_length : Unsigned.size_t) : t list =
     if Unsigned.Size_t.(equal c_length zero) then []
     else Ctypes.CArray.(to_list (from_ptr c_buf (Unsigned.Size_t.to_int c_length)))
+end
+
+module Revision = struct
+  let mapping =
+    Chain.Ethereum.Revision.
+      [ (0l, Frontier)
+      ; (1l, Homestead)
+      ; (2l, TangerineWhistle)
+      ; (3l, SpuriousDragon)
+      ; (4l, Byzantium)
+      ; (5l, Constantinople)
+      ; (6l, Petersburg)
+      ; (7l, Istanbul)
+      ; (8l, Berlin)
+      ; (9l, London)
+      ; (10l, Paris)
+      ; (11l, Shanghai)
+      ; (12l, Cancun)
+      ; (13l, Prague)
+      ; (14l, Osaka)
+      ; (15l, Experimental) ]
+  let t = enum_view ~name:"evmc_revision" mapping
 end
 
 module Message = struct
@@ -190,7 +225,7 @@ module Result = struct
   let output_size = field repr "output_size" size_t
   let release = field repr "release" (funptr (ptr repr @-> returning void))
   let create_address = field repr "create_address" Address.t
-  let padding = field repr "padding" (array 4 uint8_t)
+  let padding = field repr "padding" int32_t
   let () = seal repr
 
   let c_of_ocaml (res : Result.t) : repr structure =
@@ -281,6 +316,9 @@ module TxContext = struct
     c
 
   let ocaml_of_c (tx_ctx : repr structure) : TxContext.t =
+    Format.printf "tx_ctx: \n";
+    Ctypes.format repr Format.std_formatter tx_ctx;
+    Format.print_flush ();
     TxContext.
       { tx_gas_price = getf tx_ctx tx_gas_price
       ; tx_origin = getf tx_ctx tx_origin
@@ -302,7 +340,6 @@ module HostInterface = struct
   type t
   let t : t structure typ = structure "evmc_host_interface"
 
-  let foo = field t "foo" (Foreign.funptr Ctypes.(int @-> returning int))
   let account_exists =
     field t "account_exists" (funptr Ctypes.(ptr HostContext.t @-> Address.ptr_t @-> returning bool))
 
@@ -379,22 +416,82 @@ module HostInterface = struct
       (funptr Ctypes.(ptr HostContext.t @-> const Bytes32.ptr_t @-> returning Bytes32.t))
   let set_transient_storage =
     field t "set_transient_storage"
-      (funptr Ctypes.(ptr HostContext.t @-> const Bytes32.ptr_t @-> const Bytes32.ptr_t @-> returning void))
+      (funptr (ptr HostContext.t @-> const Bytes32.ptr_t @-> const Bytes32.ptr_t @-> returning void))
+
+  let () = seal t
 end
 
-module Bind (M : sig
-  val host_api : HostInterface.t Ctypes.structure
-end) : Host.SIG = struct
+module Vm = struct
+  module SetOptionResult = struct
+    type t = [`Success | `Invalid_Name | `Invalid_Value]
+    type repr = int32
+    let repr = int32_t
+    let t : t typ =
+      enum_view ~name:"evmc_set_option_result" [(0l, `Success); (1l, `Invalid_Name); (2l, `Invalid_Value)]
+  end
+  module Capabilities = struct
+    type t = {evm1 : bool; ewasm : bool; precompiles : bool}
+
+    type repr = int32
+    let repr = int32_t
+
+    let evm1_mask = 1l
+    let ewasm_mask = 2l
+    let precompiles_mask = 4l
+
+    let ocaml_of_c (flags : int32) =
+      { evm1 = is_flag_set flags evm1_mask
+      ; ewasm = is_flag_set flags ewasm_mask
+      ; precompiles = is_flag_set flags precompiles_mask }
+
+    let c_of_ocaml (flags : t) =
+      let open Int32 in
+      let f1 = if flags.evm1 then evm1_mask else zero in
+      let f2 = if flags.ewasm then ewasm_mask else zero in
+      let f3 = if flags.precompiles then precompiles_mask else zero in
+      logor f1 (logor f2 f3)
+
+    let t = view ~read:ocaml_of_c ~write:c_of_ocaml repr
+  end
+  type repr
+  let repr : repr structure typ = structure "evmc_vm"
+  let abi_version = field repr "abi_version" Revision.t
+  let name = field repr "name" string
+  let version = field repr "version" string
+  let destroy = field repr "destroy" (funptr (ptr repr @-> returning void))
+  let execute =
+    field repr "execute"
+      (funptr
+         ( ptr repr
+         @-> const (ptr HostInterface.t)
+         @-> const (ptr HostContext.t)
+         @-> Revision.t
+         @-> const (ptr Message.t)
+         @-> const (ptr uint8_t)
+         @-> size_t
+         @-> returning Result.t ) )
+  let get_capabilities = field repr "get_capabilities" (funptr (ptr repr @-> returning Capabilities.t))
+  let set_option =
+    field repr "set_option"
+      (funptr (ptr repr @-> const (ptr char) @-> const (ptr char) @-> returning SetOptionResult.t))
+  let () = seal repr
+end
+
+module CHostMonad = Monad.Reader (struct
+  type t = HostInterface.t structure ptr * HostContext.t structure ptr
+end)
+
+(** An OCaml EVMC host backed by a C EVMC host *)
+module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
   open Ctypes
-  include Monad.Reader (struct
-    type t = HostContext.t structure ptr
-  end)
+  include CHostMonad
 
   module API = HostInterface
 
   let bind field =
-    let$ host = read in
-    return (getf M.host_api field host)
+    let$ api, ctx = read in
+    let member = !@(api |-> field) in
+    return (member ctx)
 
   let ( <@> ) (f : ('a -> 'b) t) (x : 'a) : 'b t = f <*> return x
 
@@ -448,4 +545,49 @@ end) : Host.SIG = struct
 
   let get_transient_storage key = bind API.get_transient_storage <@> key
   let set_transient_storage key value = bind API.set_transient_storage <@> key <@> value
+end
+
+(** A C EVMC VM backed by an OCaml EVMC VM *)
+module OCamlVM
+    (VmF : functor (Host : Ocaml.Host.SIG with type 'a t = 'a CHostMonad.t) -> Ocaml.Vm(CHostMonad).SIG) =
+struct
+  module VmImpl = VmF (CHost)
+  let vm : Vm.repr structure ptr =
+    let open Vm in
+    let vm = make repr in
+    setf vm abi_version Chain.Ethereum.Revision.Cancun ;
+    setf vm name "vm" ;
+    setf vm version "0.0" ;
+    setf vm destroy (fun _vm -> ()) ;
+    setf vm execute (fun _vm host_api host_ctx _rev msg code size ->
+        Format.printf "FROM OCAML SIDE context: ";
+        Ctypes.format HostInterface.t Format.std_formatter (!@ host_api);
+        Format.print_flush();
+        let code = Bytes.ocaml_of_c code size in
+        let result = VmImpl.execute !@msg code (host_api, host_ctx) in
+        Format.printf "ABOUT TO EXIT OCAML CONTEXT AFTER EXECUTION\n";
+        Format.print_flush();
+        result
+      ) ;
+    setf vm get_capabilities (fun _vm -> Capabilities.{evm1 = true; ewasm = false; precompiles = false}) ;
+    setf vm set_option (fun _vm _option _value -> `Invalid_Name) ;
+    allocate repr vm
+
+  let string_of_ptr ty p =
+    let ptr = coerce ty (ptr void) p in
+    Format.sprintf "%x" (Nativeint.to_int (raw_address_of_ptr ptr))
+
+  let () =
+    let p = coerce (ptr Vm.repr) (ptr void) vm in
+    begin
+      Format.printf "OCAML\n" ;
+      Format.printf "monad_vm: %x\n" (Nativeint.to_int (raw_address_of_ptr p)) ;
+      Format.printf "{\n" ;
+      Format.printf "\tname: %s\n" !@(vm |-> Vm.name) ;
+      Format.printf "\tversion: %s\n" !@(vm |-> Vm.version) ;
+      Format.printf "\tdestroy: ???\n" ;
+      Format.printf "\texecute: ???\n" ;
+      Format.printf "}\n" ;
+      Format.print_flush ()
+    end
 end

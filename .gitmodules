@@ -1,0 +1,3 @@
+[submodule "third_party/evmc"]
+	path = third_party/evmc
+	url = https://github.com/ipsilon/evmc
