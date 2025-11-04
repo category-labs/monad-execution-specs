@@ -4,6 +4,7 @@
  (name monad_lib)
  (public_name monad-spec.monad_lib)
  (libraries zarith lens digestif ctypes ctypes.stubs ctypes-foreign)
- (ocamlopt_flags (:standard -g -keep-locs -inline 0 -rounds 0))
+ (ocamlopt_flags
+  (:standard -g -keep-locs -inline 0 -rounds 0))
  (preprocess
   (pps lens.ppx_deriving)))

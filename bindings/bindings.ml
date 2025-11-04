@@ -1,9 +1,11 @@
 (** C versions of the EVMC types. *)
+open Monad_lib
+
 open Numeric
 
 open Ctypes
 open Foreign
-open Ocaml
+open Evmc
 
 (* TODO: this is not portable as it assumes that every struct is 32 bits. *)
 let enum_view ~name mapping =
@@ -235,7 +237,7 @@ module Result = struct
     setf c gas_refund res.gas_refund ;
     (let data, size = Bytes.c_of_ocaml res.output_data in
      setf c output_data data ; setf c output_size size ) ;
-    setf c release (coerce (ptr void) (funptr (ptr repr @-> returning void)) null) ;
+    setf c release (fun _result -> ()) ;
     setf c create_address (match res.create_address with None -> U160.zero | Some addr -> addr) ;
     c
 
@@ -316,9 +318,9 @@ module TxContext = struct
     c
 
   let ocaml_of_c (tx_ctx : repr structure) : TxContext.t =
-    Format.printf "tx_ctx: \n";
-    Ctypes.format repr Format.std_formatter tx_ctx;
-    Format.print_flush ();
+    Format.printf "tx_ctx: \n" ;
+    Ctypes.format repr Format.std_formatter tx_ctx ;
+    Format.print_flush () ;
     TxContext.
       { tx_gas_price = getf tx_ctx tx_gas_price
       ; tx_origin = getf tx_ctx tx_origin
@@ -421,62 +423,6 @@ module HostInterface = struct
   let () = seal t
 end
 
-module Vm = struct
-  module SetOptionResult = struct
-    type t = [`Success | `Invalid_Name | `Invalid_Value]
-    type repr = int32
-    let repr = int32_t
-    let t : t typ =
-      enum_view ~name:"evmc_set_option_result" [(0l, `Success); (1l, `Invalid_Name); (2l, `Invalid_Value)]
-  end
-  module Capabilities = struct
-    type t = {evm1 : bool; ewasm : bool; precompiles : bool}
-
-    type repr = int32
-    let repr = int32_t
-
-    let evm1_mask = 1l
-    let ewasm_mask = 2l
-    let precompiles_mask = 4l
-
-    let ocaml_of_c (flags : int32) =
-      { evm1 = is_flag_set flags evm1_mask
-      ; ewasm = is_flag_set flags ewasm_mask
-      ; precompiles = is_flag_set flags precompiles_mask }
-
-    let c_of_ocaml (flags : t) =
-      let open Int32 in
-      let f1 = if flags.evm1 then evm1_mask else zero in
-      let f2 = if flags.ewasm then ewasm_mask else zero in
-      let f3 = if flags.precompiles then precompiles_mask else zero in
-      logor f1 (logor f2 f3)
-
-    let t = view ~read:ocaml_of_c ~write:c_of_ocaml repr
-  end
-  type repr
-  let repr : repr structure typ = structure "evmc_vm"
-  let abi_version = field repr "abi_version" Revision.t
-  let name = field repr "name" string
-  let version = field repr "version" string
-  let destroy = field repr "destroy" (funptr (ptr repr @-> returning void))
-  let execute =
-    field repr "execute"
-      (funptr
-         ( ptr repr
-         @-> const (ptr HostInterface.t)
-         @-> const (ptr HostContext.t)
-         @-> Revision.t
-         @-> const (ptr Message.t)
-         @-> const (ptr uint8_t)
-         @-> size_t
-         @-> returning Result.t ) )
-  let get_capabilities = field repr "get_capabilities" (funptr (ptr repr @-> returning Capabilities.t))
-  let set_option =
-    field repr "set_option"
-      (funptr (ptr repr @-> const (ptr char) @-> const (ptr char) @-> returning SetOptionResult.t))
-  let () = seal repr
-end
-
 module CHostMonad = Monad.Reader (struct
   type t = HostInterface.t structure ptr * HostContext.t structure ptr
 end)
@@ -547,47 +493,82 @@ module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
   let set_transient_storage key value = bind API.set_transient_storage <@> key <@> value
 end
 
-(** A C EVMC VM backed by an OCaml EVMC VM *)
-module OCamlVM
-    (VmF : functor (Host : Ocaml.Host.SIG with type 'a t = 'a CHostMonad.t) -> Ocaml.Vm(CHostMonad).SIG) =
-struct
-  module VmImpl = VmF (CHost)
-  let vm : Vm.repr structure ptr =
-    let open Vm in
-    let vm = make repr in
-    setf vm abi_version Chain.Ethereum.Revision.Cancun ;
-    setf vm name "vm" ;
-    setf vm version "0.0" ;
-    setf vm destroy (fun _vm -> ()) ;
-    setf vm execute (fun _vm host_api host_ctx _rev msg code size ->
-        Format.printf "FROM OCAML SIDE context: ";
-        Ctypes.format HostInterface.t Format.std_formatter (!@ host_api);
-        Format.print_flush();
-        let code = Bytes.ocaml_of_c code size in
-        let result = VmImpl.execute !@msg code (host_api, host_ctx) in
-        Format.printf "ABOUT TO EXIT OCAML CONTEXT AFTER EXECUTION\n";
-        Format.print_flush();
-        result
-      ) ;
-    setf vm get_capabilities (fun _vm -> Capabilities.{evm1 = true; ewasm = false; precompiles = false}) ;
-    setf vm set_option (fun _vm _option _value -> `Invalid_Name) ;
-    allocate repr vm
+module Vm = struct
+  module SetOptionResult = struct
+    type t = [`Success | `Invalid_Name | `Invalid_Value]
+    type repr = int32
+    let repr = int32_t
+    let t : t typ =
+      enum_view ~name:"evmc_set_option_result" [(0l, `Success); (1l, `Invalid_Name); (2l, `Invalid_Value)]
+  end
+  module Capabilities = struct
+    type t = {evm1 : bool; ewasm : bool; precompiles : bool}
 
-  let string_of_ptr ty p =
-    let ptr = coerce ty (ptr void) p in
-    Format.sprintf "%x" (Nativeint.to_int (raw_address_of_ptr ptr))
+    type repr = int32
+    let repr = int32_t
 
-  let () =
-    let p = coerce (ptr Vm.repr) (ptr void) vm in
-    begin
-      Format.printf "OCAML\n" ;
-      Format.printf "monad_vm: %x\n" (Nativeint.to_int (raw_address_of_ptr p)) ;
-      Format.printf "{\n" ;
-      Format.printf "\tname: %s\n" !@(vm |-> Vm.name) ;
-      Format.printf "\tversion: %s\n" !@(vm |-> Vm.version) ;
-      Format.printf "\tdestroy: ???\n" ;
-      Format.printf "\texecute: ???\n" ;
-      Format.printf "}\n" ;
-      Format.print_flush ()
-    end
+    let evm1_mask = 1l
+    let ewasm_mask = 2l
+    let precompiles_mask = 4l
+
+    let ocaml_of_c (flags : int32) =
+      { evm1 = is_flag_set flags evm1_mask
+      ; ewasm = is_flag_set flags ewasm_mask
+      ; precompiles = is_flag_set flags precompiles_mask }
+
+    let c_of_ocaml (flags : t) =
+      let open Int32 in
+      let f1 = if flags.evm1 then evm1_mask else zero in
+      let f2 = if flags.ewasm then ewasm_mask else zero in
+      let f3 = if flags.precompiles then precompiles_mask else zero in
+      logor f1 (logor f2 f3)
+
+    let t = view ~read:ocaml_of_c ~write:c_of_ocaml repr
+  end
+  type repr
+  let repr : repr structure typ = structure "evmc_vm"
+  let abi_version = field repr "abi_version" Revision.t
+  let name = field repr "name" string
+  let version = field repr "version" string
+  let destroy = field repr "destroy" (funptr (ptr repr @-> returning void))
+  let execute =
+    field repr "execute"
+      (funptr
+         ( ptr repr
+         @-> const (ptr HostInterface.t)
+         @-> const (ptr HostContext.t)
+         @-> Revision.t
+         @-> const (ptr Message.t)
+         @-> const (ptr uint8_t)
+         @-> size_t
+         @-> returning Result.t ) )
+  let get_capabilities = field repr "get_capabilities" (funptr (ptr repr @-> returning Capabilities.t))
+  let set_option =
+    field repr "set_option"
+      (funptr (ptr repr @-> const (ptr char) @-> const (ptr char) @-> returning SetOptionResult.t))
+  let () = seal repr
+
+  module Pack (VmF : functor (_ : Evmc.Host.SIG with type 'a t = 'a CHostMonad.t) -> Evmc.Vm(CHostMonad).SIG) =
+  struct
+    module VmImpl = VmF (CHost)
+
+    let vm =
+      let vm = make repr in
+      setf vm abi_version Chain.Ethereum.Revision.Cancun ;
+      setf vm name "vm" ;
+      setf vm version "0.0" ;
+      setf vm destroy (fun _vm -> ()) ;
+      setf vm execute (fun _vm host_api host_ctx _rev msg code size ->
+          Format.printf "FROM OCAML SIDE context: " ;
+          Ctypes.format HostInterface.t Format.std_formatter !@host_api ;
+          Format.print_flush () ;
+          let code = Bytes.ocaml_of_c code size in
+          let result = VmImpl.execute !@msg code (host_api, host_ctx) in
+          Format.printf "ABOUT TO EXIT OCAML CONTEXT AFTER EXECUTION\n" ;
+          Format.print_flush () ;
+          result ) ;
+      setf vm get_capabilities (fun _vm -> Capabilities.{evm1 = true; ewasm = false; precompiles = false}) ;
+      setf vm set_option (fun _vm _option _value -> `Invalid_Name) ;
+      allocate repr vm
+  end
 end

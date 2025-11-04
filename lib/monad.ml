@@ -250,10 +250,11 @@ struct
       type 'a t = T.t -> 'a Inner.t
       let return (x : 'a) : 'a t = fun _ -> Inner.return x
       let ( >>= ) (x : T.t -> 'a Inner.t) (f : 'a -> T.t -> 'b Inner.t) =
-       fun s -> Inner.(
-         let$ x = x s in
-         let$ fx = f x s in
-         return fx)
+       fun s ->
+        Inner.(
+          let$ x = x s in
+          let$ fx = f x s in
+          return fx )
 
       let read = fun s -> Inner.return s
     end)
