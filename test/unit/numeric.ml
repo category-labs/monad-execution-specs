@@ -16,4 +16,7 @@ let () =
       , [ check_prop ~print:Print.u256 ~name:"x = as_unsigned (as_signed x)" Gen.u256 (fun x ->
               I256.as_unsigned (U256.as_signed x) = x )
         ; check_prop ~print:Print.i256 ~name:"x = as_signed (as_unsigned x)" Gen.i256 (fun x ->
-              U256.as_signed (I256.as_unsigned x) = x ) ] ) ]
+              U256.as_signed (I256.as_unsigned x) = x ) ] )
+    ; ( "Round-trip to bytes"
+      , [ check_prop ~print:Print.u256 ~name:"x = of_bytes_be (to_bytes_be x)" Gen.u256 (fun x ->
+              x = U256.(of_bytes_be (to_bytes_be x)) ) ] ) ]

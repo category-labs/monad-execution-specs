@@ -775,7 +775,7 @@ struct
     let$ () = spend access_gas in
 
     (* Operation *)
-    let$ size = U256.of_int64 <$> (HostAPI.get_code_size address) in
+    let$ size = U256.of_int64 <$> HostAPI.get_code_size address in
     let$ () = push size in
 
     (* PC *)
@@ -1295,7 +1295,7 @@ struct
             { kind
             ; delegated
             ; static
-            ; depth = (Int32.of_int new_depth)
+            ; depth = Int32.of_int new_depth
             ; gas = U256.to_uint64 call_gas
             ; recipient
             ; sender
@@ -1762,9 +1762,8 @@ struct
     if Params.trace then ( fun stack ->
       Format.printf "<top>\n" ;
       List.iter (fun elt -> Format.printf "%s\n" (U256.to_string elt)) stack ;
-      Format.printf "<bottom>\n";
-      Format.print_flush ()
-                         )
+      Format.printf "<bottom>\n" ;
+      Format.print_flush () )
     else fun _ -> ()
 
   let trace_state =
@@ -1789,9 +1788,10 @@ struct
       | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
       | _ -> Opcode.Stop
     in
-    ( if Params.trace then
-        let info = Opcode.info opcode in
-        Format.printf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name; Format.print_flush() ) ;
+    if Params.trace then (
+      let info = Opcode.info opcode in
+      Format.printf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ;
+      Format.print_flush () ) ;
     let$ continue = execute_opcode opcode in
     if continue then run code else return ()
 
@@ -1801,7 +1801,7 @@ struct
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg in
     let$ res, ctx = run code ctx in
-    (if Params.trace then (Format.printf "Finished execution\n"; Format.print_flush ()));
+    if Params.trace then (Format.printf "Finished execution\n" ; Format.print_flush ()) ;
     return
       ( match res with
       | Ok () ->
