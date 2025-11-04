@@ -108,7 +108,8 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
               (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
                  time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
                  code below handles truncating, reversing and optionally zero-padding *)
-              if i > z_n_bytes - 1 then '\x00' else z_bytes.[z_n_bytes - 1 - i] )
+              let le_i = byte_width - i - 1 in
+              if le_i >= z_n_bytes then '\x00' else z_bytes.[le_i])
 
   let to_bytes_le : t -> Bytes.t = fun x -> Bytes.reverse (to_bytes_be x)
 
