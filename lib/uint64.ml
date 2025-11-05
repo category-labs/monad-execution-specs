@@ -6,7 +6,7 @@ let div = Stdlib.Int64.unsigned_div
 let rem = Stdlib.Int64.unsigned_rem
 let ( / ) = Stdlib.Int64.unsigned_div
 
-let (~$) = Stdlib.Int64.of_int
+let ( ~$ ) = Stdlib.Int64.of_int
 
 let compare = Stdlib.Int64.unsigned_compare
 
