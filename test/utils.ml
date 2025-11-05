@@ -7,18 +7,19 @@ module Revision = struct
 end
 
 module Params = struct
-  let chain_id = U256.(~$10_143) (* Testnet *)
-  let trace = false
+  let trace = true
 end
 
-module HostImpl = Evmc.DummyHost (Params)
+module HostImpl = Evmc.DummyHost (struct
+  let chain_id = U256.zero
+end)
 
 module Evm = struct
   module Evm0 = Evmc.Instantiate (HostImpl.M) (HostImpl.Make) (Vm.Make (Params))
 
   (* Unfold one level of recursion to get access to the full signature of Vm and Host *)
   module Vm = Vm.Make (Params) (Evm0.Host)
-  module Host = HostImpl.Make (Vm)
+  module Host = Evm0.Host
 end
 
 (* U256.t generator *)
@@ -99,7 +100,7 @@ let test_message
     let open Evm.Host in
     let$ () = prepare_env in
     let$ tx_context = get_tx_context in
-    let ctx = Evm.Vm.Context.make tx_context msg in
+    let ctx = Vm.Context.make tx_context msg in
     let$ res, ctx =
       Evm.Vm.M.(
         let$ () = prepare_vm in
@@ -162,9 +163,8 @@ let bytecode_to_call_message code =
 
 let expect_stack expected_stack =
   let open Lens.Infix in
-  let open Evm.Vm in
   let open Evm.Vm.M in
-  let$ stack = !(Context.machine_state |-- MachineState.stack) in
+  let$ stack = !(Vm.Context.machine_state |-- Vm.MachineState.stack) in
   Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
     ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
   return
@@ -175,12 +175,11 @@ let expect_stack expected_stack =
 
 let test_bytecode_pure bc ~input_stack ~output_stack =
   let open Lens.Infix in
-  let open Evm.Vm in
   let open Evm.Vm.M in
   let msg = bytecode_to_call_message bc in
   ignore
     (test_message
-       ~prepare_vm:(Context.machine_state |-- MachineState.stack := input_stack)
+       ~prepare_vm:(Vm.Context.machine_state |-- Vm.MachineState.stack := input_stack)
        ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =

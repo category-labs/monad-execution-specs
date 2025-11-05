@@ -215,6 +215,11 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
 
   (* YP 331 *)
   let minus_1_64th (x : t) : t = x - (x / ~$64)
+
+  (** [bytes_to_whole_words x] computes {m ceil(x / 32)}. *)
+  let bytes_to_whole_words (x : t) =
+    let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
+    of_z_exn q + if Z.(equal r zero) then zero else one
 end
 
 module Size = struct
@@ -303,7 +308,8 @@ module TwosComplement (B : IS_BOUNDED) = struct
       Signed.of_z_exn (Z.signed_extract (to_z x) 0 Stdlib.(1 + bit_i))
 
     let to_unbounded (x : t) : Uint.t = Uint.of_z_exn (to_z x)
-    let of_unbounded (x : Uint.t) : t = of_z_exn (Uint.to_z x)
+    let of_unbounded_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
+    let of_unbounded_truncating (x: Uint.t) : t = of_z_truncating (Uint.to_z x)
 
     let of_signed_int (x : int) = Signed.(as_unsigned ~$x)
   end
@@ -313,9 +319,6 @@ module Bits256 = TwosComplement (Size.Bits256)
 (** Unsigned 256-bit integers. {!U256.t} is used to represent Ethereum 256-bit words. *)
 module U256 = struct
   include Bits256.Unsigned
-  let bytes_to_whole_words (x : t) =
-    let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
-    of_z_exn q + if Z.(equal r zero) then zero else one
 end
 (** Signed 256-bit integers. {!I256.t} is used for signed arithmetic on Ethereum 256-bit words. *)
 module I256 = Bits256.Signed
