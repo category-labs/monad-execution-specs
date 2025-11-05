@@ -40,8 +40,7 @@ let warm_access_cost = ~$100
 let account_access_cost = function `Warm -> warm_access_cost | `Cold -> cold_account_access_cost
 
 let memory_cost_per_word = ~$3
-let memory_cost (active_memory_words : U256.t) =
-  let active_memory_words = U256.to_unbounded active_memory_words in
+let memory_cost (active_memory_words : Uint.t) =
   Uint.(((active_memory_words ** 2) / ~$512) + (memory_cost_per_word * active_memory_words))
 
 let copy_cost_per_word = ~$3

@@ -5,176 +5,196 @@ module Bytecode = struct
   type instr
 end
 
+module Memory : sig
+  type t
+  val empty : t
+
+  val read_block_at : U256.t -> U256.t -> t -> Bytes.t
+  val read_word_at : U256.t -> t -> U256.t
+
+  val write_block_at : U256.t -> Bytes.t -> t -> t
+  val write_word_at : U256.t -> U256.t -> t -> t
+  val write_byte_at : U256.t -> char -> t -> t
+
+  val active_words : t -> Uint.t (* μ_i *)
+
+  val extend_to : start:U256.t -> size_bytes:U256.t -> t -> t
+
+  (* For debugging purposes *)
+  val dump : t -> unit
+end = struct
+  type t =
+    {contents : char U256.Map.t (* Corresponds to μ_m *); active_bytes : Uint.t (* Corresponds to μ_i * 32 *)}
+
+  let read_block_at start size (mem : t) =
+    assert (Uint.(mem.active_bytes >= U256.(to_unbounded start) + U256.(to_unbounded size))) ;
+    let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
+    Bytes.init size (fun byte_i ->
+        U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' )
+
+  let read_word_at pos (mem : t) = U256.of_bytes_be (read_block_at pos U256.(~$32) mem)
+
+  let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
+    assert (Uint.(mem.active_bytes >= U256.(to_unbounded pos) + ~$(Bytes.length bytes))) ;
+    let contents =
+      Seq.take (Bytes.length bytes) (Seq.ints 0)
+      |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
+      |> fun entries -> U256.Map.add_seq entries mem.contents
+    in
+    {mem with contents}
+
+  let write_word_at pos w = write_block_at pos (U256.to_bytes_be w)
+
+  let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
+
+  let empty = {contents = U256.Map.empty; active_bytes = Uint.zero}
+
+  let active_words mem = Uint.bytes_to_whole_words mem.active_bytes
+
+  let extend_to ~start ~size_bytes mem =
+    (* Round up to whole words. *)
+    let active_words = Uint.(bytes_to_whole_words (U256.to_unbounded start + U256.to_unbounded size_bytes)) in
+    let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
+    {mem with active_bytes}
+
+  let dump mem =
+    (* Write one word at a time *)
+    let rec loop pos =
+      if Uint.(pos < mem.active_bytes) then (
+        Format.printf "%s: %s\n" (Uint.to_short_hex_string pos)
+          (Bytes.to_hex_string (read_block_at (U256.of_unbounded_exn pos) U256.(~$32) mem)) ;
+        loop Uint.(pos + ~$32) )
+    in
+    loop Uint.zero
+end
+
+module MachineState = struct
+  (* YP 9.4.1 *)
+  type t =
+    { gas : Uint.t (* μ_g *)
+    ; pc : U256.t (* μ_pc *)
+    ; memory : Memory.t (* μ_m, μ_i *)
+    ; stack : U256.t list (* μ_s *)
+    ; output_buffer : Bytes.t (* μ_o *)
+    ; gas_refund : Uint.t
+          (* A_r *)
+          (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
+               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
+               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
+    }
+  [@@deriving lens {submodule = true; prefix = true}]
+  include TLens
+
+  let initial =
+    { gas = Uint.zero
+    ; pc = U256.zero
+    ; memory = Memory.empty
+    ; stack = []
+    ; output_buffer = Bytes.empty
+    ; gas_refund = Uint.zero }
+end
+
+module ExecutionEnvironment = struct
+  open Chain.Ethereum
+
+  module ExecutionBlockHeader = struct
+    (* The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
+         does not give us the full block header information, only those fields required for executing EVM
+         bytecode. Otherwise, this is as YP 4.4 with the addition of the chain ID β, which is an ambient
+         parameter in the Yellow Paper but is integrated as part of the block environment in the Ethereum
+         executable spec. *)
+    type t =
+      { coinbase : Address.t (* H_c *)
+      ; number : U256.t (* H_i *)
+      ; timestamp : U256.t (* H_s *)
+      ; gas_limit : U256.t (* H_l *)
+      ; prev_randao : Address.t (* H_a *)
+      ; base_fee : U256.t (* H_f *)
+      ; chain_id : U256.t (* β *) }
+    [@@deriving lens {submodule = true; prefix = true}]
+    include TLens
+
+    let of_tx_context (ctx : Evmc.TxContext.t) : t =
+      { coinbase = ctx.block_coinbase
+      ; number = U256.of_uint64 ctx.block_number
+      ; timestamp = U256.of_uint64 ctx.block_timestamp
+      ; gas_limit = U256.of_uint64 ctx.block_gas_limit
+      ; prev_randao = ctx.block_prev_randao
+      ; base_fee = ctx.block_base_fee
+      ; chain_id = ctx.chain_id }
+  end
+  include ExecutionBlockHeader
+
+  (* YP 9.3 *)
+  type t =
+    { address : Address.t (* I_a *)
+    ; origin : Address.t (* I_o *)
+    ; price : U256.t (* I_p *)
+    ; data : Bytes.t (* I_d *)
+    ; sender : Address.t (* I_s *)
+    ; value : U256.t (* I_w *)
+    ; bytes : Bytes.t (* I_b *)
+    ; header : ExecutionBlockHeader.t (* I_H *)
+    ; depth : int
+    ; write_permission : bool (* I_w *)
+    ; blob_versioned_hashes : U256.t list (* EIP-4844 *)
+    ; blob_base_fee : U256.t (* EIP-7516 *) }
+  [@@deriving lens {submodule = true; prefix = true}]
+  include TLens
+
+  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
+    { address = msg.recipient
+    ; origin = ctx.tx_origin
+    ; price = ctx.tx_gas_price
+    ; data = msg.input_data
+    ; sender = msg.sender
+    ; value = msg.value
+    ; bytes = msg.code
+    ; header = ExecutionBlockHeader.of_tx_context ctx
+    ; depth = msg.depth
+    ; write_permission = not msg.static
+    ; blob_versioned_hashes = ctx.blob_hashes
+    ; blob_base_fee = ctx.blob_base_fee }
+end
+
+module Context = struct
+  type t =
+    { execution_environment : ExecutionEnvironment.t (* I *)
+    ; machine_state : MachineState.t (* μ *)
+    ; jump_destinations : U256.Set.t (* D(c) *)
+    ; initial_storage : U256.t U256.Map.t
+          (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *) }
+  [@@deriving lens {submodule = true; prefix = true}]
+  include TLens
+
+  let valid_jump_destinations code =
+    let rec loop i valid_destinations =
+      if i >= Bytes.length code then valid_destinations
+      else
+        match code.[i] with
+        | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
+        | '\x60' .. '\x7f' as opcode ->
+            let push_bytes = Char.code opcode - 0x60 + 1 in
+            loop (i + 1 + push_bytes) valid_destinations
+        | _ -> loop (i + 1) valid_destinations
+    in
+    loop 0 U256.Set.empty
+
+  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
+    { execution_environment = ExecutionEnvironment.make ctx msg
+    ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
+    ; jump_destinations = valid_jump_destinations msg.code
+    ; initial_storage = U256.Map.empty }
+end
+
 module Make
     (Params : sig
       val trace : bool
-      val chain_id : U256.t
     end)
     (Host : Evmc.Host.SIG) =
 struct
-  module Memory : sig
-    type t
-    val empty : t
-
-    val read_block_at : U256.t -> U256.t -> t -> Bytes.t
-    val read_word_at : U256.t -> t -> U256.t
-
-    val write_block_at : U256.t -> Bytes.t -> t -> t
-    val write_word_at : U256.t -> U256.t -> t -> t
-    val write_byte_at : U256.t -> char -> t -> t
-
-    (* For debugging purposes *)
-    val dump : t -> unit
-  end = struct
-    type t = char U256.Map.t
-    let read_block_at start size (mem : t) =
-      let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
-      Bytes.init size (fun byte_i ->
-          U256.Map.find_opt U256.(start + ~$byte_i) mem |> Option.value ~default:'\x00' )
-
-    let read_word_at pos (mem : t) =
-      let bytes_be =
-        Bytes.init 32 (fun byte_i ->
-            U256.Map.find_opt U256.(pos + ~$byte_i) mem |> Option.value ~default:'\x00' )
-      in
-      U256.of_bytes_be bytes_be
-
-    let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
-      Seq.take (Bytes.length bytes) (Seq.ints 0)
-      |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
-      |> fun entries -> U256.Map.add_seq entries mem
-
-    let write_word_at pos w = write_block_at pos (U256.to_bytes_be w)
-
-    let write_byte_at pos b (mem : t) = U256.Map.add pos b mem
-
-    let empty = U256.Map.empty
-
-    let dump mem =
-      U256.Map.to_seq mem
-      |> Seq.iter (fun (k, v) -> Format.printf "%s => 0x%x\n" (U256.to_short_hex_string k) (Char.code v))
-  end
-
-  module MachineState = struct
-    (* YP 9.4.1 *)
-    type t =
-      { gas : Uint.t (* mu_g *)
-      ; pc : U256.t (* mu_pc *)
-      ; memory : Memory.t (* mu_m *)
-      ; active_memory_words : U256.t (* mu_i *)
-      ; stack : U256.t list (* mu_s *)
-      ; output_buffer : Bytes.t (* mu_o *)
-      ; gas_refund : Uint.t
-            (* A_r *)
-            (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
-               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
-               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
-      }
-    [@@deriving lens {submodule = true; prefix = true}]
-    include TLens
-
-    let initial =
-      { gas = Uint.zero
-      ; pc = U256.zero
-      ; memory = Memory.empty
-      ; active_memory_words = U256.zero
-      ; stack = []
-      ; output_buffer = Bytes.empty
-      ; gas_refund = Uint.zero }
-  end
   open MachineState
-
-  module ExecutionEnvironment = struct
-    open Chain.Ethereum
-
-    module ExecutionBlockHeader = struct
-      (* The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
-         does not give us the full block header information, only those fields required for executing EVM
-         bytecode. Otherwise, this is as YP 4.4. *)
-      type t =
-        { coinbase : Address.t (* H_c *)
-        ; number : U256.t (* H_i *)
-        ; timestamp : U256.t (* H_s *)
-        ; gas_limit : U256.t (* H_l *)
-        ; prev_randao : Address.t (* H_a *)
-        ; base_fee : U256.t (* H_f *) }
-      [@@deriving lens {submodule = true; prefix = true}]
-      include TLens
-
-      let of_tx_context (ctx : Evmc.TxContext.t) : t =
-        { coinbase = ctx.block_coinbase
-        ; number = U256.of_uint64 ctx.block_number
-        ; timestamp = U256.of_uint64 ctx.block_timestamp
-        ; gas_limit = U256.of_uint64 ctx.block_gas_limit
-        ; prev_randao = ctx.block_prev_randao
-        ; base_fee = ctx.block_base_fee }
-    end
-    include ExecutionBlockHeader
-
-    (* YP 9.3 *)
-    type t =
-      { address : Address.t (* I_a *)
-      ; origin : Address.t (* I_o *)
-      ; price : U256.t (* I_p *)
-      ; data : Bytes.t (* I_d *)
-      ; sender : Address.t (* I_s *)
-      ; value : U256.t (* I_w *)
-      ; bytes : Bytes.t (* I_b *)
-      ; header : ExecutionBlockHeader.t (* I_H *)
-      ; depth : int
-      ; write_permission : bool (* I_w *)
-      ; blob_versioned_hashes : U256.t list (* EIP-4844 *)
-      ; blob_base_fee : U256.t (* EIP-7516 *) }
-    [@@deriving lens {submodule = true; prefix = true}]
-    include TLens
-
-    let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
-      { address = msg.recipient
-      ; origin = ctx.tx_origin
-      ; price = ctx.tx_gas_price
-      ; data = msg.input_data
-      ; sender = msg.sender
-      ; value = msg.value
-      ; bytes = msg.code
-      ; header = ExecutionBlockHeader.of_tx_context ctx
-      ; depth = msg.depth
-      ; write_permission = not msg.static
-      ; blob_versioned_hashes = ctx.blob_hashes
-      ; blob_base_fee = ctx.blob_base_fee }
-  end
   open ExecutionEnvironment
-
-  module Context = struct
-    type t =
-      { execution_environment : ExecutionEnvironment.t
-      ; machine_state : MachineState.t
-      ; jump_destinations : U256.Set.t (* D(c) *)
-      ; initial_storage : U256.t U256.Map.t
-            (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *)
-      }
-    [@@deriving lens {submodule = true; prefix = true}]
-    include TLens
-
-    let valid_jump_destinations code =
-      let rec loop i valid_destinations =
-        if i >= Bytes.length code then valid_destinations
-        else
-          match code.[i] with
-          | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
-          | '\x60' .. '\x7f' as opcode ->
-              let push_bytes = Char.code opcode - 0x60 + 1 in
-              loop (i + 1 + push_bytes) valid_destinations
-          | _ -> loop (i + 1) valid_destinations
-      in
-      loop 0 U256.Set.empty
-
-    let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
-      assert (U256.(ctx.chain_id = Params.chain_id)) ;
-      { execution_environment = ExecutionEnvironment.make ctx msg
-      ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
-      ; jump_destinations = valid_jump_destinations msg.code
-      ; initial_storage = U256.Map.empty }
-  end
   open Context
 
   module St = Monad.State (Context)
@@ -606,23 +626,24 @@ struct
     (* PC *)
     increase_pc_and_continue
 
-  let extend_memory_to (new_address : U256.t) : Uint.t M.t =
-    let new_size = U256.(new_address + one) in
-    let$ current_memory_words = !(machine_state |-- active_memory_words) in
-    let new_memory_words = U256.bytes_to_whole_words new_size in
-    if U256.(current_memory_words >= new_memory_words) then return Uint.zero
-    else
-      let$ () = machine_state |-- active_memory_words := new_memory_words in
-      return Gas.(memory_cost new_memory_words - memory_cost current_memory_words)
+  let extend_memory_to ~start ~size_bytes : Uint.t M.t =
+    let$ current_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
+    let$ () =
+      (* TODO: fix bug (make sure tests fail) *)
+      update_field (machine_state |-- memory) (Memory.extend_to ~start ~size_bytes)
+    in
+    let$ new_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
+    if Uint.(current_memory_words >= new_memory_words) then return Uint.zero
+    else return Gas.(memory_cost new_memory_words - memory_cost current_memory_words)
 
   let keccak =
     (* Stack *)
-    let$ input_start = pop in
-    let$ input_size = pop in
+    let$ start = pop in
+    let$ size_bytes = pop in
 
     (* Gas *)
-    let num_hashed_words = U256.bytes_to_whole_words input_size in
-    let$ memory_extension_gas = extend_memory_to U256.(input_start + input_size) in
+    let num_hashed_words = U256.bytes_to_whole_words size_bytes in
+    let$ memory_extension_gas = extend_memory_to ~start ~size_bytes in
     let$ () =
       spend
         Gas.(
@@ -632,7 +653,7 @@ struct
     in
 
     (* Operation *)
-    let$ bytes = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
+    let$ bytes = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
     let$ () = push (Crypto.keccak_256 bytes) in
 
     (* PC *)
@@ -704,17 +725,17 @@ struct
     (* Stack *)
     let$ dst_start = pop in
     let$ src_start = pop in
-    let$ size = pop in
+    let$ size_bytes = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
-    let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
     (* Operation *)
     let$ data = !data_location in
     let block =
-      match (U256.to_int_opt src_start, U256.to_int_opt size) with
+      match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
       | _, Some size -> Bytes.make size '\x00'
       | _, None -> assert false
@@ -750,18 +771,18 @@ struct
     let$ address = Address.of_u256_truncating <$> pop in
     let$ dst_start = pop in
     let$ src_start = pop in
-    let$ size = pop in
+    let$ size_bytes = pop in
 
     (* Gas *)
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account address in
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
-    let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
 
     (* Operation *)
     let$ data = HostAPI.copy_code address in
     let block =
-      match (U256.to_int_opt src_start, U256.to_int_opt size) with
+      match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
       | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
       | _, Some size -> Bytes.make size '\x00'
       | _, None -> assert false
@@ -794,11 +815,11 @@ struct
     (* Stack *)
     let$ dst_start = pop in
     let$ src_start = pop in
-    let$ size = pop in
+    let$ size_bytes = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
-    let$ memory_extension_gas = extend_memory_to U256.(dst_start + size) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
     (* Operation *)
@@ -806,7 +827,7 @@ struct
     (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access *)
     (* YP (158) *)
     let$ src_start, size =
-      match (U256.to_int_opt src_start, U256.to_int_opt size) with
+      match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
       | None, _ | _, None -> fail Invalid_memory_access
       | Some start, Some sz when start + sz >= Bytes.length data -> fail Invalid_memory_access
       | Some start, Some sz -> return (start, sz)
@@ -852,7 +873,7 @@ struct
   (* The yellow paper gets the chain ID directly as the ambient variable Beta, as opposed to fetching it
      from a specific field in the execution environment. The executable specs, on the other hand, does get
      it from an environment field *)
-  let chainid = fetch_environment_variable_opcode_impl (fun _ -> Params.chain_id)
+  let chainid = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- chain_id).get
 
   let selfbalance =
     (* Stack *)
@@ -979,7 +1000,7 @@ struct
     let$ pos = pop in
 
     (* Gas *)
-    let$ memory_extension_gas = extend_memory_to U256.(pos + ~$31) in
+    let$ memory_extension_gas = extend_memory_to ~start:pos ~size_bytes:U256.(~$32) in
     let$ () = spend Gas.(very_low + memory_extension_gas) in
 
     (* Operation *)
@@ -995,7 +1016,7 @@ struct
     let$ value = pop in
 
     (* Gas *)
-    let$ memory_extension_gas = extend_memory_to U256.(pos + ~$31) in
+    let$ memory_extension_gas = extend_memory_to ~start:pos ~size_bytes:U256.(~$32) in
     let$ () = spend Gas.(very_low + memory_extension_gas) in
 
     (* Operation *)
@@ -1010,7 +1031,7 @@ struct
     let$ value = pop in
 
     (* Gas *)
-    let$ memory_extension_gas = extend_memory_to pos in
+    let$ memory_extension_gas = extend_memory_to ~start:pos ~size_bytes:U256.one in
     let$ () = spend Gas.(very_low + memory_extension_gas) in
 
     (* Operation *)
@@ -1127,7 +1148,8 @@ struct
   let pc_ = fetch_environment_variable_opcode_impl (machine_state |-- pc).get
 
   let msize =
-    fetch_environment_variable_opcode_impl (fun ctx -> U256.(~$8 * ctx.machine_state.active_memory_words))
+    fetch_environment_variable_opcode_impl (fun ctx ->
+        U256.of_unbounded_truncating Uint.(~$32 * Memory.active_words ctx.machine_state.memory) )
 
   let gas_ =
     (* Stack *)
@@ -1136,7 +1158,7 @@ struct
 
     (* Operation *)
     let$ current_gas = !(machine_state |-- gas) in
-    let$ () = push (U256.of_unbounded current_gas) in
+    let$ () = push (U256.of_unbounded_truncating current_gas) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1183,15 +1205,15 @@ struct
     (* Stack *)
     let$ dst_start = pop in
     let$ src_start = pop in
-    let$ size = pop in
+    let$ size_bytes = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size)) in
-    let$ memory_expansion_gas = extend_memory_to U256.(max src_start dst_start + size) in
-    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_expansion_gas) in
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let$ memory_extension_gas = extend_memory_to ~start:U256.(max src_start dst_start) ~size_bytes in
+    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
     (* Operation *)
-    let$ block = Memory.read_block_at src_start size <$> !(machine_state |-- memory) in
+    let$ block = Memory.read_block_at src_start size_bytes <$> !(machine_state |-- memory) in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
 
     (* PC *)
@@ -1200,18 +1222,18 @@ struct
   let log n_topics =
     assert (n_topics >= 0 && n_topics <= 4) ;
     (* Stack *)
-    let$ src_start = pop in
-    let$ size = pop in
+    let$ start = pop in
+    let$ size_bytes = pop in
 
     let$ topics = List.mapM (List.of_seq Seq.(take n_topics (ints 0))) ~f:(fun _ -> pop) in
 
     (* Gas *)
-    let$ memory_extension_gas = extend_memory_to U256.(src_start + size) in
+    let$ memory_extension_gas = extend_memory_to ~start ~size_bytes in
     let$ () =
       spend
         Gas.(
           log_cost
-          + (log_cost_per_byte * U256.to_unbounded size)
+          + (log_cost_per_byte * U256.to_unbounded size_bytes)
           + (log_cost_per_topic * ~$n_topics)
           + memory_extension_gas )
     in
@@ -1219,7 +1241,7 @@ struct
     (* Operation *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ data = Memory.read_block_at src_start size <$> !(machine_state |-- memory) in
+    let$ data = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
     let$ () = HostAPI.emit_log self_addr ~data ~topics in
 
     (* PC *)
@@ -1289,8 +1311,8 @@ struct
       ~(create2_salt : U256.t)
       ~(endowment : U256.t)
       ~(input_start : U256.t)
-      ~(input_size : U256.t) =
-    let$ () = when_ U256.(input_size > ~$max_init_code_size) (fail Out_of_gas) in
+      ~(input_size_bytes : U256.t) =
+    let$ () = when_ U256.(input_size_bytes > ~$max_init_code_size) (fail Out_of_gas) in
 
     let$ () = check_write_permissions in
 
@@ -1303,7 +1325,7 @@ struct
       let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g - create_message_gas)) in
 
       let$ () = machine_state |-- output_buffer := Bytes.empty in
-      let$ call_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
+      let$ call_data = Memory.read_block_at input_start input_size_bytes <$> !(machine_state |-- memory) in
 
       let message =
         Evmc.(
@@ -1335,22 +1357,22 @@ struct
     (* Stack *)
     let$ endowment = pop in
     let$ input_start = pop in
-    let$ input_size = pop in
+    let$ input_size_bytes = pop in
 
     (* Gas *)
-    let$ memory_extension_gas = extend_memory_to U256.(input_start + input_size) in
+    let$ memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size_bytes in
     let$ () =
       spend
         Gas.(
           memory_extension_gas
           + create_cost
-          + (create_cost_per_initcode_word * U256.(to_unbounded (bytes_to_whole_words input_size))) )
+          + (create_cost_per_initcode_word * U256.(to_unbounded (bytes_to_whole_words input_size_bytes))) )
     in
 
     (* Operation *)
     let$ () =
       generic_create_impl ~create2_salt:U256.zero ~kind:Evmc.CallKind.Create ~endowment ~input_start
-        ~input_size
+        ~input_size_bytes
     in
 
     (* PC *)
@@ -1381,9 +1403,9 @@ struct
     if U256.(value > zero) then assert (kind = Evmc.CallKind.Call || kind = Evmc.CallKind.CallCode) ;
 
     (* Gas *)
-    let$ memory_extension_gas =
-      extend_memory_to U256.(max (input_start + input_size) (output_start + output_size))
-    in
+    let$ input_memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size in
+    let$ output_memory_extension_gas = extend_memory_to ~start:output_start ~size_bytes:output_size in
+    let memory_extension_gas = Gas.(max input_memory_extension_gas output_memory_extension_gas) in
 
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account recipient in
     let$ {delegated; code_address; delegation_access_gas} = access_delegation code_address in
@@ -1418,7 +1440,7 @@ struct
         machine_state |-- output_buffer := Bytes.empty
       else
         generic_call_impl ~kind
-          ~call_gas:U256.(of_unbounded callee_available_gas)
+          ~call_gas:U256.(of_unbounded_exn callee_available_gas)
           ~value ~sender ~recipient ~code_address ~input_start ~input_size ~output_start ~output_size
           ~delegated ~static
     in
@@ -1478,20 +1500,20 @@ struct
 
   let return_ =
     (* Stack *)
-    let$ pos = pop in
-    let$ size = pop in
+    let$ start = pop in
+    let$ size_bytes = pop in
 
     (* Gas *)
     let$ () =
       (* We do not spend gas when copying a zero-size return value *)
       when_
-        U256.(size > zero)
-        (let$ memory_extension_gas = extend_memory_to U256.(pos + size - one) in
+        U256.(size_bytes > zero)
+        (let$ memory_extension_gas = extend_memory_to ~start ~size_bytes in
          spend memory_extension_gas )
     in
 
     (* Operation *)
-    let$ result = Memory.read_block_at pos size <$> !(machine_state |-- memory) in
+    let$ result = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
     let$ () = machine_state |-- output_buffer := result in
 
     (* PC *)
@@ -1528,12 +1550,12 @@ struct
     (* Stack *)
     let$ endowment = pop in
     let$ input_start = pop in
-    let$ input_size = pop in
+    let$ input_size_bytes = pop in
     let$ create2_salt = pop in
 
     (* Gas *)
-    let$ memory_extension_gas = extend_memory_to U256.(input_start + input_size) in
-    let input_size_in_words = U256.(to_unbounded (bytes_to_whole_words input_size)) in
+    let$ memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size_bytes in
+    let input_size_in_words = U256.(to_unbounded (bytes_to_whole_words input_size_bytes)) in
     let$ () =
       spend
         Gas.(
@@ -1545,7 +1567,7 @@ struct
 
     (* Operation *)
     let$ () =
-      generic_create_impl ~kind:Evmc.CallKind.Create2 ~endowment ~input_start ~input_size ~create2_salt
+      generic_create_impl ~kind:Evmc.CallKind.Create2 ~endowment ~input_start ~input_size_bytes ~create2_salt
     in
 
     (* PC *)
@@ -1577,20 +1599,20 @@ struct
 
   let revert =
     (* Stack *)
-    let$ pos = pop in
-    let$ size = pop in
+    let$ start = pop in
+    let$ size_bytes = pop in
 
     (* Gas *)
     let$ () =
       (* We do not spend gas when copying a zero-size return value *)
       when_
-        U256.(size > zero)
-        (let$ memory_extension_gas = extend_memory_to U256.(pos + size - one) in
+        U256.(size_bytes > zero)
+        (let$ memory_extension_gas = extend_memory_to ~start ~size_bytes in
          spend memory_extension_gas )
     in
 
     (* Operation *)
-    let$ result = Memory.read_block_at pos size <$> !(machine_state |-- memory) in
+    let$ result = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
     let$ () = machine_state |-- output_buffer := result in
 
     (* PC *)
@@ -1725,18 +1747,6 @@ struct
       Format.printf "<bottom>\n" )
     else fun _ -> ()
 
-  let trace_memory =
-    if Params.trace then fun ms ->
-      (* Write one word at a time *)
-      let rec loop pos =
-        if U256.(pos < ms.active_memory_words) then (
-          Format.printf "%s: %s\n" (U256.to_short_hex_string pos)
-            (Bytes.to_hex_string (Memory.read_block_at pos U256.(~$32) ms.memory)) ;
-          loop U256.(pos + ~$32) )
-      in
-      loop U256.zero
-    else fun _ -> ()
-
   let trace_state =
     if Params.trace then (
       let$ ms = !machine_state in
@@ -1745,7 +1755,8 @@ struct
       Format.printf "Stack: \n" ;
       trace_stack ms.stack ;
       Format.printf "Memory: \n" ;
-      trace_memory ms ;
+      Memory.dump ms.memory ;
+      Format.print_flush () ;
       return () )
     else return ()
 
