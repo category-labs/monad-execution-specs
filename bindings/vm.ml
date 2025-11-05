@@ -1,9 +1,7 @@
 open Monad_lib
-open Numeric
 
 module Vm = Bindings.Vm.Pack (Vm.Make (struct
-  let trace = true
-  let chain_id = U256.of_int 1234
+  let trace = false
 end))
 
 let () =

@@ -884,9 +884,9 @@ struct
 
   let gaslimit = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- gas_limit).get
 
-  (* The yellow paper gets the chain ID directly as the ambient variable Beta, as opposed to fetching it
+  (* The yellow paper gets the chain ID directly as the ambient variable β, as opposed to fetching it
      from a specific field in the execution environment. The executable specs, on the other hand, does get
-     it from an environment field *)
+     it from the block environment. *)
   let chainid = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- chain_id).get
 
   let selfbalance =

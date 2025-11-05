@@ -37,7 +37,6 @@ let bytecode = read_source bytecode_source
 let calldata = read_source calldata_source
 
 module Params = struct
-  let chain_id = U256.(~$10_143) (* Testnet *)
   let trace = !trace
 end
 

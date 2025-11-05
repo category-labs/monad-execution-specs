@@ -318,9 +318,6 @@ module TxContext = struct
     c
 
   let ocaml_of_c (tx_ctx : repr structure) : TxContext.t =
-    Format.printf "tx_ctx: \n" ;
-    Ctypes.format repr Format.std_formatter tx_ctx ;
-    Format.print_flush () ;
     TxContext.
       { tx_gas_price = getf tx_ctx tx_gas_price
       ; tx_origin = getf tx_ctx tx_origin
@@ -559,13 +556,8 @@ module Vm = struct
       setf vm version "0.0" ;
       setf vm destroy (fun _vm -> ()) ;
       setf vm execute (fun _vm host_api host_ctx _rev msg code size ->
-          Format.printf "FROM OCAML SIDE context: " ;
-          Ctypes.format HostInterface.t Format.std_formatter !@host_api ;
-          Format.print_flush () ;
           let code = Bytes.ocaml_of_c code size in
           let result = VmImpl.execute !@msg code (host_api, host_ctx) in
-          Format.printf "ABOUT TO EXIT OCAML CONTEXT AFTER EXECUTION\n" ;
-          Format.print_flush () ;
           result ) ;
       setf vm get_capabilities (fun _vm -> Capabilities.{evm1 = true; ewasm = false; precompiles = false}) ;
       setf vm set_option (fun _vm _option _value -> `Invalid_Name) ;

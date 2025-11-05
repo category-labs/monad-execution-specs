@@ -7,7 +7,7 @@ module Revision = struct
 end
 
 module Params = struct
-  let trace = true
+  let trace = false
 end
 
 module HostImpl = Evmc.DummyHost (struct
