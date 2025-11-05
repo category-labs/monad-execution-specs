@@ -64,8 +64,7 @@ module Result = struct
 end
 
 module CallKind = struct
-  (* EOFCreate is unsupported as of Monad V4. *)
-  type t = Call | DelegateCall | CallCode | Create | Create2 | EOFCreate
+  type t = Call | DelegateCall | CallCode | Create | Create2
 end
 
 module Message = struct
@@ -291,7 +290,7 @@ struct
       update_field
         (account sender |-- balance)
         (fun eth ->
-          (* It is the VM's responsibility to avoid triggering this assertion *)
+          (* TODO: check this assertion on the host side. *)
           assert (U256.(eth >= amount)) ;
           U256.(eth - amount) )
     in
@@ -299,12 +298,7 @@ struct
 
   let should_transfer (msg : Message.t) =
     U256.(msg.value > zero)
-    && ( match msg.kind with
-       | Call | CallCode | Create | Create2 -> true
-       | DelegateCall -> false
-       | EOFCreate ->
-           (* Osaka is unsupported *)
-           assert false )
+    && (match msg.kind with Call | CallCode | Create | Create2 -> true | DelegateCall -> false)
     && not msg.static
 
   (* YP (95) *)
@@ -361,12 +355,9 @@ struct
       else return false
 
     let process_call (msg : Message.t) =
-      let$ before_transaction = get in
       let$ () = when_ (should_transfer msg) (move_ether msg.sender msg.recipient msg.value) in
       (* TODO: check whether it's a precompile *)
-      let$ result = Vm.execute msg msg.code in
-      let$ () = when_ (result.status_code <> Result.StatusCode.Success) (put before_transaction) in
-      return result
+      Vm.execute msg msg.code
 
     let process_create (msg : Message.t) =
       let$ create_address =
@@ -386,8 +377,6 @@ struct
             ; output_data = Bytes.empty
             ; create_address = None }
       else
-        let$ before_transaction = get in
-
         let$ () =
           update_field accounts_created_in_current_transaction (fun addresses ->
               Address.Set.add create_address addresses )
@@ -406,7 +395,6 @@ struct
               (contract_length = 0 && contract_code.[0] = '\xef')
               || Uint.(contract_code_gas > of_int64 result.gas_left)
             then
-              let$ () = put before_transaction in
               return
                 { result with
                   gas_left = Int64.zero
@@ -417,15 +405,17 @@ struct
             else
               let$ () = account create_address |-- code := contract_code in
               return {result with create_address = Some create_address}
-        | _ ->
-            let$ () = put before_transaction in
-            return result
+        | _ -> return result
 
     let call (msg : Message.t) =
-      match msg.kind with
-      | Call | DelegateCall | CallCode -> process_call msg
-      | Create | Create2 -> process_create msg
-      | EOFCreate -> assert false (* Osaka is not yet supported *)
+      let$ initial_state = get in
+      let$ result =
+        match msg.kind with
+        | Call | DelegateCall | CallCode -> process_call msg
+        | Create | Create2 -> process_create msg
+      in
+      let$ () = when_ (result.status_code <> Success) (put initial_state) in
+      return result
 
     let get_tx_context =
       return
