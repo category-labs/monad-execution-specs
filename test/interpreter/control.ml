@@ -99,7 +99,8 @@ let test_cases_jumpi =
            0x7 STOP
            0x8 PUSH1 0x02
            0xa STOP
-         *) ) ]
+         *)
+      ) ]
   in
   let test_cases = List.map test_bytecode_output codes_ok @ List.map test_invalid_jumpdest codes_err in
   ("Jumpi", test_cases)

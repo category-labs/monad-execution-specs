@@ -51,7 +51,6 @@ module Evm = struct
   module Host = HostImpl.Make (Vm)
 end
 
-
 let msg =
   Evmc.(
     Message.
