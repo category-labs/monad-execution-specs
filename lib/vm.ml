@@ -1644,6 +1644,8 @@ struct
 
     (* Operation *)
     let$ () = check_write_permissions in
+    (* EIP-3529 removed gas refunds from selfdestruct, so we do not need to check the return value. *)
+    let$ () = ignore <$> HostAPI.selfdestruct ~address:self_addr ~beneficiary in
 
     (* PC *)
     finish_execution
