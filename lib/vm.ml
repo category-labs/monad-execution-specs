@@ -837,7 +837,7 @@ struct
     let$ src_start, size =
       match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
       | None, _ | _, None -> fail Invalid_memory_access
-      | Some start, Some sz when start + sz >= Bytes.length data -> fail Invalid_memory_access
+      | Some start, Some sz when start + sz > Bytes.length data -> fail Invalid_memory_access
       | Some start, Some sz -> return (start, sz)
     in
     let block = Bytes.sub data src_start size in
@@ -896,7 +896,7 @@ struct
     (* PC *)
     increase_pc_and_continue
 
-  let basefee = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- gas_limit).get
+  let basefee = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- base_fee).get
 
   (* EIP-4844 *)
   let blobhash =
