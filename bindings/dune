@@ -4,12 +4,8 @@
  (foreign_stubs
   (language c)
   (include_dirs "../third_party/evmc/include")
-  (flags
-   (-g -O0))
   (names vm))
  (flags
-  (:standard -linkall -g))
- (ocamlopt_flags
-  (:standard -g -keep-locs -inline 0 -rounds 0))
+  (:standard -linkall))
  (modes
   (native shared_object)))
