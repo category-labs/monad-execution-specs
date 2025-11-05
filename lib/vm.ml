@@ -1,10 +1,6 @@
 open Numeric
 open Lens.Infix
 
-module Bytecode = struct
-  type instr
-end
-
 module Memory : sig
   type t
   val empty : t
@@ -26,8 +22,18 @@ end = struct
   type t =
     {contents : char U256.Map.t (* Corresponds to μ_m *); active_bytes : Uint.t (* Corresponds to μ_i * 32 *)}
 
+  (** Check that the index start + size - 1 does not overflow U256.t. *)
+  let u256_overflow_check start size_bytes =
+    assert (U256.in_range Z.(U256.to_z start + U256.to_z size_bytes - one))
+
+  (** Check that the index start + size - 1 does not exceed the active bytes. Memory must be extended
+     by a call to [extend_to] beforehand. *)
+  let active_bytes_overflow_check mem start size_bytes =
+    assert (Uint.(mem.active_bytes >= U256.(to_unbounded start) + U256.(to_unbounded size_bytes)))
+
   let read_block_at start size (mem : t) =
-    assert (Uint.(mem.active_bytes >= U256.(to_unbounded start) + U256.(to_unbounded size))) ;
+    u256_overflow_check start size ;
+    active_bytes_overflow_check mem start size ;
     let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
     Bytes.init size (fun byte_i ->
         U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' )
@@ -35,7 +41,9 @@ end = struct
   let read_word_at pos (mem : t) = U256.of_bytes_be (read_block_at pos U256.(~$32) mem)
 
   let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
-    assert (Uint.(mem.active_bytes >= U256.(to_unbounded pos) + ~$(Bytes.length bytes))) ;
+    let size = U256.of_int (Bytes.length bytes) in
+    u256_overflow_check pos size ;
+    active_bytes_overflow_check mem pos size ;
     let contents =
       Seq.take (Bytes.length bytes) (Seq.ints 0)
       |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
