@@ -199,10 +199,7 @@ end
 
 (** A dummy OCaml implementation for testing, backed by a simple mapping of accounts to storage. Does not
     use a MPT or store any cross-transaction state. *)
-module DummyHost (Params : sig
-  val chain_id : U256.t
-end) =
-struct
+module DummyHost = struct
   open Chain.Ethereum
   open Lens.Infix
 
@@ -427,7 +424,7 @@ struct
           ; block_timestamp = 0L
           ; block_gas_limit = 99999L
           ; block_prev_randao = U256.zero
-          ; chain_id = Params.chain_id
+          ; chain_id = U256.zero
           ; block_base_fee = U256.zero
           ; blob_base_fee = U256.zero
           ; blob_hashes = []

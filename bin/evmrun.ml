@@ -40,15 +40,7 @@ module Params = struct
   let trace = !trace
 end
 
-module HostImpl = Evmc.DummyHost (Params)
-
-module Evm = struct
-  module Evm0 = Evmc.Instantiate (HostImpl.M) (HostImpl.Make) (Vm.Make (Params))
-
-  (* Unfold one level of recursion to get access to the full signature of Vm and Host *)
-  module Vm = Vm.Make (Params) (Evm0.Host)
-  module Host = HostImpl.Make (Vm)
-end
+module Evm = Evmc.Instantiate (Evmc.DummyHost.M) (Evmc.DummyHost.Make) (Vm.Make (Params))
 
 let msg =
   Evmc.(
@@ -66,7 +58,7 @@ let msg =
       ; code_address = Address.zero
       ; code = bytecode } )
 
-let result, _state = Evm.Vm.execute msg msg.code HostImpl.State.empty
+let result, _state = Evm.Vm.execute msg msg.code Evmc.DummyHost.State.empty
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"

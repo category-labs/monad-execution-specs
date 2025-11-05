@@ -61,5 +61,5 @@ let () =
              (fun () ->
                let _, state = test_message (bytecode_to_call_message bc_write) in
                ignore
-                 (test_message ~prepare_env:(HostImpl.put state) ~check_vm_state:(expect_stack [value])
+                 (test_message ~prepare_env:(Evmc.DummyHost.put state) ~check_vm_state:(expect_stack [value])
                     (bytecode_to_call_message bc_read) ) ) ) ] ) ]

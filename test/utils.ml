@@ -10,14 +10,10 @@ module Params = struct
   let trace = false
 end
 
-module HostImpl = Evmc.DummyHost (struct
-  let chain_id = U256.zero
-end)
-
 module Evm = struct
-  module Evm0 = Evmc.Instantiate (HostImpl.M) (HostImpl.Make) (Vm.Make (Params))
+  module Evm0 = Evmc.Instantiate (Evmc.DummyHost.M) (Evmc.DummyHost.Make) (Vm.Make (Params))
 
-  (* Unfold one level of recursion to get access to the full signature of Vm and Host *)
+  (* Unfold one level of recursion to get access to the full signature of Vm *)
   module Vm = Vm.Make (Params) (Evm0.Host)
   module Host = Evm0.Host
 end
@@ -96,7 +92,7 @@ let test_message
   (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
      With better VM instrumentation we can remove the duplucation *)
   let action =
-    let open HostImpl in
+    let open Evmc.DummyHost in
     let open Evm.Host in
     let$ () = prepare_env in
     let$ tx_context = get_tx_context in
@@ -138,7 +134,7 @@ let test_message
               ; output_data = Bytes.empty
               ; create_address = None } ) )
   in
-  let result, state = action HostImpl.State.empty in
+  let result, state = action Evmc.DummyHost.State.empty in
   (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
