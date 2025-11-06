@@ -32,24 +32,28 @@ end = struct
     assert (Uint.(mem.active_bytes >= U256.(to_unbounded start) + U256.(to_unbounded size_bytes)))
 
   let read_block_at start size (mem : t) =
-    u256_overflow_check start size ;
-    active_bytes_overflow_check mem start size ;
-    let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
-    Bytes.init size (fun byte_i ->
-        U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' )
+    if U256.(size = zero) then Bytes.empty
+    else (
+      u256_overflow_check start size ;
+      active_bytes_overflow_check mem start size ;
+      let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
+      Bytes.init size (fun byte_i ->
+          U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' ) )
 
   let read_word_at pos (mem : t) = U256.of_bytes_be (read_block_at pos U256.(~$32) mem)
 
   let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
     let size = U256.of_int (Bytes.length bytes) in
-    u256_overflow_check pos size ;
-    active_bytes_overflow_check mem pos size ;
-    let contents =
-      Seq.take (Bytes.length bytes) (Seq.ints 0)
-      |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
-      |> fun entries -> U256.Map.add_seq entries mem.contents
-    in
-    {mem with contents}
+    if U256.(size = zero) then mem
+    else (
+      u256_overflow_check pos size ;
+      active_bytes_overflow_check mem pos size ;
+      let contents =
+        Seq.take (Bytes.length bytes) (Seq.ints 0)
+        |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
+        |> fun entries -> U256.Map.add_seq entries mem.contents
+      in
+      {mem with contents} )
 
   let write_word_at pos w = write_block_at pos (U256.to_bytes_be w)
 
@@ -60,10 +64,14 @@ end = struct
   let active_words mem = Uint.bytes_to_whole_words mem.active_bytes
 
   let extend_to ~start ~size_bytes mem =
-    (* Round up to whole words. *)
-    let active_words = Uint.(bytes_to_whole_words (U256.to_unbounded start + U256.to_unbounded size_bytes)) in
-    let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
-    {mem with active_bytes}
+    if U256.(size_bytes = zero) then mem
+    else
+      (* Round up to whole words. *)
+      let active_words =
+        Uint.(bytes_to_whole_words (U256.to_unbounded start + U256.to_unbounded size_bytes))
+      in
+      let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
+      {mem with active_bytes}
 
   let dump mem =
     (* Write one word at a time *)
@@ -635,14 +643,13 @@ struct
     increase_pc_and_continue
 
   let extend_memory_to ~start ~size_bytes : Uint.t M.t =
-    let$ current_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
-    let$ () =
-      (* TODO: fix bug (make sure tests fail) *)
-      update_field (machine_state |-- memory) (Memory.extend_to ~start ~size_bytes)
-    in
-    let$ new_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
-    if Uint.(current_memory_words >= new_memory_words) then return Uint.zero
-    else return Gas.(memory_cost new_memory_words - memory_cost current_memory_words)
+    if U256.(size_bytes = zero) then return Uint.zero
+    else
+      let$ current_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
+      let$ () = update_field (machine_state |-- memory) (Memory.extend_to ~start ~size_bytes) in
+      let$ new_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
+      if Uint.(current_memory_words >= new_memory_words) then return Uint.zero
+      else return Gas.(memory_cost new_memory_words - memory_cost current_memory_words)
 
   let keccak =
     (* Stack *)
