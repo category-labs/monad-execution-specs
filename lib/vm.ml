@@ -124,7 +124,7 @@ module ExecutionEnvironment = struct
       ; number : U256.t (* H_i *)
       ; timestamp : U256.t (* H_s *)
       ; gas_limit : U256.t (* H_l *)
-      ; prev_randao : Address.t (* H_a *)
+      ; prev_randao : U256.t (* H_a *)
       ; base_fee : U256.t (* H_f *)
       ; chain_id : U256.t (* β *) }
     [@@deriving lens {submodule = true; prefix = true}]
@@ -167,7 +167,7 @@ module ExecutionEnvironment = struct
     ; value = msg.value
     ; bytes = msg.code
     ; header = ExecutionBlockHeader.of_tx_context ctx
-    ; depth = msg.depth
+    ; depth = Int32.to_int msg.depth
     ; write_permission = not msg.static
     ; blob_versioned_hashes = ctx.blob_hashes
     ; blob_base_fee = ctx.blob_base_fee }
