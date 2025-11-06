@@ -127,7 +127,7 @@ module Message = struct
   module CallKind = struct
     let mapping =
       Message.CallKind.
-        [(0l, Call); (1l, DelegateCall); (2l, CallCode); (3l, Create); (4l, Create2); (5l, EOFCreate)]
+        [(0l, Call); (1l, DelegateCall); (2l, CallCode); (3l, Create); (4l, Create2)]
 
     let t = enum_view ~name:"evmc_call_kind" mapping
   end
