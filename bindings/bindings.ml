@@ -563,7 +563,7 @@ module Vm = struct
       setf vm execute (fun _vm host_api host_ctx _rev msg code size ->
           try
             let code = Bytes.ocaml_of_c code size in
-            let result = (VmImpl.execute !@msg code) (host_api, host_ctx) in
+            let result = CHostMonad.run (VmImpl.execute !@msg code) (host_api, host_ctx) in
             result
           with exn ->
             Format.printf "EXCEPTION %s" (Printexc.to_string exn) ;

@@ -233,6 +233,9 @@ struct
     include ErrStHost
 
     module HostAPI = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+
+    let run (x : 'a t) (ctx : Context.t) : (('a, Evmc.Result.StatusCode.t) result * Context.t) Host.t =
+      StHost.run x ctx
   end
   open M
 
@@ -1822,7 +1825,7 @@ struct
     let open Monad.Make (Host) in
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg code in
-    let$ res, ctx = (run code) ctx in
+    let$ res, ctx = M.run (run code) ctx in
     trace (fun () -> "Finished execution\n") ;
     return
       ( match res with
