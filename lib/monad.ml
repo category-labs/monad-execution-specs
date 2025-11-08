@@ -150,21 +150,21 @@ struct
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
 
-    include Make (struct
-      type 'a t = T.t -> ('a * T.t) Inner.t
-      let return (x : 'a) : 'a t = fun s -> Inner.return (x, s)
-      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
-       fun s ->
-        Inner.(
-          let$ x, s = x s in
-          f x s )
+    module Impl = struct
+      type 'a t = {run : 'r. T.t -> (T.t -> 'a -> 'r Inner.t) -> 'r Inner.t} [@@unboxed]
 
-      let get : T.t t = fun s -> Inner.return (s, s)
-      let put (s : T.t) : unit t = fun _ -> Inner.return ((), s)
-    end)
+      let return (type a) (x : a) : a t = {run = (fun s cont -> cont s x)}
+      let ( >>= ) (type a b) (x : a t) (f : a -> b t) : b t =
+        {run = (fun s cont -> x.run s (fun s xe -> (f xe).run s cont))}
 
-    let lower (x : T.t -> 'a * T.t) : 'a t = fun s -> Inner.return (x s)
-    let lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (x, s)) x
+      let get : T.t t = {run = (fun s cont -> cont s s)}
+      let put (s : T.t) : unit t = {run = (fun _s cont -> cont s ())}
+    end
+    include Make (Impl)
+
+    let lift (type a) (x : a Inner.t) : a t = {run = (fun s cont -> Inner.(x >>= cont s))}
+
+    let run (x : 'a t) (s : T.t) : ('a * T.t) Inner.t = x.run s (fun s' y -> Inner.return (y, s'))
   end
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
@@ -246,21 +246,21 @@ struct
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
 
-    include Make (struct
-      type 'a t = T.t -> 'a Inner.t
-      let return (x : 'a) : 'a t = fun _ -> Inner.return x
-      let ( >>= ) (x : T.t -> 'a Inner.t) (f : 'a -> T.t -> 'b Inner.t) =
-       fun s ->
-        Inner.(
-          let$ x = x s in
-          let$ fx = f x s in
-          return fx )
+    module Impl = struct
+      type 'a t = {run : 'r. T.t -> ('a -> 'r Inner.t) -> 'r Inner.t} [@@unboxed]
 
-      let read = fun s -> Inner.return s
-    end)
+      let return (x : 'a) : 'a t = {run = (fun _s cont -> cont x)}
 
-    let lower (x : T.t -> 'a) : 'a t = fun s -> Inner.return (x s)
-    let lift (x : 'a Inner.t) : 'a t = fun _ -> x
+      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) : 'b t =
+        {run = (fun s cont -> x.run s (fun xe -> (f xe).run s cont))}
+
+      let read = {run = (fun s cont -> cont s)}
+    end
+    include Make (Impl)
+
+    let lift (x : 'a Inner.t) : 'a t = {run = (fun _s cont -> Inner.(x >>= cont))}
+
+    let run (x : 'a t) (s : T.t) : 'a Inner.t = x.run s (fun x -> Inner.return x)
   end
 
   include Trans (Identity)
