@@ -136,8 +136,8 @@ module Host = struct
     val access_account : Address.t -> [`Warm | `Cold] t
     val access_storage : Address.t -> U256.t -> [`Warm | `Cold] t
 
-    val get_transient_storage : U256.t -> U256.t t
-    val set_transient_storage : U256.t -> U256.t -> unit t
+    val get_transient_storage : Address.t -> U256.t -> U256.t t
+    val set_transient_storage : Address.t -> U256.t -> U256.t -> unit t
   end
 
   (* Lift a host monad through a transformer stack *)
@@ -167,8 +167,8 @@ module Host = struct
     let access_account addr = MT.lift (M.access_account addr)
     let access_storage addr k = MT.lift (M.access_storage addr k)
 
-    let get_transient_storage addr = MT.lift (M.get_transient_storage addr)
-    let set_transient_storage addr k = MT.lift (M.set_transient_storage addr k)
+    let get_transient_storage addr k = MT.lift (M.get_transient_storage addr k)
+    let set_transient_storage addr k v = MT.lift (M.set_transient_storage addr k v)
   end
 end
 
@@ -453,9 +453,9 @@ module DummyHost = struct
         let$ () = touch_storage addr key in
         return `Cold
 
-    let get_transient_storage key =
+    let get_transient_storage _addr key =
       !(transient_storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
-    let set_transient_storage key value = transient_storage |-- U256.Map.at key := Some value
+    let set_transient_storage _addr key value = transient_storage |-- U256.Map.at key := Some value
   end
 end

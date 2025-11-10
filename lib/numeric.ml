@@ -311,7 +311,7 @@ module TwosComplement (B : IS_BOUNDED) = struct
 
     let to_unbounded (x : t) : Uint.t = Uint.of_z_exn (to_z x)
     let of_unbounded_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
-    let of_unbounded_truncating (x: Uint.t) : t = of_z_truncating (Uint.to_z x)
+    let of_unbounded_truncating (x : Uint.t) : t = of_z_truncating (Uint.to_z x)
 
     let of_signed_int (x : int) = Signed.(as_unsigned ~$x)
   end
