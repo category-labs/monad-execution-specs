@@ -58,7 +58,7 @@ let msg =
       ; code_address = Address.zero
       ; code = bytecode } )
 
-let result, _state = Evm.Vm.execute msg msg.code Evmc.DummyHost.State.empty
+let result, _state = (Evm.Vm.execute msg msg.code) Evmc.DummyHost.State.empty
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"

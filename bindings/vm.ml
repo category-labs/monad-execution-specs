@@ -1,7 +1,7 @@
 open Monad_lib
 
 module Vm = Bindings.Vm.Pack (Vm.Make (struct
-  let trace = false
+  let trace = Sys.getenv_opt "MONAD_ML_TRACE" |> Option.map bool_of_string |> Option.value ~default:false
 end))
 
 let () =

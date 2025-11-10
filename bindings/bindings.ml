@@ -72,10 +72,13 @@ end
 module Bytes = struct
   include Bytes
 
-  let c_of_ocaml (bs : Bytes.t) =
+  let c_of_ocaml (bs : Bytes.t) : Unsigned.UInt8.t ptr * Unsigned.Size_t.t =
     let size = Bytes.length bs in
     let c_size = Unsigned.Size_t.of_int size in
-    let c_bytes = if size > 0 then allocate_n uint8_t ~count:size else coerce (ptr void) (ptr uint8_t) null in
+    let c_bytes = if size > 0 then allocate_n uint8_t ~count:size else from_voidp uint8_t null in
+    for i = 0 to size - 1 do
+      c_bytes +@ i <-@ Unsigned.UInt8.of_int (Char.code bs.[i])
+    done ;
     (c_bytes, c_size)
 
   let ocaml_of_c (buf : Unsigned.uint8 ptr) (size : Unsigned.size_t) =
@@ -126,8 +129,7 @@ end
 module Message = struct
   module CallKind = struct
     let mapping =
-      Message.CallKind.
-        [(0l, Call); (1l, DelegateCall); (2l, CallCode); (3l, Create); (4l, Create2)]
+      Message.CallKind.[(0l, Call); (1l, DelegateCall); (2l, CallCode); (3l, Create); (4l, Create2)]
 
     let t = enum_view ~name:"evmc_call_kind" mapping
   end
@@ -150,10 +152,15 @@ module Message = struct
   let code_size = field repr "code_size" size_t
   let () = seal repr
 
+  let flag_static = 1
+  let flag_delegated = 2
+
   let c_of_ocaml (msg : Message.t) : repr structure =
     let c = make repr in
     setf c kind msg.kind ;
-    setf c flags (failwith "TODO") ;
+    setf c flags
+      (Unsigned.UInt32.of_int
+         ((if msg.delegated then flag_delegated else 0) lor if msg.static then flag_static else 0) ) ;
     setf c depth msg.depth ;
     setf c gas msg.gas ;
     setf c recipient msg.recipient ;
@@ -168,13 +175,11 @@ module Message = struct
     c
 
   let ocaml_of_c (msg : repr structure) : Message.t =
-    let flag_static = 1 in
-    let flag_delegated = 2 in
     let flags = Unsigned.UInt32.to_int (getf msg flags) in
     Message.
       { kind = getf msg kind
-      ; delegated = Int.(zero <> logand flags flag_delegated)
-      ; static = Int.(zero <> logand flags flag_static)
+      ; delegated = 0 <> flags land flag_delegated
+      ; static = 0 <> flags land flag_static
       ; depth = getf msg depth
       ; gas = getf msg gas
       ; recipient = getf msg recipient
@@ -412,10 +417,16 @@ module HostInterface = struct
 
   let get_transient_storage =
     field t "get_transient_storage"
-      (funptr Ctypes.(ptr HostContext.t @-> const Bytes32.ptr_t @-> returning Bytes32.t))
+      (funptr
+         Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> const Bytes32.ptr_t @-> returning Bytes32.t) )
   let set_transient_storage =
     field t "set_transient_storage"
-      (funptr (ptr HostContext.t @-> const Bytes32.ptr_t @-> const Bytes32.ptr_t @-> returning void))
+      (funptr
+         ( ptr HostContext.t
+         @-> const Address.ptr_t
+         @-> const Bytes32.ptr_t
+         @-> const Bytes32.ptr_t
+         @-> returning void ) )
 
   let () = seal t
 end
@@ -454,17 +465,11 @@ module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
     (* The OCaml API expects copy_code to return the entire contract code, so we have to fetch
        the code size and copy the entire contents into a temporary buffer here *)
     let$ size = Int64.to_int <$> get_code_size addr in
-    let buffer = CArray.make uint8_t size in
+    let buffer = allocate_n uint8_t ~count:(size + 100) in
     let$ size =
-      bind API.copy_code
-      <@> addr
-      <@> Unsigned.Size_t.zero
-      <@> CArray.start buffer
-      <@> Unsigned.Size_t.of_int size
+      bind API.copy_code <@> addr <@> Unsigned.Size_t.zero <@> buffer <@> Unsigned.Size_t.of_int size
     in
-    return
-      (Bytes.init (Unsigned.Size_t.to_int size) (fun i ->
-           Char.chr (Unsigned.UInt8.to_int (CArray.get buffer i)) ) )
+    return (Bytes.ocaml_of_c buffer size)
 
   let selfdestruct ~address ~beneficiary = bind API.selfdestruct <@> address <@> beneficiary
 
@@ -486,8 +491,8 @@ module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
   let access_account addr = bind API.access_account <@> addr
   let access_storage addr key = bind API.access_storage <@> addr <@> key
 
-  let get_transient_storage key = bind API.get_transient_storage <@> key
-  let set_transient_storage key value = bind API.set_transient_storage <@> key <@> value
+  let get_transient_storage addr key = bind API.get_transient_storage <@> addr <@> key
+  let set_transient_storage addr key value = bind API.set_transient_storage <@> addr <@> key <@> value
 end
 
 module Vm = struct
@@ -556,9 +561,13 @@ module Vm = struct
       setf vm version "0.0" ;
       setf vm destroy (fun _vm -> ()) ;
       setf vm execute (fun _vm host_api host_ctx _rev msg code size ->
-          let code = Bytes.ocaml_of_c code size in
-          let result = VmImpl.execute !@msg code (host_api, host_ctx) in
-          result ) ;
+          try
+            let code = Bytes.ocaml_of_c code size in
+            let result = (VmImpl.execute !@msg code) (host_api, host_ctx) in
+            result
+          with exn ->
+            Format.printf "EXCEPTION %s" (Printexc.to_string exn) ;
+            exit (-1) ) ;
       setf vm get_capabilities (fun _vm -> Capabilities.{evm1 = true; ewasm = false; precompiles = false}) ;
       setf vm set_option (fun _vm _option _value -> `Invalid_Name) ;
       allocate repr vm
