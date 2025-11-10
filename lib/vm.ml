@@ -1524,6 +1524,7 @@ struct
       | Delegated {delegation_access_gas; code_address} ->
           (code_address, Gas.(access_gas + delegation_access_gas))
     in
+    Format.print_flush () ;
 
     let transfer_value = kind <> Evmc.Message.CallKind.DelegateCall && U256.(value <> zero) in
 

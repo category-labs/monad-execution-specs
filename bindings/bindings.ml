@@ -1,4 +1,4 @@
-(** C versions of the EVMC types. *)
+(** C version of the EVMC types. *)
 open Monad_lib
 
 open Numeric
@@ -82,8 +82,13 @@ module Bytes = struct
     (c_bytes, c_size)
 
   let ocaml_of_c (buf : Unsigned.uint8 ptr) (size : Unsigned.size_t) =
-    if Unsigned.Size_t.(equal size zero) then Bytes.empty
-    else Bytes.init (Unsigned.Size_t.to_int size) (fun i -> Char.chr (Unsigned.UInt8.to_int !@(buf +@ i)))
+    let size = Unsigned.Size_t.to_int size in
+    let result =
+      if size = 0 then Bytes.empty
+      else Bytes.init size (fun i -> Char.chr (Unsigned.UInt8.to_int !@(buf +@ i)))
+    in
+    assert (Bytes.length result = size) ;
+    result
 end
 
 module type REPRESENTABLE = sig
@@ -243,7 +248,7 @@ module Result = struct
     (let data, size = Bytes.c_of_ocaml res.output_data in
      setf c output_data data ; setf c output_size size ) ;
     setf c release (fun _result -> ()) ;
-    setf c create_address (match res.create_address with None -> U160.zero | Some addr -> addr) ;
+    setf c create_address res.create_address ;
     c
 
   let ocaml_of_c (res : repr structure) : Result.t =
@@ -252,9 +257,8 @@ module Result = struct
       ; gas_left = getf res gas_left
       ; gas_refund = getf res gas_refund
       ; output_data = Bytes.ocaml_of_c (getf res output_data) (getf res output_size)
-      ; create_address =
-          (let addr = getf res create_address in
-           if U160.(addr = zero) then None else Some addr ) }
+      ; create_address = getf res create_address
+      }
 
   let t = view ~read:ocaml_of_c ~write:c_of_ocaml repr
 end
