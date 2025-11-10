@@ -1060,7 +1060,6 @@ struct
     let$ () = spend (if i = 0 then Gas.base else Gas.very_low) in
 
     (* Operation *)
-    trace "Before pc fetch\n" ;
     let$ here = U256.to_int <$> !(machine_state |-- pc) in
     let$ code = !(execution_environment |-- bytecode) in
     let$ () = push (U256.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)) in
@@ -1380,7 +1379,6 @@ struct
       ~(input_size : U256.t)
       ~(output_start : U256.t)
       ~(output_size : U256.t) =
-    trace "generic_call_impl\n" ;
     let$ () = machine_state |-- output_buffer := Bytes.empty in
 
     let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
@@ -1406,7 +1404,6 @@ struct
             ; code_address
             ; code = Bytes.empty } )
       in
-      trace "Before call\n" ;
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       assert (Address.(zero = create_address)) ;
@@ -1632,7 +1629,6 @@ struct
 
     (* Operation *)
     let$ result = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
-    trace (Format.sprintf "Returning %s\n" (Bytes.to_hex_string result)) ;
     let$ () = machine_state |-- output_buffer := result in
 
     (* PC *)
@@ -1766,13 +1762,6 @@ struct
     finish_execution
 
   let execute_opcode (opcode : Opcode.t) =
-    trace "execute_opcode\n" ;
-    let$ state = get in
-    trace "STATE PTR: " ;
-    dump state ;
-    let$ bc = !(execution_environment |-- bytecode) in
-    trace "BYTECODE PTR: " ;
-    dump bc ;
     let impl =
       match opcode with
       (* Arithmetic *)
@@ -1913,7 +1902,6 @@ struct
     trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
     let open Host in
     let open Monad.Make (Host) in
-    trace "Get host context\n" ;
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg code in
     let$ res, ctx = run code ctx in
