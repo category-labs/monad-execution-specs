@@ -114,7 +114,7 @@ let test_message
             ; gas_left = Uint.to_uint64 ctx.machine_state.gas
             ; gas_refund = 0L
             ; output_data = ctx.machine_state.output_buffer
-            ; create_address = None }
+            ; create_address = Address.zero }
       | Error err -> (
         match err with
         | Success -> assert false
@@ -126,14 +126,14 @@ let test_message
               ; gas_left = Uint.to_uint64 ctx.machine_state.gas
               ; gas_refund = 0L
               ; output_data = ctx.machine_state.output_buffer
-              ; create_address = None }
+              ; create_address = Address.zero }
         | _ ->
             Evmc.Result.
               { status_code = err
               ; gas_left = 0L
               ; gas_refund = 0L
               ; output_data = Bytes.empty
-              ; create_address = None } ) )
+              ; create_address = Address.zero } ) )
   in
   let result, state = Evmc.DummyHost.M.run action Evmc.DummyHost.State.empty in
   (* If the caller specified a VM postcondition but execution finished with an early abort,

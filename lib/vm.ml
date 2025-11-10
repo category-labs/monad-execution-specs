@@ -866,16 +866,18 @@ struct
 
   let blockhash =
     (* Stack *)
-    let$ block_num = pop in
+    let$ block_num = U256.to_unbounded <$> pop in
 
     (* Gas *)
     let$ () = spend Gas.block_hash_cost in
 
     (* Operation *)
-    let$ current_block_num = !(execution_environment |-- header |-- number) in
+    let$ current_block_num = U256.to_unbounded <$> !(execution_environment |-- header |-- number) in
     let$ hash =
-      if U256.(current_block_num <= block_num || current_block_num - ~$256 > block_num) then return U256.zero
-      else HostAPI.get_block_hash (U256.to_int64 block_num)
+      if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then (
+        return U256.zero
+      )
+      else HostAPI.get_block_hash (Uint.to_int64 block_num)
     in
     let$ () = push hash in
 
@@ -1329,7 +1331,7 @@ struct
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
-      assert (Option.is_none create_address) ;
+      assert Address.(zero = create_address) ;
 
       let$ () = machine_state |-- output_buffer := output_data in
       if status_code = Evmc.Result.StatusCode.Success then
@@ -1373,18 +1375,17 @@ struct
             ; gas = Uint.to_int64 create_message_gas
             ; recipient = Address.zero
             ; sender = self_addr
-            ; input_data = Bytes.empty
+            ; input_data = call_data
             ; value = endowment
             ; create2_salt
             ; code_address = Address.zero
-            ; code = call_data } )
+            ; code = Bytes.empty } )
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       if status_code = Evmc.Result.StatusCode.Success then (
-        assert (Option.is_some create_address) ;
         let$ () = machine_state |-- output_buffer := Bytes.empty in
-        push (Address.to_u256 (Option.get create_address)) )
+        push (Address.to_u256 create_address) )
       else
         let$ () = machine_state |-- output_buffer := output_data in
         push U256.zero
@@ -1434,9 +1435,6 @@ struct
       ~output_start
       ~output_size
       ~static_call =
-    if U256.(value > zero) then
-      assert (kind = Evmc.Message.CallKind.Call || kind = Evmc.Message.CallKind.CallCode) ;
-
     (* Gas *)
     let$ input_memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size in
     let$ output_memory_extension_gas = extend_memory_to ~start:output_start ~size_bytes:output_size in
@@ -1444,14 +1442,15 @@ struct
 
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account recipient in
     let$ delegation = access_delegation code_address in
-    let access_gas =
+    let code_address, access_gas =
       match delegation with
-      | Direct _ -> access_gas
-      | Delegated {delegation_access_gas; _} -> Gas.(access_gas + delegation_access_gas)
+      | Direct _delegation -> (code_address, access_gas)
+      | Delegated {delegation_access_gas; code_address} ->
+          (code_address, Gas.(access_gas + delegation_access_gas))
     in
+    Format.print_flush () ;
 
     let$ target_is_alive = HostAPI.account_exists recipient in
-    if kind <> Evmc.Message.CallKind.Call then assert target_is_alive ;
     let create_gas = Gas.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
 
     let transfer_gas = Gas.(if U256.(value = zero) then zero else call_value) in
@@ -1838,7 +1837,7 @@ struct
             ; gas_left = Uint.to_uint64 ctx.machine_state.gas
             ; gas_refund = 0L
             ; output_data = ctx.machine_state.output_buffer
-            ; create_address = None }
+            ; create_address = Address.zero }
       | Error err -> (
           trace (fun () -> Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err)) ;
           match err with
@@ -1851,12 +1850,12 @@ struct
                 ; gas_left = Uint.to_uint64 ctx.machine_state.gas
                 ; gas_refund = 0L
                 ; output_data = ctx.machine_state.output_buffer
-                ; create_address = None }
+                ; create_address = Address.zero }
           | _ ->
               Evmc.Result.
                 { status_code = err
                 ; gas_left = 0L
                 ; gas_refund = 0L
                 ; output_data = Bytes.empty
-                ; create_address = None } ) )
+                ; create_address = Address.zero } ) )
 end

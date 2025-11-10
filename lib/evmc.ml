@@ -60,7 +60,7 @@ module Result = struct
     ; gas_left : Int64.t
     ; gas_refund : Int64.t
     ; output_data : Bytes.t
-    ; create_address : Address.t option }
+    ; create_address : Address.t }
 end
 
 module Message = struct
@@ -372,7 +372,7 @@ module DummyHost = struct
             ; gas_left = 0L
             ; gas_refund = 0L
             ; output_data = Bytes.empty
-            ; create_address = None }
+            ; create_address = Address.zero }
       else
         let$ () =
           update_field accounts_created_in_current_transaction (fun addresses ->
@@ -401,7 +401,7 @@ module DummyHost = struct
                       if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
             else
               let$ () = account create_address |-- code := contract_code in
-              return {result with create_address = Some create_address}
+              return {result with create_address}
         | _ -> return result
 
     let call (msg : Message.t) =
