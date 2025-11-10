@@ -158,14 +158,14 @@ module ExecutionEnvironment = struct
   [@@deriving lens {submodule = true; prefix = true}]
   include TLens
 
-  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (_code : Bytes.t) : t =
+  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
     { address = msg.recipient
     ; origin = ctx.tx_origin
     ; price = ctx.tx_gas_price
     ; data = msg.input_data
     ; sender = msg.sender
     ; value = msg.value
-    ; bytecode = _code
+    ; bytecode = code
     ; header = ExecutionBlockHeader.of_tx_context ctx
     ; depth = Int32.to_int msg.depth
     ; write_permission = not msg.static
@@ -199,7 +199,7 @@ module Context = struct
   let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
     { execution_environment = ExecutionEnvironment.make ctx msg code
     ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
-    ; jump_destinations = valid_jump_destinations msg.code
+    ; jump_destinations = valid_jump_destinations code
     ; initial_storage = U256.Map.empty }
 end
 
@@ -215,10 +215,11 @@ struct
 
   let trace msg =
     if Params.trace then (
-      Gc.major () ; Gc.minor () ; Gc.major () ; Format.print_string msg ; Format.print_flush () )
+      Format.print_string (msg ()) ;
+      Format.print_flush () )
     else ()
 
-  let dump obj = trace (Format.sprintf "Object 0x%x\n" (Obj.magic obj : int))
+  let dump obj = trace (fun () -> Format.sprintf "Object 0x%x\n" (Obj.magic obj : int))
 
   module St = Monad.State (Context)
   module StatusCode = Evmc.Result.StatusCode
@@ -963,12 +964,8 @@ struct
     let$ () = spend (if i = 0 then Gas.base else Gas.very_low) in
 
     (* Operation *)
-    trace "Before pc fetch\n" ;
     let$ here = U256.to_int <$> !(machine_state |-- pc) in
-    trace "Before code fetch\n" ;
     let$ code = !(execution_environment |-- bytecode) in
-    trace "Before substring\n" ;
-    trace (Format.sprintf "push [[%s]]\n" Bytes.(to_hex_string (sub_with_zero_padding code (here + 1) i))) ;
     let$ () = push (U256.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)) in
 
     (* PC *)
@@ -1110,8 +1107,6 @@ struct
 
     (* Operation *)
     let$ () = check_write_permissions in
-    trace
-      (Format.sprintf "STORAGE SET %s => %s" (U256.to_short_hex_string key) (U256.to_short_hex_string value')) ;
     let$ () = HostAPI.set_storage self_addr key value' in
     (* The refund here can be negative as we may be undoing a previous positive refund *)
     let refund : Integer.t =
@@ -1299,7 +1294,6 @@ struct
       ~(input_size : U256.t)
       ~(output_start : U256.t)
       ~(output_size : U256.t) =
-    trace "generic_call_impl\n" ;
     let$ () = machine_state |-- output_buffer := Bytes.empty in
 
     let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
@@ -1308,14 +1302,12 @@ struct
       push U256.zero
     else
       let$ input_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
-      trace (Format.sprintf "before copy_code %s\n" (Address.to_hex_string code_address)) ;
       let$ code =
         match delegation with
         | Direct {code} -> return code
         | Delegated {code_address; _} -> HostAPI.copy_code code_address
       in
       let delegated = match delegation with Direct _ -> false | Delegated _ -> true in
-      trace "after copy_code\n" ;
       let message =
         Evmc.(
           Message.
@@ -1332,7 +1324,6 @@ struct
             ; code_address
             ; code } )
       in
-      trace "Before call\n" ;
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       assert (Option.is_none create_address) ;
@@ -1421,7 +1412,6 @@ struct
     increase_pc_and_continue
 
   let access_delegation (addr : Address.t) : delegation M.t =
-    trace "copy_code before delegation access\n" ;
     let$ code = HostAPI.copy_code addr in
     match Delegation.get_delegated_address code with
     | None -> return (Direct {code})
@@ -1560,7 +1550,6 @@ struct
 
     (* Operation *)
     let$ result = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
-    trace (Format.sprintf "Returning %s\n" (Bytes.to_hex_string result)) ;
     let$ () = machine_state |-- output_buffer := result in
 
     (* PC *)
@@ -1691,13 +1680,6 @@ struct
     finish_execution
 
   let execute_opcode (opcode : Opcode.t) =
-    trace "execute_opcode\n" ;
-    let$ state = get in
-    trace "STATE PTR: " ;
-    dump state ;
-    let$ bc = !(execution_environment |-- bytecode) in
-    trace "BYTECODE PTR: " ;
-    dump bc ;
     let impl =
       match opcode with
       (* Arithmetic *)
@@ -1827,30 +1809,27 @@ struct
       | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
       | _ -> Opcode.Stop
     in
-    trace
-      (let info = Opcode.info opcode in
-       Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
+    trace (fun () ->
+        let info = Opcode.info opcode in
+        Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
     let$ continue = execute_opcode opcode in
     if continue then run code else return ()
 
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
-    trace "Start execution\n" ;
-    trace (Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
+    trace (fun () -> "Start execution\n") ;
+    trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
     let open Host in
     let open Monad.Make (Host) in
-    trace "Get host context\n" ;
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg code in
-    trace (Format.sprintf "Starting to run at depth %d\n" ctx.execution_environment.depth) ;
-    trace (Format.sprintf "Bytecode in ctx: %s\n" (Bytes.to_hex_string ctx.execution_environment.bytecode)) ;
     let$ res, ctx = (run code) ctx in
-    trace "Finished execution\n" ;
+    trace (fun () -> "Finished execution\n") ;
     return
       ( match res with
       | Ok () ->
-          trace
-            (Format.sprintf "Execution OK, returning [[%s]]\n"
-               (Bytes.to_hex_string ctx.machine_state.output_buffer) ) ;
+          trace (fun () ->
+              Format.sprintf "Execution OK, returning [[%s]]\n"
+                (Bytes.to_hex_string ctx.machine_state.output_buffer) ) ;
           Evmc.Result.
             { status_code = Success
             ; gas_left = Uint.to_uint64 ctx.machine_state.gas
@@ -1858,7 +1837,7 @@ struct
             ; output_data = ctx.machine_state.output_buffer
             ; create_address = None }
       | Error err -> (
-          trace (Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err)) ;
+          trace (fun () -> Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err)) ;
           match err with
           | Success -> assert false
           | Revert ->
