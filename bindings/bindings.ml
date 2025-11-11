@@ -69,14 +69,34 @@ module HostContext = struct
   let t : t structure typ = structure "evmc_host_context"
 end
 
+module Unmanaged = struct
+  let c_malloc = foreign "malloc" (size_t @-> returning (ptr void))
+  let c_free = foreign "free" (ptr void @-> returning void)
+
+  let allocate_n (type a) (repr : a typ) ~(count : int) : a ptr =
+    let ptr = c_malloc (Unsigned.Size_t.of_int (Ctypes.sizeof repr * count)) in
+    from_voidp repr ptr
+
+  let make (type a) (repr : a typ) : a ptr = allocate_n repr ~count:1
+
+  let release (ptr : 'a ptr) =
+    let ptr = to_voidp ptr in
+    c_free ptr
+end
+
 module Bytes = struct
   include Bytes
 
-  let c_of_ocaml (bs : Bytes.t) : Unsigned.UInt8.t ptr * Unsigned.Size_t.t =
+  let c_of_ocaml ~mem (bs : Bytes.t) : Unsigned.UInt8.t ptr * Unsigned.Size_t.t =
     let size = Bytes.length bs in
     let c_size = Unsigned.Size_t.of_int size in
-    let c_bytes = if size > 0 then allocate_n uint8_t ~count:size else from_voidp uint8_t null in
-    for i = 0 to size - 1 do
+    let c_bytes =
+      if size > 0 then
+        (match mem with `Managed -> allocate_n ?finalise:None | `Unmanaged -> Unmanaged.allocate_n)
+          uint8_t ~count:size
+      else from_voidp uint8_t null
+    in
+    for i = 0 to Bytes.length bs - 1 do
       c_bytes +@ i <-@ Unsigned.UInt8.of_int (Char.code bs.[i])
     done ;
     (c_bytes, c_size)
@@ -170,12 +190,12 @@ module Message = struct
     setf c gas msg.gas ;
     setf c recipient msg.recipient ;
     setf c sender msg.sender ;
-    (let bytes, size = Bytes.c_of_ocaml msg.input_data in
+    (let bytes, size = Bytes.c_of_ocaml ~mem:`Managed msg.input_data in
      setf c input_data bytes ; setf c input_size size ) ;
     setf c value msg.value ;
     setf c create2_salt msg.create2_salt ;
     setf c code_address msg.code_address ;
-    (let bytes, size = Bytes.c_of_ocaml msg.code in
+    (let bytes, size = Bytes.c_of_ocaml ~mem:`Managed msg.code in
      setf c code bytes ; setf c code_size size ) ;
     c
 
@@ -240,14 +260,16 @@ module Result = struct
   let padding = field repr "padding" int32_t
   let () = seal repr
 
+  let release_fn = fun (result : repr structure ptr) -> Unmanaged.release !@(result |-> output_data)
+
   let c_of_ocaml (res : Result.t) : repr structure =
     let c = make repr in
     setf c status_code res.status_code ;
     setf c gas_left res.gas_left ;
     setf c gas_refund res.gas_refund ;
-    (let data, size = Bytes.c_of_ocaml res.output_data in
+    (let data, size = Bytes.c_of_ocaml ~mem:`Unmanaged res.output_data in
      setf c output_data data ; setf c output_size size ) ;
-    setf c release (fun _result -> ()) ;
+    setf c release release_fn ;
     setf c create_address res.create_address ;
     c
 
@@ -257,8 +279,7 @@ module Result = struct
       ; gas_left = getf res gas_left
       ; gas_refund = getf res gas_refund
       ; output_data = Bytes.ocaml_of_c (getf res output_data) (getf res output_size)
-      ; create_address = getf res create_address
-      }
+      ; create_address = getf res create_address }
 
   let t = view ~read:ocaml_of_c ~write:c_of_ocaml repr
 end
@@ -275,7 +296,7 @@ module TxInitcode = struct
   let c_of_ocaml (initcode : TxInitcode.t) : repr structure =
     let c = make repr in
     setf c hash initcode.hash ;
-    (let data, size = Bytes.c_of_ocaml initcode.code in
+    (let data, size = Bytes.c_of_ocaml ~mem:`Managed initcode.code in
      setf c code data ; setf c code_size size ) ;
     c
 
