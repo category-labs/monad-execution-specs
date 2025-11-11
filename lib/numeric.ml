@@ -113,9 +113,10 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
 
   let to_bytes_le : t -> Bytes.t = fun x -> Bytes.reverse (to_bytes_be x)
 
-  let byte i x =
-    let bytes = to_bytes_be x in
-    bytes.[i]
+  (** [byte ~index-le x] extracts the [i]-th byte from the Little-endian representation of [x]. *)
+  let byte ~index_le x =
+    let le_bytes = Z.to_bits (to_z x) in
+    if index_le >= Bytes.length le_bytes then '\x00' else le_bytes.[index_le]
 
   let significant_bytes x = (Z.numbits (to_z x) + 7) / 8
 

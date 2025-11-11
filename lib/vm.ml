@@ -596,14 +596,15 @@ struct
 
   let byte =
     (* Stack *)
-    let$ byte_index = pop in
+    let$ index_be = pop in
     let$ x = pop in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
 
     (* Operation *)
-    let$ () = push U256.(if byte_index >= ~$32 then zero else of_byte (byte (to_int byte_index) x)) in
+    let index_le = 31 - U256.to_int index_be in
+    let$ () = push (if index_le < 0 then U256.zero else U256.(of_byte (byte ~index_le x))) in
 
     (* PC *)
     increase_pc_and_continue
@@ -874,9 +875,7 @@ struct
     (* Operation *)
     let$ current_block_num = U256.to_unbounded <$> !(execution_environment |-- header |-- number) in
     let$ hash =
-      if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then (
-        return U256.zero
-      )
+      if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then return U256.zero
       else HostAPI.get_block_hash (Uint.to_int64 block_num)
     in
     let$ () = push hash in
@@ -1062,7 +1061,9 @@ struct
     let$ () = spend Gas.(very_low + memory_extension_gas) in
 
     (* Operation *)
-    let$ () = update_field (machine_state |-- memory) (Memory.write_byte_at pos U256.(byte 0 value)) in
+    let$ () =
+      update_field (machine_state |-- memory) (Memory.write_byte_at pos U256.(byte ~index_le:0 value))
+    in
 
     (* PC *)
     increase_pc_and_continue
@@ -1331,7 +1332,7 @@ struct
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
-      assert Address.(zero = create_address) ;
+      assert (Address.(zero = create_address)) ;
 
       let$ () = machine_state |-- output_buffer := output_data in
       if status_code = Evmc.Result.StatusCode.Success then
@@ -1383,9 +1384,9 @@ struct
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
-      if status_code = Evmc.Result.StatusCode.Success then (
+      if status_code = Evmc.Result.StatusCode.Success then
         let$ () = machine_state |-- output_buffer := Bytes.empty in
-        push (Address.to_u256 create_address) )
+        push (Address.to_u256 create_address)
       else
         let$ () = machine_state |-- output_buffer := output_data in
         push U256.zero
@@ -1448,7 +1449,6 @@ struct
       | Delegated {delegation_access_gas; code_address} ->
           (code_address, Gas.(access_gas + delegation_access_gas))
     in
-    Format.print_flush () ;
 
     let$ target_is_alive = HostAPI.account_exists recipient in
     let create_gas = Gas.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
