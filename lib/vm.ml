@@ -449,7 +449,7 @@ struct
       push
         U256.(
           match to_int_opt byte_index with
-          | Some i when Stdlib.(i < 256) -> I256.as_unsigned (sign_extend i x)
+          | Some i when Stdlib.(i < 32) -> I256.as_unsigned (sign_extend i x)
           | Some _ | None -> x )
     in
 
@@ -603,8 +603,14 @@ struct
     let$ () = spend Gas.very_low in
 
     (* Operation *)
-    let index_le = 31 - U256.to_int index_be in
-    let$ () = push (if index_le < 0 then U256.zero else U256.(of_byte (byte ~index_le x))) in
+    let$ () =
+      push
+        ( match U256.to_int_opt index_be with
+        | Some index_be when index_be < 32 ->
+            let index_le = 31 - index_be in
+            U256.(of_byte (byte ~index_le x))
+        | _ -> U256.zero )
+    in
 
     (* PC *)
     increase_pc_and_continue

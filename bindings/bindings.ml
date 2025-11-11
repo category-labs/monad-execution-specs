@@ -570,7 +570,7 @@ module Vm = struct
             let result = CHostMonad.run (VmImpl.execute !@msg code) (host_api, host_ctx) in
             result
           with exn ->
-            Format.printf "EXCEPTION %s" (Printexc.to_string exn) ;
+            Format.printf "EXCEPTION %s\n" (Printexc.to_string exn) ;
             exit (-1) ) ;
       setf vm get_capabilities (fun _vm -> Capabilities.{evm1 = true; ewasm = false; precompiles = false}) ;
       setf vm set_option (fun _vm _option _value -> `Invalid_Name) ;
