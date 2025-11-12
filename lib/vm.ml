@@ -810,7 +810,7 @@ struct
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account address in
     let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
     let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
-    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
+    let$ () = spend Gas.((n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
 
     (* Operation *)
     let$ data = HostAPI.copy_code address in
@@ -851,13 +851,9 @@ struct
     let$ size_bytes = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
-    let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
-    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
-
-    (* Operation *)
     let$ data = !(machine_state |-- output_buffer) in
-    (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access *)
+    (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access. We check this before
+       extending the memory and spending gas. *)
     (* YP (158) *)
     let$ src_start, size =
       match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
@@ -865,6 +861,12 @@ struct
       | Some start, Some sz when start + sz > Bytes.length data -> fail Invalid_memory_access
       | Some start, Some sz -> return (start, sz)
     in
+
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
+    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
+
+    (* Operation *)
     let block = Bytes.sub data src_start size in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
 
@@ -1188,7 +1190,7 @@ struct
   let gas_ =
     (* Stack *)
     (* Gas *)
-    let$ () = spend Gas.very_low in
+    let$ () = spend Gas.base in
 
     (* Operation *)
     let$ current_gas = !(machine_state |-- gas) in
