@@ -463,6 +463,7 @@ end)
 (** An OCaml EVMC host backed by a C EVMC host *)
 module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
   open Ctypes
+  module CList = List (* Avoid clash with CHostMonad.List *)
   include CHostMonad
 
   module API = HostInterface
@@ -506,11 +507,9 @@ module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
 
   let get_block_hash index = bind API.get_block_hash <@> index
 
-  let emit_log address ~data ~topics =
-    let c_data = allocate_n uint8_t ~count:(Bytes.length data) in
-    let c_data_size = Unsigned.Size_t.of_int (Bytes.length data) in
-    let c_topics = allocate_n Bytes32.t ~count:(List.length topics) in
-    let c_topics_size = Unsigned.Size_t.of_int (List.length topics) in
+  let emit_log address ~data ~(topics:U256.t list) =
+    let (c_data, c_data_size) = Bytes.c_of_ocaml ~mem:`Managed data in
+    let (c_topics, c_topics_size) = CList.c_of_ocaml Bytes32.t topics in
     bind API.emit_log <@> address <@> c_data <@> c_data_size <@> c_topics <@> c_topics_size
 
   let access_account addr = bind API.access_account <@> addr
