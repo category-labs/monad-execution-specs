@@ -245,9 +245,16 @@ struct
         trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
         access_account addr
 
+      let call (msg : Evmc.Message.t) =
+        trace (fun () -> Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas) ;
+        let$ result = call msg in
+        trace (fun () -> Format.sprintf "returned %s" (Evmc.Result.StatusCode.to_string result.status_code)) ;
+        return result
+
       let selfdestruct ~address ~beneficiary =
         trace (fun () ->
-            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s" (Address.to_short_hex_string address)
+            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
+              (Address.to_short_hex_string address)
               (Address.to_short_hex_string beneficiary) ) ;
         selfdestruct ~address ~beneficiary
     end
@@ -1473,10 +1480,12 @@ struct
           (code_address, Gas.(access_gas + delegation_access_gas))
     in
 
-    let$ target_is_alive = HostAPI.account_exists recipient in
-    let create_gas = Gas.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
+    let transfer_value = kind <> Evmc.Message.CallKind.DelegateCall && U256.(value <> zero) in
 
-    let transfer_gas = Gas.(if U256.(value = zero) then zero else call_value) in
+    let$ target_is_alive = HostAPI.account_exists recipient in
+    let create_gas = Gas.(if transfer_value && not target_is_alive then new_account_cost else zero) in
+
+    let transfer_gas = Gas.(if transfer_value then call_value else zero) in
 
     let$ gas_left = !(machine_state |-- MachineState.gas) in
     let Gas.{caller_spent_gas; callee_available_gas} =
@@ -1487,7 +1496,7 @@ struct
     let$ () = spend Gas.(caller_spent_gas + memory_extension_gas) in
 
     (* Operation *)
-    let$ () = when_ U256.(value <> zero) check_write_permissions in
+    let$ () = when_ transfer_value check_write_permissions in
 
     let$ in_static_context = not <$> !(execution_environment |-- write_permission) in
     let static = static_call || in_static_context in
@@ -1495,10 +1504,10 @@ struct
     let$ self_addr = self in
     let$ self_balance = HostAPI.get_balance self_addr in
     let$ () =
-      if U256.(self_balance < value) then
+      if transfer_value && U256.(self_balance < value) then (
         let$ () = push U256.zero in
         let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + caller_spent_gas)) in
-        machine_state |-- output_buffer := Bytes.empty
+        machine_state |-- output_buffer := Bytes.empty )
       else
         generic_call_impl ~kind
           ~call_gas:U256.(of_unbounded_exn callee_available_gas)
