@@ -213,13 +213,16 @@ struct
   open ExecutionEnvironment
   open Context
 
-  let trace msg =
-    if Params.trace then (
+  let trace ?(print = Params.trace) msg =
+    if print then (
       Format.print_string (msg ()) ;
       Format.print_flush () )
     else ()
 
   let dump obj = trace (fun () -> Format.sprintf "Object 0x%x\n" (Obj.magic obj : int))
+
+  module Ethereum = Chain.Ethereum
+  module Address = Ethereum.Address
 
   module St = Monad.State (Context)
   module StatusCode = Evmc.Result.StatusCode
@@ -232,15 +235,27 @@ struct
     include St.Lift (ErrStHost) (StHost)
     include ErrStHost
 
-    module HostAPI = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+    module HostAPI = struct
+      include Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+
+      let trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
+
+      (* TODO: trace other API calls. *)
+      let access_account addr =
+        trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
+        access_account addr
+
+      let selfdestruct ~address ~beneficiary =
+        trace (fun () ->
+            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s" (Address.to_short_hex_string address)
+              (Address.to_short_hex_string beneficiary) ) ;
+        selfdestruct ~address ~beneficiary
+    end
 
     let run (x : 'a t) (ctx : Context.t) : (('a, Evmc.Result.StatusCode.t) result * Context.t) Host.t =
       StHost.run x ctx
   end
   open M
-
-  module Ethereum = Chain.Ethereum
-  module Address = Ethereum.Address
 
   let max_stack_depth = 1024
   let max_code_size = 0x6000
