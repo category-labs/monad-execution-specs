@@ -39,7 +39,6 @@ module Numeric_View (M : NUMERIC) = struct
     |> Array.of_seq
   let byte i = fields.(i)
 
-  (*let bytes = field repr "bytes" (array M.byte_width uint8_t)*)
   let () = seal repr
 
   let c_of_ocaml (value : M.t) : repr structure =
@@ -55,9 +54,6 @@ module Numeric_View (M : NUMERIC) = struct
     M.of_bytes_be bytes
 
   let t = view ~write:c_of_ocaml ~read:ocaml_of_c repr
-
-  let ptr_t =
-    view ~write:(fun x -> allocate repr (c_of_ocaml x)) ~read:(fun ptr -> ocaml_of_c !@ptr) (ptr repr)
 end
 
 module Address = Numeric_View (U160)
@@ -370,87 +366,79 @@ module HostInterface = struct
   let t : t structure typ = structure "evmc_host_interface"
 
   let account_exists =
-    field t "account_exists" (funptr Ctypes.(ptr HostContext.t @-> Address.ptr_t @-> returning bool))
+    field t "account_exists" (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> returning bool))
 
   let get_storage =
     field t "get_storage"
-      (funptr
-         Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> const Bytes32.ptr_t @-> returning Bytes32.t) )
+      (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> const (ptr Bytes32.t) @-> returning Bytes32.t))
   let set_storage =
     field t "set_storage"
       (funptr
-         Ctypes.(
-           ptr HostContext.t
-           @-> const Address.ptr_t
-           @-> const Bytes32.ptr_t
-           @-> const Bytes32.ptr_t
-           @-> returning void ) )
+         ( ptr HostContext.t
+         @-> const (ptr Address.t)
+         @-> const (ptr Bytes32.t)
+         @-> const (ptr Bytes32.t)
+         @-> returning void ) )
 
   let get_balance =
-    field t "get_balance"
-      (funptr Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> returning Uint256be.t))
+    field t "get_balance" (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> returning Uint256be.t))
 
   let get_code_size =
-    field t "get_code_size" (funptr Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> returning size_t))
+    field t "get_code_size" (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> returning size_t))
   let get_code_hash =
-    field t "get_code_hash"
-      (funptr Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> returning Bytes32.t))
+    field t "get_code_hash" (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> returning Bytes32.t))
   let copy_code =
     field t "copy_code"
       (funptr
-         Ctypes.(
-           ptr HostContext.t
-           @-> const Address.ptr_t
-           @-> size_t
-           @-> ptr uint8_t
-           @-> size_t
-           @-> returning size_t ) )
+         ( ptr HostContext.t
+         @-> const (ptr Address.t)
+         @-> size_t
+         @-> ptr uint8_t
+         @-> size_t
+         @-> returning size_t ) )
 
   let selfdestruct =
     field t "selfdestruct"
-      (funptr Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> const Address.ptr_t @-> returning bool))
+      (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> const (ptr Address.t) @-> returning bool))
 
-  let call =
-    field t "call" (funptr Ctypes.(ptr HostContext.t @-> const (ptr Message.t) @-> returning Result.t))
+  let call = field t "call" (funptr (ptr HostContext.t @-> const (ptr Message.t) @-> returning Result.t))
 
   let get_tx_context = field t "get_tx_context" (funptr Ctypes.(ptr HostContext.t @-> returning TxContext.t))
 
   let get_block_hash =
-    field t "get_block_hash" (funptr Ctypes.(ptr HostContext.t @-> int64_t @-> returning Bytes32.t))
+    field t "get_block_hash" (funptr (ptr HostContext.t @-> int64_t @-> returning Bytes32.t))
 
   let emit_log =
     field t "emit_log"
       (funptr
-         Ctypes.(
-           ptr HostContext.t
-           @-> const Address.ptr_t
-           @-> const (ptr uint8_t)
-           @-> size_t
-           @-> const (ptr Bytes32.t)
-           @-> size_t
-           @-> returning void ) )
+         ( ptr HostContext.t
+         @-> const (ptr Address.t)
+         @-> const (ptr uint8_t)
+         @-> size_t
+         @-> const (ptr Bytes32.t)
+         @-> size_t
+         @-> returning void ) )
 
   let access_status : [`Cold | `Warm] typ = enum_view ~name:"evmc_access_status" [(0l, `Cold); (1l, `Warm)]
 
   let access_account =
     field t "access_account"
-      (funptr Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> returning access_status))
+      (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> returning access_status))
   let access_storage =
     field t "access_storage"
       (funptr
-         Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> const Bytes32.ptr_t @-> returning access_status) )
+         (ptr HostContext.t @-> const (ptr Address.t) @-> const (ptr Bytes32.t) @-> returning access_status) )
 
   let get_transient_storage =
     field t "get_transient_storage"
-      (funptr
-         Ctypes.(ptr HostContext.t @-> const Address.ptr_t @-> const Bytes32.ptr_t @-> returning Bytes32.t) )
+      (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> const (ptr Bytes32.t) @-> returning Bytes32.t))
   let set_transient_storage =
     field t "set_transient_storage"
       (funptr
          ( ptr HostContext.t
-         @-> const Address.ptr_t
-         @-> const Bytes32.ptr_t
-         @-> const Bytes32.ptr_t
+         @-> const (ptr Address.t)
+         @-> const (ptr Bytes32.t)
+         @-> const (ptr Bytes32.t)
          @-> returning void ) )
 
   let () = seal t
@@ -475,29 +463,48 @@ module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
 
   let ( <@> ) (f : ('a -> 'b) t) (x : 'a) : 'b t = f <*> return x
 
-  let account_exists addr = bind API.account_exists <@> addr
+  let account_exists addr =
+    let addr = allocate Address.t addr in
+    bind API.account_exists <@> addr
 
-  let get_storage addr key = bind API.get_storage <@> addr <@> key
-  let set_storage addr key value = bind API.set_storage <@> addr <@> key <@> value
+  let get_storage addr key =
+    let addr = allocate Address.t addr in
+    let key = allocate Bytes32.t key in
+    bind API.get_storage <@> addr <@> key
 
-  let get_balance addr = bind API.get_balance <@> addr
+  let set_storage addr key value =
+    let addr = allocate Address.t addr in
+    let key = allocate Bytes32.t key in
+    let value = allocate Bytes32.t value in
+    bind API.set_storage <@> addr <@> key <@> value
+
+  let get_balance addr =
+    let addr = allocate Address.t addr in
+    bind API.get_balance <@> addr
 
   let get_code_size addr =
+    let addr = allocate Address.t addr in
     let$ size = bind API.get_code_size <@> addr in
     (* Conversion is necessary here as size_t does not have a fixed size *)
     return (Unsigned.Size_t.to_int64 size)
-  let get_code_hash addr = bind API.get_code_hash <@> addr
+  let get_code_hash addr =
+    let addr = allocate Address.t addr in
+    bind API.get_code_hash <@> addr
   let copy_code addr =
     (* The OCaml API expects copy_code to return the entire contract code, so we have to fetch
        the code size and copy the entire contents into a temporary buffer here *)
     let$ size = Int64.to_int <$> get_code_size addr in
+    let addr = allocate Address.t addr in
     let buffer = allocate_n uint8_t ~count:(size + 100) in
     let$ size =
       bind API.copy_code <@> addr <@> Unsigned.Size_t.zero <@> buffer <@> Unsigned.Size_t.of_int size
     in
     return (Bytes.ocaml_of_c buffer size)
 
-  let selfdestruct ~address ~beneficiary = bind API.selfdestruct <@> address <@> beneficiary
+  let selfdestruct ~address ~beneficiary =
+    let address = allocate Address.t address in
+    let beneficiary = allocate Address.t beneficiary in
+    bind API.selfdestruct <@> address <@> beneficiary
 
   let call msg =
     let msg_ptr = allocate Message.t msg in
@@ -507,16 +514,29 @@ module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
 
   let get_block_hash index = bind API.get_block_hash <@> index
 
-  let emit_log address ~data ~(topics:U256.t list) =
-    let (c_data, c_data_size) = Bytes.c_of_ocaml ~mem:`Managed data in
-    let (c_topics, c_topics_size) = CList.c_of_ocaml Bytes32.t topics in
-    bind API.emit_log <@> address <@> c_data <@> c_data_size <@> c_topics <@> c_topics_size
+  let emit_log addr ~data ~(topics : U256.t list) =
+    let addr = allocate Address.t addr in
+    let c_data, c_data_size = Bytes.c_of_ocaml ~mem:`Managed data in
+    let c_topics, c_topics_size = CList.c_of_ocaml Bytes32.t topics in
+    bind API.emit_log <@> addr <@> c_data <@> c_data_size <@> c_topics <@> c_topics_size
 
-  let access_account addr = bind API.access_account <@> addr
-  let access_storage addr key = bind API.access_storage <@> addr <@> key
+  let access_account addr =
+    let addr = allocate Address.t addr in
+    bind API.access_account <@> addr
+  let access_storage addr key =
+    let addr = allocate Address.t addr in
+    let key = allocate Bytes32.t key in
+    bind API.access_storage <@> addr <@> key
 
-  let get_transient_storage addr key = bind API.get_transient_storage <@> addr <@> key
-  let set_transient_storage addr key value = bind API.set_transient_storage <@> addr <@> key <@> value
+  let get_transient_storage addr key =
+    let addr = allocate Address.t addr in
+    let key = allocate Bytes32.t key in
+    bind API.get_transient_storage <@> addr <@> key
+  let set_transient_storage addr key value =
+    let addr = allocate Address.t addr in
+    let key = allocate Bytes32.t key in
+    let value = allocate Bytes32.t value in
+    bind API.set_transient_storage <@> addr <@> key <@> value
 end
 
 module Vm = struct
