@@ -367,6 +367,22 @@ module TxContext = struct
   let t = view ~read:ocaml_of_c ~write:c_of_ocaml repr
 end
 
+module StorageStatus = struct
+  type t = StorageStatus.t
+  let mapping =
+    StorageStatus.
+      [ (0l, Assigned)
+      ; (1l, Added)
+      ; (2l, Deleted)
+      ; (3l, Modified)
+      ; (4l, DeletedAdded)
+      ; (5l, ModifiedDeleted)
+      ; (6l, DeletedRestored)
+      ; (7l, AddedDeleted)
+      ; (8l, ModifiedRestored) ]
+  let t = enum_view ~name:"evmc_storage_status" mapping
+end
+
 module HostInterface = struct
   type t
   let t : t structure typ = structure "evmc_host_interface"
@@ -384,7 +400,7 @@ module HostInterface = struct
          @-> const (ptr Address.t)
          @-> const (ptr Bytes32.t)
          @-> const (ptr Bytes32.t)
-         @-> returning void ) )
+         @-> returning StorageStatus.t ) )
 
   let get_balance =
     field t "get_balance" (funptr (ptr HostContext.t @-> const (ptr Address.t) @-> returning Uint256be.t))

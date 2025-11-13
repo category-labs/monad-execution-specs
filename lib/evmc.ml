@@ -88,6 +88,7 @@ module TxInitcode = struct
   (** Equivalent to {{:https://evmc.ethereum.org/structevmc__tx__initcode.html}[evmc_tx_initcode]}. *)
   type t = {hash : U256.t; code : Bytes.t}
 end
+
 module TxContext = struct
   (** Equivalent to {{:https://evmc.ethereum.org/structevmc__tx__context.html}[evmc_tx_context]}. *)
   type t =
@@ -105,6 +106,28 @@ module TxContext = struct
     ; initcodes : TxInitcode.t list }
 end
 
+module StorageStatus = struct
+  type t =
+    (* 0 -> 0 -> Z *)
+    | Added
+    (* X -> X -> 0 *)
+    | Deleted
+    (* X -> X -> Z *)
+    | Modified
+    (* X -> 0 -> Z *)
+    | DeletedAdded
+    (* X -> Y -> 0 *)
+    | ModifiedDeleted
+    (* X -> 0 -> X *)
+    | DeletedRestored
+    (* 0 -> Y -> 0 *)
+    | AddedDeleted
+    (* X -> Y -> X *)
+    | ModifiedRestored
+    (* X -> Y -> Z *)
+    | Assigned
+end
+
 module Host = struct
   (** The type of monads that can provide the EVMC host API. This mirrors the structure
       of {{:https://evmc.ethereum.org/structevmc__host__interface.html}[evmc_host_interface]}, replacing
@@ -115,7 +138,7 @@ module Host = struct
     val account_exists : Address.t -> bool t
 
     val get_storage : Address.t -> U256.t -> U256.t t
-    val set_storage : Address.t -> U256.t -> U256.t -> unit t
+    val set_storage : Address.t -> U256.t -> U256.t -> StorageStatus.t t
 
     val get_balance : Address.t -> U256.t t
 
@@ -325,7 +348,10 @@ module DummyHost = struct
     let get_storage addr key =
       !(account addr |-- storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
-    let set_storage addr key v = account addr |-- storage |-- U256.Map.at key := Some v
+    let set_storage addr key v =
+      let$ () = account addr |-- storage |-- U256.Map.at key := Some v in
+      (* TODO: make this accurate. *)
+      return StorageStatus.Assigned
 
     let get_balance addr = !(account addr |-- balance)
 
@@ -458,6 +484,7 @@ module DummyHost = struct
     let get_transient_storage _addr key =
       !(transient_storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
-    let set_transient_storage _addr key value = transient_storage |-- U256.Map.at key := Some value
+    let set_transient_storage _addr key value =
+      transient_storage |-- U256.Map.at key := Some value
   end
 end

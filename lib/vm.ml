@@ -92,7 +92,7 @@ module MachineState = struct
     ; memory : Memory.t (* μ_m, μ_i *)
     ; stack : U256.t list (* μ_s *)
     ; output_buffer : Bytes.t (* μ_o *)
-    ; gas_refund : Uint.t
+    ; gas_refund : Integer.t
           (* A_r *)
           (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
                most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
@@ -107,7 +107,7 @@ module MachineState = struct
     ; memory = Memory.empty
     ; stack = []
     ; output_buffer = Bytes.empty
-    ; gas_refund = Uint.zero }
+    ; gas_refund = Integer.zero }
 end
 
 module ExecutionEnvironment = struct
@@ -1189,52 +1189,39 @@ struct
     let$ current_gas = !(machine_state |-- gas) in
     let$ () = when_ Gas.(current_gas <= call_stipend) (fail Out_of_gas) in
 
+    (* Operation *)
+    (* Exceptionally, this is done before spending gas, as we use the host StorageStatus.t to calculate gas
+       costs. *)
+    let$ () = check_write_permissions in
     let$ self_addr = self in
+    let$ storage_status = HostAPI.set_storage self_addr key value' in
+
     let$ access = HostAPI.access_storage self_addr key in
-    let$ value = HostAPI.get_storage self_addr key in
-    let$ value0 = !(initial_storage |-- U256.Map.at key |-- Option.get_or_default value) in
-    (* If the storage slot had already been written to, then initial_storage contained an entry for it and so
-       this code does not change its value. If it had not been written to, then we store the value we get from
-       storage, before the first update *)
-    let$ () = initial_storage |-- U256.Map.at key := Some value0 in
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
-      match () with
-      | () when U256.(value0 = value && value' <> value && value0 = zero) -> Gas.sset_cost
-      | () when U256.(value0 = value && value' <> value && value0 <> zero) -> Gas.sreset_cost
-      | () -> Gas.warm_access_cost
+      match storage_status with
+      | Added -> Gas.sset_cost
+      | Deleted | Modified -> Gas.sreset_cost
+      | _ -> Gas.warm_access_cost
     in
     let$ () = spend Gas.(access_gas + update_gas) in
 
-    (* Operation *)
-    let$ () = check_write_permissions in
-    let$ () = HostAPI.set_storage self_addr key value' in
     (* The refund here can be negative as we may be undoing a previous positive refund *)
-    let refund : Integer.t =
-      match () with
-      | () when U256.(value <> value' && value0 = value && value' = zero) -> Gas.(as_signed sclear_refund)
-      | () when U256.(value <> value' && value0 <> value) ->
-          let r_dirtyclear =
-            match () with
-            | () when U256.(value0 <> zero && value = zero) -> Integer.(zero - Gas.(as_signed sclear_refund))
-            | () when U256.(value0 <> zero && value' = zero) -> Gas.(as_signed sclear_refund)
-            | () -> Integer.zero
-          in
-          let r_dirtyreset =
-            match () with
-            | () when U256.(value0 = value' && value0 = zero) ->
-                Integer.(Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost))
-            | () when U256.(value0 = value' && value0 <> zero) ->
-                Integer.(Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost))
-            | () -> Integer.zero
-          in
-          Integer.(r_dirtyclear + r_dirtyreset)
-      | () -> Integer.zero
+    let refund =
+      Integer.(
+        match storage_status with
+        | Deleted | ModifiedDeleted -> Gas.(as_signed sclear_refund)
+        | DeletedAdded -> zero - Gas.(as_signed sclear_refund)
+        | DeletedRestored ->
+            Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost) - Gas.(as_signed sclear_refund)
+        | AddedDeleted -> Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost)
+        | ModifiedRestored -> Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost)
+        | Assigned | Added | Modified -> zero)
     in
     let$ () =
       (* Overall gas refund is non-negative, but we have to do signed addition here *)
       update_field (machine_state |-- gas_refund) (fun r ->
-          Integer.(as_unsigned_exn (Uint.as_signed r + refund)) )
+          Integer.(r + refund)) 
     in
 
     (* PC *)
@@ -1375,7 +1362,7 @@ struct
   let merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund =
     let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g + of_int64 gas_left)) in
     if status_code = Evmc.Result.StatusCode.Success then
-      update_field (machine_state |-- MachineState.gas_refund) (fun g -> Uint.(g + of_int64 gas_refund))
+      update_field (machine_state |-- MachineState.gas_refund) (fun g -> Integer.(g + of_int64 gas_refund))
     else return (assert (Int64.(gas_refund = zero)))
 
   type delegation =
@@ -1930,7 +1917,7 @@ struct
           Evmc.Result.
             { status_code = Success
             ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-            ; gas_refund = Uint.to_uint64 ctx.machine_state.gas_refund
+            ; gas_refund = Integer.to_int64 ctx.machine_state.gas_refund
             ; output_data = ctx.machine_state.output_buffer
             ; create_address = Address.zero }
       | Error err -> (
