@@ -297,7 +297,8 @@ struct
         return result
 
       let call (msg : Evmc.Message.t) =
-        trace (fun () -> Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas) ;
+        trace (fun () ->
+            Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
         let$ result = call msg in
         trace (fun () -> Format.sprintf "returned %s" (Evmc.Result.StatusCode.to_string result.status_code)) ;
         return result
@@ -1558,7 +1559,7 @@ struct
       if transfer_value && U256.(self_balance < value) then
         let$ () = push U256.zero in
         let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + caller_spent_gas)) in
-        machine_state |-- output_buffer := Bytes.empty )
+        machine_state |-- output_buffer := Bytes.empty
       else
         generic_call_impl ~kind
           ~call_gas:U256.(of_unbounded_exn callee_available_gas)
