@@ -280,7 +280,8 @@ struct
         Base.get_code_hash addr
 
       let copy_code addr ~offset ~size =
-        host_trace (fun () -> Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size) ;
+        host_trace (fun () ->
+            Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
         Base.copy_code addr ~offset ~size
 
       let get_block_hash id =
@@ -291,7 +292,8 @@ struct
         host_trace (fun () ->
             Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
         let$ result = Base.call msg in
-        trace (fun () -> Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code)) ;
+        trace (fun () ->
+            Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
         return result
 
       let selfdestruct ~address ~beneficiary =
