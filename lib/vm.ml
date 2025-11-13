@@ -246,7 +246,8 @@ struct
         access_account addr
 
       let call (msg : Evmc.Message.t) =
-        trace (fun () -> Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas) ;
+        trace (fun () ->
+            Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
         let$ result = call msg in
         trace (fun () -> Format.sprintf "returned %s" (Evmc.Result.StatusCode.to_string result.status_code)) ;
         return result
@@ -835,12 +836,11 @@ struct
     let$ () = spend Gas.((n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
 
     (* Operation *)
-    let$ data = HostAPI.copy_code address in
-    let block =
+    let$ block =
       match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
-      | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
-      | _, Some size -> Bytes.make size '\x00'
-      | _, None -> assert false
+      | Some offset, Some size -> HostAPI.copy_code address ~offset ~size
+      | None, Some size -> return (Bytes.make size '\x00')
+      | _, None -> assert false (* This should have caused an OOG error. *)
     in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
 
@@ -1338,11 +1338,6 @@ struct
       push U256.zero
     else
       let$ input_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
-      let$ code =
-        match delegation with
-        | Direct {code} -> return code
-        | Delegated {code_address; _} -> HostAPI.copy_code code_address
-      in
       let delegated = match delegation with Direct _ -> false | Delegated _ -> true in
       let message =
         Evmc.(
@@ -1358,7 +1353,7 @@ struct
             ; value
             ; create2_salt = U256.zero
             ; code_address
-            ; code } )
+            ; code = Bytes.empty } )
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
@@ -1447,7 +1442,7 @@ struct
     increase_pc_and_continue
 
   let access_delegation (addr : Address.t) : delegation M.t =
-    let$ code = HostAPI.copy_code addr in
+    let$ code = HostAPI.copy_code addr ~offset:0 ~size:Delegation.eoa_delegated_code_length in
     match Delegation.get_delegated_address code with
     | None -> return (Direct {code})
     | Some code_address ->
@@ -1504,10 +1499,10 @@ struct
     let$ self_addr = self in
     let$ self_balance = HostAPI.get_balance self_addr in
     let$ () =
-      if transfer_value && U256.(self_balance < value) then (
+      if transfer_value && U256.(self_balance < value) then
         let$ () = push U256.zero in
         let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + caller_spent_gas)) in
-        machine_state |-- output_buffer := Bytes.empty )
+        machine_state |-- output_buffer := Bytes.empty
       else
         generic_call_impl ~kind
           ~call_gas:U256.(of_unbounded_exn callee_available_gas)
@@ -1867,7 +1862,7 @@ struct
           Evmc.Result.
             { status_code = Success
             ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-            ; gas_refund = 0L
+            ; gas_refund = Uint.to_uint64 ctx.machine_state.gas_refund
             ; output_data = ctx.machine_state.output_buffer
             ; create_address = Address.zero }
       | Error err -> (

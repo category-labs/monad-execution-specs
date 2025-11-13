@@ -251,12 +251,12 @@ module Result = struct
   let gas_refund = field repr "gas_refund" int64_t
   let output_data = field repr "output_data" (const (ptr uint8_t))
   let output_size = field repr "output_size" size_t
-  let release = field repr "release" (funptr (ptr repr @-> returning void))
+  let release = field repr "release" (funptr_opt (ptr repr @-> returning void))
   let create_address = field repr "create_address" Address.t
   let padding = field repr "padding" int32_t
   let () = seal repr
 
-  let release_fn = fun (result : repr structure ptr) -> Unmanaged.release !@(result |-> output_data)
+  let release_fn = Some (fun (result : repr structure ptr) -> Unmanaged.release !@(result |-> output_data))
 
   let c_of_ocaml (res : Result.t) : repr structure =
     let c = make repr in
@@ -270,12 +270,18 @@ module Result = struct
     c
 
   let ocaml_of_c (res : repr structure) : Result.t =
-    Result.
-      { status_code = getf res status_code
-      ; gas_left = getf res gas_left
-      ; gas_refund = getf res gas_refund
-      ; output_data = Bytes.ocaml_of_c (getf res output_data) (getf res output_size)
-      ; create_address = getf res create_address }
+    let result =
+      Result.
+        { status_code = getf res status_code
+        ; gas_left = getf res gas_left
+        ; gas_refund = getf res gas_refund
+        ; output_data = Bytes.ocaml_of_c (getf res output_data) (getf res output_size)
+        ; create_address = getf res create_address }
+    in
+    (* The result gets deallocated here, before converting it to an OCaml value and therefore losing track
+       of the destructor. *)
+    (match getf res release with None -> () | Some destructor -> destructor (allocate repr res)) ;
+    result
 
   let t = view ~read:ocaml_of_c ~write:c_of_ocaml repr
 end
@@ -490,15 +496,12 @@ module CHost : Host.SIG with type 'a t = 'a CHostMonad.t = struct
   let get_code_hash addr =
     let addr = allocate Address.t addr in
     bind API.get_code_hash <@> addr
-  let copy_code addr =
-    (* The OCaml API expects copy_code to return the entire contract code, so we have to fetch
-       the code size and copy the entire contents into a temporary buffer here *)
-    let$ size = Int64.to_int <$> get_code_size addr in
+  let copy_code addr ~offset ~size =
+    let buffer = allocate_n uint8_t ~count:size in
+    let offset = Unsigned.Size_t.of_int offset in
+    let size = Unsigned.Size_t.of_int size in
     let addr = allocate Address.t addr in
-    let buffer = allocate_n uint8_t ~count:(size + 100) in
-    let$ size =
-      bind API.copy_code <@> addr <@> Unsigned.Size_t.zero <@> buffer <@> Unsigned.Size_t.of_int size
-    in
+    let$ size = bind API.copy_code <@> addr <@> offset <@> buffer <@> size in
     return (Bytes.ocaml_of_c buffer size)
 
   let selfdestruct ~address ~beneficiary =

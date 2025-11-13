@@ -121,7 +121,7 @@ module Host = struct
 
     val get_code_size : Address.t -> Uint64.t t
     val get_code_hash : Address.t -> U256.t t
-    val copy_code : Address.t -> Bytes.t t
+    val copy_code : Address.t -> offset:int -> size:int -> Bytes.t t
 
     val selfdestruct : address:Address.t -> beneficiary:Address.t -> bool t
 
@@ -152,7 +152,7 @@ module Host = struct
 
     let get_code_size addr = MT.lift (M.get_code_size addr)
     let get_code_hash addr = MT.lift (M.get_code_hash addr)
-    let copy_code addr = MT.lift (M.copy_code addr)
+    let copy_code addr ~offset ~size = MT.lift (M.copy_code addr ~offset ~size)
 
     let selfdestruct ~address ~beneficiary = MT.lift (M.selfdestruct ~address ~beneficiary)
 
@@ -337,7 +337,9 @@ module DummyHost = struct
       let$ code = !(account addr |-- code) in
       return (Crypto.keccak_256 code)
 
-    let copy_code addr = !(account addr |-- code)
+    let copy_code addr ~offset ~size =
+      let$ code = !(account addr |-- code) in
+      return (Bytes.sub_with_zero_padding code offset size)
 
     let selfdestruct ~address ~beneficiary =
       let$ account_balance = !(account address |-- balance) in
