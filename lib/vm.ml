@@ -236,28 +236,90 @@ struct
     include ErrStHost
 
     module HostAPI = struct
-      include Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+      module Base = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
 
-      let trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
+      let host_trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
 
       (* TODO: trace other API calls. *)
+      let account_exists addr =
+        host_trace (fun () -> Format.sprintf "account_exists %s" (Address.to_short_hex_string addr)) ;
+        Base.account_exists addr
+
+      let get_storage addr key =
+        host_trace (fun () ->
+            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) ) ;
+        Base.get_storage addr key
+
+      let set_storage addr key v =
+        host_trace (fun () ->
+            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) (U256.to_short_hex_string v) ) ;
+        Base.set_storage addr key v
+
+      let get_balance addr =
+        host_trace (fun () -> Format.sprintf "get_balance %s" (Address.to_short_hex_string addr)) ;
+        Base.get_balance addr
+
       let access_account addr =
-        trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
-        access_account addr
+        host_trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
+        Base.access_account addr
+
+      let access_storage addr key =
+        host_trace (fun () ->
+            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) ) ;
+        Base.access_storage addr key
+
+      let get_code_size addr =
+        host_trace (fun () -> Format.sprintf "get_code_size %s" (Address.to_short_hex_string addr)) ;
+        Base.get_code_size addr
+
+      let get_code_hash addr =
+        host_trace (fun () -> Format.sprintf "get_code_hash %s" (Address.to_short_hex_string addr)) ;
+        Base.get_code_hash addr
+
+      let copy_code addr ~offset ~size =
+        host_trace (fun () -> Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size) ;
+        Base.copy_code addr ~offset ~size
+
+      let get_block_hash id =
+        host_trace (fun () -> Format.sprintf "get_block_hash %Ld" id) ;
+        Base.get_block_hash id
 
       let call (msg : Evmc.Message.t) =
-        trace (fun () ->
+        host_trace (fun () ->
             Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
-        let$ result = call msg in
-        trace (fun () -> Format.sprintf "returned %s" (Evmc.Result.StatusCode.to_string result.status_code)) ;
+        let$ result = Base.call msg in
+        trace (fun () -> Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code)) ;
         return result
 
       let selfdestruct ~address ~beneficiary =
-        trace (fun () ->
+        host_trace (fun () ->
             Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
               (Address.to_short_hex_string address)
               (Address.to_short_hex_string beneficiary) ) ;
-        selfdestruct ~address ~beneficiary
+        Base.selfdestruct ~address ~beneficiary
+
+      let emit_log addr ~data ~topics =
+        host_trace (fun () ->
+            Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr) (Bytes.to_hex_string data)
+              (List.fold_left
+                 (fun acc topic -> Format.sprintf "%s, %s" acc (U256.to_short_hex_string topic))
+                 "" topics ) ) ;
+        Base.emit_log addr ~data ~topics
+
+      let get_transient_storage addr key =
+        host_trace (fun () ->
+            Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) ) ;
+        Base.get_transient_storage addr key
+
+      let set_transient_storage addr key v =
+        host_trace (fun () ->
+            Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) (U256.to_short_hex_string v) ) ;
+        Base.set_transient_storage addr key v
     end
 
     let run (x : 'a t) (ctx : Context.t) : (('a, Evmc.Result.StatusCode.t) result * Context.t) Host.t =
@@ -838,6 +900,7 @@ struct
     (* Operation *)
     let$ block =
       match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
+      | _, Some 0 -> return Bytes.empty (* No need for the copy_code call *)
       | Some offset, Some size -> HostAPI.copy_code address ~offset ~size
       | None, Some size -> return (Bytes.make size '\x00')
       | _, None -> assert false (* This should have caused an OOG error. *)
@@ -1466,7 +1529,7 @@ struct
     let$ output_memory_extension_gas = extend_memory_to ~start:output_start ~size_bytes:output_size in
     let memory_extension_gas = Gas.(max input_memory_extension_gas output_memory_extension_gas) in
 
-    let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account recipient in
+    let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
     let$ delegation = access_delegation code_address in
     let code_address, access_gas =
       match delegation with
@@ -1689,7 +1752,10 @@ struct
     let$ beneficiary = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account beneficiary in
+    let$ access = HostAPI.access_account beneficiary in
+    (* Unlike in most other cases, the access cost for selfdestruct with a warm beneficiary is zero, rather
+       than Gas.warm_access_cost, see C_selfdestruct in YP. *)
+    let access_gas = match access with `Cold -> Gas.cold_account_access_cost | `Warm -> Gas.zero in
     let$ self_addr = self in
     let$ self_balance = HostAPI.get_balance self_addr in
     let$ beneficiary_exists = HostAPI.account_exists beneficiary in
