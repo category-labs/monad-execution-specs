@@ -296,13 +296,6 @@ struct
             Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
         return result
 
-      let call (msg : Evmc.Message.t) =
-        host_trace (fun () ->
-            Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
-        let$ result = Base.call msg in
-        trace (fun () -> Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code)) ;
-        return result
-
       let selfdestruct ~address ~beneficiary =
         host_trace (fun () ->
             Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
@@ -330,6 +323,9 @@ struct
               (U256.to_short_hex_string key) (U256.to_short_hex_string v) ) ;
         Base.set_transient_storage addr key v
     end
+
+    let run (x : 'a t) (ctx : Context.t) : (('a, Evmc.Result.StatusCode.t) result * Context.t) Host.t =
+      StHost.run x ctx
   end
   open M
 
@@ -1220,12 +1216,11 @@ struct
             Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost) - Gas.(as_signed sclear_refund)
         | AddedDeleted -> Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost)
         | ModifiedRestored -> Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost)
-        | Assigned | Added | Modified -> zero)
+        | Assigned | Added | Modified -> zero )
     in
     let$ () =
       (* Overall gas refund is non-negative, but we have to do signed addition here *)
-      update_field (machine_state |-- gas_refund) (fun r ->
-          Integer.(r + refund)) 
+      update_field (machine_state |-- gas_refund) (fun r -> Integer.(r + refund))
     in
 
     (* PC *)
@@ -1517,7 +1512,6 @@ struct
       ~output_start
       ~output_size
       ~static_call =
-
     (* Gas *)
     let$ input_memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size in
     let$ output_memory_extension_gas = extend_memory_to ~start:output_start ~size_bytes:output_size in
@@ -1911,7 +1905,7 @@ struct
     let open Monad.Make (Host) in
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg code in
-    let$ res, ctx = run code ctx in
+    let$ res, ctx = M.run (run code) ctx in
     trace (fun () -> "Finished execution\n") ;
     return
       ( match res with
