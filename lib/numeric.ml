@@ -98,24 +98,25 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
         fun bs -> of_z_exn (Z.of_bits (Bytes.reverse bs))
 
   let to_bytes_be : t -> Bytes.t =
-   fun x ->
-    let be_bytes = Bytes.reverse (Z.to_bits (to_z x)) in
-    let len = Bytes.length be_bytes in
-    (* Zero-pad for fixed-width integers *)
-    let padding =
-      match byte_width with
-      | None -> Bytes.empty
-      | Some byte_width ->
-          assert (len <= byte_width) ;
-          Bytes.make (byte_width - len) '\x00'
-    in
-    padding ^ be_bytes
+    match byte_width with
+    | None -> fun x -> Bytes.reverse (Z.to_bits (to_z x))
+    | Some byte_width ->
+        fun x ->
+          let z_bytes = Z.to_bits (to_z x) in
+          let z_n_bytes = Bytes.length z_bytes in
+          Bytes.init byte_width (fun i ->
+              (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
+                 time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
+                 code below handles truncating, reversing and optionally zero-padding *)
+              let le_i = byte_width - i - 1 in
+              if le_i >= z_n_bytes then '\x00' else z_bytes.[le_i] )
 
   let to_bytes_le : t -> Bytes.t = fun x -> Bytes.reverse (to_bytes_be x)
 
-  let byte i x =
-    let bytes = to_bytes_be x in
-    bytes.[i]
+  (** [byte ~index-le x] extracts the [i]-th byte from the Little-endian representation of [x]. *)
+  let byte ~index_le x =
+    let le_bytes = Z.to_bits (to_z x) in
+    if index_le >= Bytes.length le_bytes then '\x00' else le_bytes.[index_le]
 
   let significant_bytes x = (Z.numbits (to_z x) + 7) / 8
 
@@ -288,6 +289,7 @@ module TwosComplement (B : IS_BOUNDED) = struct
   let max_signed = S.(to_z max_t)
   module Signed = struct
     include S
+
     (** [as_unsigned x] reinterprets the binary representation of [x] (in two's complement) as an unsigned
         integer of the same bit-width. *)
     let as_unsigned (x : t) : U.t =
@@ -296,6 +298,7 @@ module TwosComplement (B : IS_BOUNDED) = struct
   end
   module Unsigned = struct
     include U
+
     (** [as_signed x] reinterprets the binary representation of [x] as a two's complement signed integer
         of the same bit-width. *)
     let as_signed (x : t) : Signed.t =
@@ -309,21 +312,24 @@ module TwosComplement (B : IS_BOUNDED) = struct
 
     let to_unbounded (x : t) : Uint.t = Uint.of_z_exn (to_z x)
     let of_unbounded_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
-    let of_unbounded_truncating (x: Uint.t) : t = of_z_truncating (Uint.to_z x)
+    let of_unbounded_truncating (x : Uint.t) : t = of_z_truncating (Uint.to_z x)
 
     let of_signed_int (x : int) = Signed.(as_unsigned ~$x)
   end
 end
 
 module Bits256 = TwosComplement (Size.Bits256)
+
 (** Unsigned 256-bit integers. {!U256.t} is used to represent Ethereum 256-bit words. *)
 module U256 = struct
   include Bits256.Unsigned
 end
+
 (** Signed 256-bit integers. {!I256.t} is used for signed arithmetic on Ethereum 256-bit words. *)
 module I256 = Bits256.Signed
 
 module Bits160 = TwosComplement (Size.Bits160)
+
 (** Unsigned 160-bit integers. {!U160.t} is used to represent 160-bit Ethereum addresses. *)
 module U160 = struct
   include Bits160.Unsigned
