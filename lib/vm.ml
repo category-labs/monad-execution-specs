@@ -1763,8 +1763,7 @@ struct
     (* PC *)
     finish_execution
 
-  let execute_opcode (opcode : Opcode.t) =
-    let impl =
+  let opcode_impl (opcode : Opcode.t) =
       match opcode with
       (* Arithmetic *)
       | Add -> add
@@ -1860,8 +1859,11 @@ struct
       (* Error *)
       | Invalid -> invalid
       | Undefined _ -> undefined
-    in
-    impl
+
+  let opcode_table =
+    Array.init 256 (fun i ->
+        let opcode = Opcode.of_byte (Char.chr i) in
+        opcode_impl opcode)
 
   let trace_stack =
     if Params.trace then ( fun stack ->
@@ -1890,13 +1892,13 @@ struct
     let opcode =
       (* YP (157) *)
       match U256.to_int_opt pc with
-      | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
-      | _ -> Opcode.Stop
+      | Some pc when pc < Bytes.length code -> code.[pc]
+      | _ -> '\x00'
     in
     trace (fun () ->
-        let info = Opcode.info opcode in
+        let info = Opcode.(info (of_byte opcode)) in
         Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
-    let$ continue = execute_opcode opcode in
+    let$ continue = opcode_table.(Char.code opcode) in
     if continue then run code else return ()
 
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
