@@ -54,14 +54,14 @@ let test_cases_push =
     Seq.ints 0
     |> Seq.take 33
     |> Seq.map (fun bytes ->
-           let value = U256.shift_right template ((32 - bytes) * 8) in
-           assert (U256.significant_bytes value = bytes) ;
-           let bc = Program.push value in
-           test_case (Format.sprintf "Push %d" bytes) `Quick (fun () ->
-               check' int
-                 ~msg:(Format.sprintf "Push %d takes %d" bytes (bytes + 1))
-                 ~expected:(bytes + 1) ~actual:(Bytes.length bc) ;
-               test_bytecode_pure bc ~input_stack:[] ~output_stack:[value] ) )
+        let value = U256.shift_right template ((32 - bytes) * 8) in
+        assert (U256.significant_bytes value = bytes) ;
+        let bc = Program.push value in
+        test_case (Format.sprintf "Push %d" bytes) `Quick (fun () ->
+            check' int
+              ~msg:(Format.sprintf "Push %d takes %d" bytes (bytes + 1))
+              ~expected:(bytes + 1) ~actual:(Bytes.length bc) ;
+            test_bytecode_pure bc ~input_stack:[] ~output_stack:[value] ) )
     |> List.of_seq
   in
   ("Push", test_cases)
@@ -72,9 +72,9 @@ let test_cases_dup =
     Seq.ints 1
     |> Seq.take 16
     |> Seq.map (fun depth ->
-           let output_stack = U256.of_int depth :: input_stack in
-           test_case (Format.sprintf "Dup %d" depth) `Quick (fun () ->
-               test_bytecode_pure (Program.to_bytecode [Dup depth]) ~input_stack ~output_stack ) )
+        let output_stack = U256.of_int depth :: input_stack in
+        test_case (Format.sprintf "Dup %d" depth) `Quick (fun () ->
+            test_bytecode_pure (Program.to_bytecode [Dup depth]) ~input_stack ~output_stack ) )
     |> List.of_seq
   in
   ("Dup", test_cases)
@@ -85,13 +85,13 @@ let test_cases_swap =
     Seq.ints 1
     |> Seq.take 16
     |> Seq.map (fun depth ->
-           let swap_x = List.nth input_stack 0 in
-           let swap_y = List.nth input_stack depth in
-           let output_stack =
-             List.mapi (fun d elt -> if d = 0 then swap_y else if d = depth then swap_x else elt) input_stack
-           in
-           test_case (Format.sprintf "Swap %d" depth) `Quick (fun () ->
-               test_bytecode_pure (Program.to_bytecode [Swap depth]) ~input_stack ~output_stack ) )
+        let swap_x = List.nth input_stack 0 in
+        let swap_y = List.nth input_stack depth in
+        let output_stack =
+          List.mapi (fun d elt -> if d = 0 then swap_y else if d = depth then swap_x else elt) input_stack
+        in
+        test_case (Format.sprintf "Swap %d" depth) `Quick (fun () ->
+            test_bytecode_pure (Program.to_bytecode [Swap depth]) ~input_stack ~output_stack ) )
     |> List.of_seq
   in
   ("Swap", test_cases)

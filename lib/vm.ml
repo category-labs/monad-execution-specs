@@ -92,7 +92,7 @@ module MachineState = struct
     ; memory : Memory.t (* μ_m, μ_i *)
     ; stack : U256.t list (* μ_s *)
     ; output_buffer : Bytes.t (* μ_o *)
-    ; gas_refund : Uint.t
+    ; gas_refund : Integer.t
           (* A_r *)
           (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
                most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
@@ -107,7 +107,7 @@ module MachineState = struct
     ; memory = Memory.empty
     ; stack = []
     ; output_buffer = Bytes.empty
-    ; gas_refund = Uint.zero }
+    ; gas_refund = Integer.zero }
 end
 
 module ExecutionEnvironment = struct
@@ -124,7 +124,7 @@ module ExecutionEnvironment = struct
       ; number : U256.t (* H_i *)
       ; timestamp : U256.t (* H_s *)
       ; gas_limit : U256.t (* H_l *)
-      ; prev_randao : Address.t (* H_a *)
+      ; prev_randao : U256.t (* H_a *)
       ; base_fee : U256.t (* H_f *)
       ; chain_id : U256.t (* β *) }
     [@@deriving lens {submodule = true; prefix = true}]
@@ -148,26 +148,26 @@ module ExecutionEnvironment = struct
     ; price : U256.t (* I_p *)
     ; data : Bytes.t (* I_d *)
     ; sender : Address.t (* I_s *)
-    ; value : U256.t (* I_w *)
-    ; bytes : Bytes.t (* I_b *)
+    ; value : U256.t (* I_v *)
+    ; bytecode : Bytes.t (* I_b *)
     ; header : ExecutionBlockHeader.t (* I_H *)
-    ; depth : int
+    ; depth : int (* I_e *)
     ; write_permission : bool (* I_w *)
     ; blob_versioned_hashes : U256.t list (* EIP-4844 *)
     ; blob_base_fee : U256.t (* EIP-7516 *) }
   [@@deriving lens {submodule = true; prefix = true}]
   include TLens
 
-  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
+  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
     { address = msg.recipient
     ; origin = ctx.tx_origin
     ; price = ctx.tx_gas_price
     ; data = msg.input_data
     ; sender = msg.sender
     ; value = msg.value
-    ; bytes = msg.code
+    ; bytecode = code
     ; header = ExecutionBlockHeader.of_tx_context ctx
-    ; depth = msg.depth
+    ; depth = Int32.to_int msg.depth
     ; write_permission = not msg.static
     ; blob_versioned_hashes = ctx.blob_hashes
     ; blob_base_fee = ctx.blob_base_fee }
@@ -196,10 +196,10 @@ module Context = struct
     in
     loop 0 U256.Set.empty
 
-  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) : t =
-    { execution_environment = ExecutionEnvironment.make ctx msg
+  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
+    { execution_environment = ExecutionEnvironment.make ctx msg code
     ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
-    ; jump_destinations = valid_jump_destinations msg.code
+    ; jump_destinations = valid_jump_destinations code
     ; initial_storage = U256.Map.empty }
 end
 
@@ -213,6 +213,17 @@ struct
   open ExecutionEnvironment
   open Context
 
+  let trace ?(print = Params.trace) msg =
+    if print then (
+      Format.print_string (msg ()) ;
+      Format.print_flush () )
+    else ()
+
+  let dump obj = trace (fun () -> Format.sprintf "Object 0x%x\n" (Obj.magic obj : int))
+
+  module Ethereum = Chain.Ethereum
+  module Address = Ethereum.Address
+
   module St = Monad.State (Context)
   module StatusCode = Evmc.Result.StatusCode
   module Err = Monad.Result (Evmc.Result.StatusCode)
@@ -224,12 +235,96 @@ struct
     include St.Lift (ErrStHost) (StHost)
     include ErrStHost
 
-    module HostAPI = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+    module HostAPI = struct
+      module Base = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+
+      let host_trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
+
+      (* TODO: trace other API calls. *)
+      let account_exists addr =
+        host_trace (fun () -> Format.sprintf "account_exists %s" (Address.to_short_hex_string addr)) ;
+        Base.account_exists addr
+
+      let get_storage addr key =
+        host_trace (fun () ->
+            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) ) ;
+        Base.get_storage addr key
+
+      let set_storage addr key v =
+        host_trace (fun () ->
+            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) (U256.to_short_hex_string v) ) ;
+        Base.set_storage addr key v
+
+      let get_balance addr =
+        host_trace (fun () -> Format.sprintf "get_balance %s" (Address.to_short_hex_string addr)) ;
+        Base.get_balance addr
+
+      let access_account addr =
+        host_trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
+        Base.access_account addr
+
+      let access_storage addr key =
+        host_trace (fun () ->
+            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) ) ;
+        Base.access_storage addr key
+
+      let get_code_size addr =
+        host_trace (fun () -> Format.sprintf "get_code_size %s" (Address.to_short_hex_string addr)) ;
+        Base.get_code_size addr
+
+      let get_code_hash addr =
+        host_trace (fun () -> Format.sprintf "get_code_hash %s" (Address.to_short_hex_string addr)) ;
+        Base.get_code_hash addr
+
+      let copy_code addr ~offset ~size =
+        host_trace (fun () ->
+            Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
+        Base.copy_code addr ~offset ~size
+
+      let get_block_hash id =
+        host_trace (fun () -> Format.sprintf "get_block_hash %Ld" id) ;
+        Base.get_block_hash id
+
+      let call (msg : Evmc.Message.t) =
+        host_trace (fun () ->
+            Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
+        let$ result = Base.call msg in
+        trace (fun () ->
+            Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
+        return result
+
+      let selfdestruct ~address ~beneficiary =
+        host_trace (fun () ->
+            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
+              (Address.to_short_hex_string address)
+              (Address.to_short_hex_string beneficiary) ) ;
+        Base.selfdestruct ~address ~beneficiary
+
+      let emit_log addr ~data ~topics =
+        host_trace (fun () ->
+            Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr) (Bytes.to_hex_string data)
+              (List.fold_left
+                 (fun acc topic -> Format.sprintf "%s, %s" acc (U256.to_short_hex_string topic))
+                 "" topics ) ) ;
+        Base.emit_log addr ~data ~topics
+
+      let get_transient_storage addr key =
+        host_trace (fun () ->
+            Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) ) ;
+        Base.get_transient_storage addr key
+
+      let set_transient_storage addr key v =
+        host_trace (fun () ->
+            Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
+              (U256.to_short_hex_string key) (U256.to_short_hex_string v) ) ;
+        Base.set_transient_storage addr key v
+    end
   end
   open M
-
-  module Ethereum = Chain.Ethereum
-  module Address = Ethereum.Address
 
   let max_stack_depth = 1024
   let max_code_size = 0x6000
@@ -438,7 +533,7 @@ struct
       push
         U256.(
           match to_int_opt byte_index with
-          | Some i when Stdlib.(i < 256) -> I256.as_unsigned (sign_extend i x)
+          | Some i when Stdlib.(i < 32) -> I256.as_unsigned (sign_extend i x)
           | Some _ | None -> x )
     in
 
@@ -585,14 +680,21 @@ struct
 
   let byte =
     (* Stack *)
-    let$ byte_index = pop in
+    let$ index_be = pop in
     let$ x = pop in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
 
     (* Operation *)
-    let$ () = push U256.(if byte_index >= ~$32 then zero else of_byte (byte (to_int byte_index) x)) in
+    let$ () =
+      push
+        ( match U256.to_int_opt index_be with
+        | Some index_be when index_be < 32 ->
+            let index_le = 31 - index_be in
+            U256.(of_byte (byte ~index_le x))
+        | _ -> U256.zero )
+    in
 
     (* PC *)
     increase_pc_and_continue
@@ -734,7 +836,7 @@ struct
 
   let codesize =
     fetch_environment_variable_opcode_impl (fun ctx ->
-        U256.of_int (Bytes.length ctx.execution_environment.bytes) )
+        U256.of_int (Bytes.length ctx.execution_environment.bytecode) )
 
   let copy_input_data_opcode_impl data_location =
     (* Stack *)
@@ -762,7 +864,7 @@ struct
 
   let calldatacopy = copy_input_data_opcode_impl (execution_environment |-- data)
 
-  let codecopy = copy_input_data_opcode_impl (execution_environment |-- bytes)
+  let codecopy = copy_input_data_opcode_impl (execution_environment |-- bytecode)
 
   let gasprice = fetch_environment_variable_opcode_impl (execution_environment |-- price).get
 
@@ -775,7 +877,7 @@ struct
     let$ () = spend access_gas in
 
     (* Operation *)
-    let$ size = HostAPI.get_code_size address in
+    let$ size = U256.of_int64 <$> HostAPI.get_code_size address in
     let$ () = push size in
 
     (* PC *)
@@ -792,15 +894,15 @@ struct
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account address in
     let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
     let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
-    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
+    let$ () = spend Gas.((n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
 
     (* Operation *)
-    let$ data = HostAPI.copy_code address in
-    let block =
+    let$ block =
       match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
-      | Some src_start, Some size -> Bytes.sub_with_zero_padding data src_start size
-      | _, Some size -> Bytes.make size '\x00'
-      | _, None -> assert false
+      | _, Some 0 -> return Bytes.empty (* No need for the copy_code call *)
+      | Some offset, Some size -> HostAPI.copy_code address ~offset ~size
+      | None, Some size -> return (Bytes.make size '\x00')
+      | _, None -> assert false (* This should have caused an OOG error. *)
     in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
 
@@ -833,13 +935,9 @@ struct
     let$ size_bytes = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
-    let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
-    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
-
-    (* Operation *)
     let$ data = !(machine_state |-- output_buffer) in
-    (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access *)
+    (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access. We check this before
+       extending the memory and spending gas. *)
     (* YP (158) *)
     let$ src_start, size =
       match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
@@ -847,6 +945,12 @@ struct
       | Some start, Some sz when start + sz > Bytes.length data -> fail Invalid_memory_access
       | Some start, Some sz -> return (start, sz)
     in
+
+    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
+    let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
+
+    (* Operation *)
     let block = Bytes.sub data src_start size in
     let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
 
@@ -855,16 +959,16 @@ struct
 
   let blockhash =
     (* Stack *)
-    let$ block_num = pop in
+    let$ block_num = U256.to_unbounded <$> pop in
 
     (* Gas *)
     let$ () = spend Gas.block_hash_cost in
 
     (* Operation *)
-    let$ current_block_num = !(execution_environment |-- header |-- number) in
+    let$ current_block_num = U256.to_unbounded <$> !(execution_environment |-- header |-- number) in
     let$ hash =
-      if U256.(current_block_num <= block_num || current_block_num - ~$256 > block_num) then return U256.zero
-      else HostAPI.get_block_hash block_num
+      if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then return U256.zero
+      else HostAPI.get_block_hash (Uint.to_int64 block_num)
     in
     let$ () = push hash in
 
@@ -880,14 +984,13 @@ struct
   let number = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- number).get
 
   let prevrandao =
-    fetch_environment_variable_opcode_impl (fun ctx ->
-        Address.to_u256 ctx.execution_environment.header.prev_randao )
+    fetch_environment_variable_opcode_impl (execution_environment |-- header |-- prev_randao).get
 
   let gaslimit = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- gas_limit).get
 
-  (* The yellow paper gets the chain ID directly as the ambient variable Beta, as opposed to fetching it
+  (* The yellow paper gets the chain ID directly as the ambient variable β, as opposed to fetching it
      from a specific field in the execution environment. The executable specs, on the other hand, does get
-     it from an environment field *)
+     it from the block environment. *)
   let chainid = fetch_environment_variable_opcode_impl (execution_environment |-- header |-- chain_id).get
 
   let selfbalance =
@@ -958,7 +1061,7 @@ struct
 
     (* Operation *)
     let$ here = U256.to_int <$> !(machine_state |-- pc) in
-    let$ code = !(execution_environment |-- bytes) in
+    let$ code = !(execution_environment |-- bytecode) in
     let$ () = push (U256.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)) in
 
     (* PC *)
@@ -1050,7 +1153,9 @@ struct
     let$ () = spend Gas.(very_low + memory_extension_gas) in
 
     (* Operation *)
-    let$ () = update_field (machine_state |-- memory) (Memory.write_byte_at pos U256.(byte 0 value)) in
+    let$ () =
+      update_field (machine_state |-- memory) (Memory.write_byte_at pos U256.(byte ~index_le:0 value))
+    in
 
     (* PC *)
     increase_pc_and_continue
@@ -1081,52 +1186,39 @@ struct
     let$ current_gas = !(machine_state |-- gas) in
     let$ () = when_ Gas.(current_gas <= call_stipend) (fail Out_of_gas) in
 
+    (* Operation *)
+    (* Exceptionally, this is done before spending gas, as we use the host StorageStatus.t to calculate gas
+       costs. *)
+    let$ () = check_write_permissions in
     let$ self_addr = self in
+    let$ storage_status = HostAPI.set_storage self_addr key value' in
+
     let$ access = HostAPI.access_storage self_addr key in
-    let$ value = HostAPI.get_storage self_addr key in
-    let$ value0 = !(initial_storage |-- U256.Map.at key |-- Option.get_or_default value) in
-    (* If the storage slot had already been written to, then initial_storage contained an entry for it and so
-       this code does not change its value. If it had not been written to, then we store the value we get from
-       storage, before the first update *)
-    let$ () = initial_storage |-- U256.Map.at key := Some value0 in
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
-      match () with
-      | () when U256.(value0 = value && value' <> value && value0 = zero) -> Gas.sset_cost
-      | () when U256.(value0 = value && value' <> value && value0 <> zero) -> Gas.sreset_cost
-      | () -> Gas.warm_access_cost
+      match storage_status with
+      | Added -> Gas.sset_cost
+      | Deleted | Modified -> Gas.sreset_cost
+      | _ -> Gas.warm_access_cost
     in
     let$ () = spend Gas.(access_gas + update_gas) in
 
-    (* Operation *)
-    let$ () = check_write_permissions in
-    let$ () = HostAPI.set_storage self_addr key value' in
     (* The refund here can be negative as we may be undoing a previous positive refund *)
-    let refund : Integer.t =
-      match () with
-      | () when U256.(value <> value' && value0 = value && value' = zero) -> Gas.(as_signed sclear_refund)
-      | () when U256.(value <> value' && value0 <> value) ->
-          let r_dirtyclear =
-            match () with
-            | () when U256.(value0 <> zero && value = zero) -> Integer.(zero - Gas.(as_signed sclear_refund))
-            | () when U256.(value0 <> zero && value' = zero) -> Gas.(as_signed sclear_refund)
-            | () -> Integer.zero
-          in
-          let r_dirtyreset =
-            match () with
-            | () when U256.(value0 = value' && value0 = zero) ->
-                Integer.(Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost))
-            | () when U256.(value0 = value' && value0 <> zero) ->
-                Integer.(Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost))
-            | () -> Integer.zero
-          in
-          Integer.(r_dirtyclear + r_dirtyreset)
-      | () -> Integer.zero
+    let refund =
+      Integer.(
+        match storage_status with
+        | Deleted | ModifiedDeleted -> Gas.(as_signed sclear_refund)
+        | DeletedAdded -> zero - Gas.(as_signed sclear_refund)
+        | DeletedRestored ->
+            Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost) - Gas.(as_signed sclear_refund)
+        | AddedDeleted -> Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost)
+        | ModifiedRestored -> Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost)
+        | Assigned | Added | Modified -> zero)
     in
     let$ () =
       (* Overall gas refund is non-negative, but we have to do signed addition here *)
       update_field (machine_state |-- gas_refund) (fun r ->
-          Integer.(as_unsigned_exn (Uint.as_signed r + refund)) )
+          Integer.(r + refund)) 
     in
 
     (* PC *)
@@ -1169,7 +1261,7 @@ struct
   let gas_ =
     (* Stack *)
     (* Gas *)
-    let$ () = spend Gas.very_low in
+    let$ () = spend Gas.base in
 
     (* Operation *)
     let$ current_gas = !(machine_state |-- gas) in
@@ -1195,7 +1287,8 @@ struct
     let$ () = spend Gas.warm_access_cost in
 
     (* Operation *)
-    let$ value = HostAPI.get_transient_storage key in
+    let$ self_addr = self in
+    let$ value = HostAPI.get_transient_storage self_addr key in
     let$ () = push value in
 
     (* PC *)
@@ -1211,7 +1304,8 @@ struct
 
     (* Operation *)
     let$ () = check_write_permissions in
-    let$ () = HostAPI.set_transient_storage key value in
+    let$ self_addr = self in
+    let$ () = HostAPI.set_transient_storage self_addr key value in
 
     (* PC *)
     increase_pc_and_continue
@@ -1265,17 +1359,21 @@ struct
   let merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund =
     let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g + of_int64 gas_left)) in
     if status_code = Evmc.Result.StatusCode.Success then
-      update_field (machine_state |-- MachineState.gas_refund) (fun g -> Uint.(g + of_int64 gas_refund))
+      update_field (machine_state |-- MachineState.gas_refund) (fun g -> Integer.(g + of_int64 gas_refund))
     else return (assert (Int64.(gas_refund = zero)))
 
+  type delegation =
+    | Delegated of {code_address : Address.t; delegation_access_gas : Uint.t}
+    | Direct of {code : Bytes.t}
+
   let generic_call_impl
-      ~(kind : Evmc.CallKind.t)
+      ~(kind : Evmc.Message.CallKind.t)
       ~(call_gas : U256.t)
       ~(value : U256.t)
       ~(sender : Address.t)
       ~(recipient : Address.t)
       ~(code_address : Address.t)
-      ~(delegated : bool)
+      ~(delegation : delegation)
       ~(static : bool)
       ~(input_start : U256.t)
       ~(input_size : U256.t)
@@ -1289,14 +1387,14 @@ struct
       push U256.zero
     else
       let$ input_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
-      let$ code = HostAPI.copy_code code_address in
+      let delegated = match delegation with Direct _ -> false | Delegated _ -> true in
       let message =
         Evmc.(
           Message.
             { kind
             ; delegated
             ; static
-            ; depth = new_depth
+            ; depth = Int32.of_int new_depth
             ; gas = U256.to_uint64 call_gas
             ; recipient
             ; sender
@@ -1304,11 +1402,11 @@ struct
             ; value
             ; create2_salt = U256.zero
             ; code_address
-            ; code } )
+            ; code = Bytes.empty } )
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
-      assert (Option.is_none create_address) ;
+      assert (Address.(zero = create_address)) ;
 
       let$ () = machine_state |-- output_buffer := output_data in
       if status_code = Evmc.Result.StatusCode.Success then
@@ -1322,7 +1420,7 @@ struct
       else push U256.zero
 
   let generic_create_impl
-      ~(kind : Evmc.CallKind.t)
+      ~(kind : Evmc.Message.CallKind.t)
       ~(create2_salt : U256.t)
       ~(endowment : U256.t)
       ~(input_start : U256.t)
@@ -1348,22 +1446,21 @@ struct
             { kind
             ; delegated = false
             ; static = false
-            ; depth = new_depth
+            ; depth = Int32.of_int new_depth
             ; gas = Uint.to_int64 create_message_gas
             ; recipient = Address.zero
             ; sender = self_addr
-            ; input_data = Bytes.empty
+            ; input_data = call_data
             ; value = endowment
             ; create2_salt
             ; code_address = Address.zero
-            ; code = call_data } )
+            ; code = Bytes.empty } )
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
-      if status_code = Evmc.Result.StatusCode.Success then (
-        assert (Option.is_some create_address) ;
+      if status_code = Evmc.Result.StatusCode.Success then
         let$ () = machine_state |-- output_buffer := Bytes.empty in
-        push (Address.to_u256 (Option.get create_address)) )
+        push (Address.to_u256 create_address)
       else
         let$ () = machine_state |-- output_buffer := output_data in
         push U256.zero
@@ -1386,22 +1483,20 @@ struct
 
     (* Operation *)
     let$ () =
-      generic_create_impl ~create2_salt:U256.zero ~kind:Evmc.CallKind.Create ~endowment ~input_start
+      generic_create_impl ~create2_salt:U256.zero ~kind:Evmc.Message.CallKind.Create ~endowment ~input_start
         ~input_size_bytes
     in
 
     (* PC *)
     increase_pc_and_continue
 
-  type delegation = {delegated : bool; code_address : Address.t; delegation_access_gas : Uint.t}
-
-  let access_delegation (addr : Address.t) =
-    let$ code = HostAPI.copy_code addr in
+  let access_delegation (addr : Address.t) : delegation M.t =
+    let$ code = HostAPI.copy_code addr ~offset:0 ~size:Delegation.eoa_delegated_code_length in
     match Delegation.get_delegated_address code with
-    | None -> return {delegated = false; code_address = addr; delegation_access_gas = Gas.zero}
-    | Some address ->
-        let$ delegation_access_gas = Gas.account_access_cost <$> HostAPI.access_account address in
-        return {delegated = true; code_address = address; delegation_access_gas}
+    | None -> return (Direct {code})
+    | Some code_address ->
+        let$ delegation_access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
+        return (Delegated {code_address; delegation_access_gas})
 
   let call_opcode_impl
       ~kind
@@ -1415,22 +1510,26 @@ struct
       ~output_start
       ~output_size
       ~static_call =
-    if U256.(value > zero) then assert (kind = Evmc.CallKind.Call || kind = Evmc.CallKind.CallCode) ;
-
     (* Gas *)
     let$ input_memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size in
     let$ output_memory_extension_gas = extend_memory_to ~start:output_start ~size_bytes:output_size in
     let memory_extension_gas = Gas.(max input_memory_extension_gas output_memory_extension_gas) in
 
-    let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account recipient in
-    let$ {delegated; code_address; delegation_access_gas} = access_delegation code_address in
-    let access_gas = Gas.(access_gas + delegation_access_gas) in
+    let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
+    let$ delegation = access_delegation code_address in
+    let code_address, access_gas =
+      match delegation with
+      | Direct _delegation -> (code_address, access_gas)
+      | Delegated {delegation_access_gas; code_address} ->
+          (code_address, Gas.(access_gas + delegation_access_gas))
+    in
+
+    let transfer_value = kind <> Evmc.Message.CallKind.DelegateCall && U256.(value <> zero) in
 
     let$ target_is_alive = HostAPI.account_exists recipient in
-    if kind <> Evmc.CallKind.Call then assert target_is_alive ;
-    let create_gas = Gas.(if U256.(value = zero) || target_is_alive then zero else new_account_cost) in
+    let create_gas = Gas.(if transfer_value && not target_is_alive then new_account_cost else zero) in
 
-    let transfer_gas = Gas.(if U256.(value = zero) then zero else call_value) in
+    let transfer_gas = Gas.(if transfer_value then call_value else zero) in
 
     let$ gas_left = !(machine_state |-- MachineState.gas) in
     let Gas.{caller_spent_gas; callee_available_gas} =
@@ -1441,7 +1540,7 @@ struct
     let$ () = spend Gas.(caller_spent_gas + memory_extension_gas) in
 
     (* Operation *)
-    let$ () = when_ U256.(value <> zero) check_write_permissions in
+    let$ () = when_ transfer_value check_write_permissions in
 
     let$ in_static_context = not <$> !(execution_environment |-- write_permission) in
     let static = static_call || in_static_context in
@@ -1449,7 +1548,7 @@ struct
     let$ self_addr = self in
     let$ self_balance = HostAPI.get_balance self_addr in
     let$ () =
-      if U256.(self_balance < value) then
+      if transfer_value && U256.(self_balance < value) then
         let$ () = push U256.zero in
         let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + caller_spent_gas)) in
         machine_state |-- output_buffer := Bytes.empty
@@ -1457,7 +1556,7 @@ struct
         generic_call_impl ~kind
           ~call_gas:U256.(of_unbounded_exn callee_available_gas)
           ~value ~sender ~recipient ~code_address ~input_start ~input_size ~output_start ~output_size
-          ~delegated ~static
+          ~delegation ~static
     in
 
     (* PC *)
@@ -1475,7 +1574,7 @@ struct
 
     let$ self_addr = self in
     call_opcode_impl
-      ~kind:Evmc.CallKind.Call
+      ~kind:Evmc.Message.CallKind.Call
       ~gas
       ~sender:self_addr
       ~recipient
@@ -1500,7 +1599,7 @@ struct
 
     let$ self_addr = self in
     call_opcode_impl
-      ~kind:Evmc.CallKind.CallCode
+      ~kind:Evmc.Message.CallKind.CallCode
       ~gas
       ~value
       ~sender:self_addr
@@ -1548,7 +1647,7 @@ struct
 
     let$ self_addr = self in
 
-    call_opcode_impl ~kind:Evmc.CallKind.DelegateCall
+    call_opcode_impl ~kind:Evmc.Message.CallKind.DelegateCall
       ~gas
       ~sender:original_sender
       ~recipient:self_addr
@@ -1582,7 +1681,8 @@ struct
 
     (* Operation *)
     let$ () =
-      generic_create_impl ~kind:Evmc.CallKind.Create2 ~endowment ~input_start ~input_size_bytes ~create2_salt
+      generic_create_impl ~kind:Evmc.Message.CallKind.Create2 ~endowment ~input_start ~input_size_bytes
+        ~create2_salt
     in
 
     (* PC *)
@@ -1599,7 +1699,7 @@ struct
 
     let$ self_addr = self in
     call_opcode_impl
-      ~kind:Evmc.CallKind.Call
+      ~kind:Evmc.Message.CallKind.Call
       ~gas
       ~sender:self_addr
       ~recipient
@@ -1638,7 +1738,10 @@ struct
     let$ beneficiary = Address.of_u256_truncating <$> pop in
 
     (* Gas *)
-    let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account beneficiary in
+    let$ access = HostAPI.access_account beneficiary in
+    (* Unlike in most other cases, the access cost for selfdestruct with a warm beneficiary is zero, rather
+       than Gas.warm_access_cost, see C_selfdestruct in YP. *)
+    let access_gas = match access with `Cold -> Gas.cold_account_access_cost | `Warm -> Gas.zero in
     let$ self_addr = self in
     let$ self_balance = HostAPI.get_balance self_addr in
     let$ beneficiary_exists = HostAPI.account_exists beneficiary in
@@ -1761,7 +1864,8 @@ struct
     if Params.trace then ( fun stack ->
       Format.printf "<top>\n" ;
       List.iter (fun elt -> Format.printf "%s\n" (U256.to_string elt)) stack ;
-      Format.printf "<bottom>\n" )
+      Format.printf "<bottom>\n" ;
+      Format.print_flush () )
     else fun _ -> ()
 
   let trace_state =
@@ -1786,44 +1890,51 @@ struct
       | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
       | _ -> Opcode.Stop
     in
-    ( if Params.trace then
+    trace (fun () ->
         let info = Opcode.info opcode in
-        Format.printf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
+        Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
     let$ continue = execute_opcode opcode in
     if continue then run code else return ()
 
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
+    trace (fun () -> "Start execution\n") ;
+    trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
     let open Host in
     let open Monad.Make (Host) in
     let$ tx_context = get_tx_context in
-    let ctx = Context.make tx_context msg in
+    let ctx = Context.make tx_context msg code in
     let$ res, ctx = run code ctx in
+    trace (fun () -> "Finished execution\n") ;
     return
       ( match res with
       | Ok () ->
+          trace (fun () ->
+              Format.sprintf "Execution OK, returning [[%s]]\n"
+                (Bytes.to_hex_string ctx.machine_state.output_buffer) ) ;
           Evmc.Result.
             { status_code = Success
             ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-            ; gas_refund = 0L
+            ; gas_refund = Integer.to_int64 ctx.machine_state.gas_refund
             ; output_data = ctx.machine_state.output_buffer
-            ; create_address = None }
+            ; create_address = Address.zero }
       | Error err -> (
-        match err with
-        | Success -> assert false
-        | Revert ->
-            (* If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+          trace (fun () -> Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err)) ;
+          match err with
+          | Success -> assert false
+          | Revert ->
+              (* If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
                buffer is returned, see YP (152) *)
-            Evmc.Result.
-              { status_code = err
-              ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-              ; gas_refund = 0L
-              ; output_data = ctx.machine_state.output_buffer
-              ; create_address = None }
-        | _ ->
-            Evmc.Result.
-              { status_code = err
-              ; gas_left = 0L
-              ; gas_refund = 0L
-              ; output_data = Bytes.empty
-              ; create_address = None } ) )
+              Evmc.Result.
+                { status_code = err
+                ; gas_left = Uint.to_uint64 ctx.machine_state.gas
+                ; gas_refund = 0L
+                ; output_data = ctx.machine_state.output_buffer
+                ; create_address = Address.zero }
+          | _ ->
+              Evmc.Result.
+                { status_code = err
+                ; gas_left = 0L
+                ; gas_refund = 0L
+                ; output_data = Bytes.empty
+                ; create_address = Address.zero } ) )
 end

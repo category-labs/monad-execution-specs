@@ -60,20 +60,20 @@ module Result = struct
     ; gas_left : Int64.t
     ; gas_refund : Int64.t
     ; output_data : Bytes.t
-    ; create_address : Address.t option }
-end
-
-module CallKind = struct
-  type t = Call | DelegateCall | CallCode | Create | Create2
+    ; create_address : Address.t }
 end
 
 module Message = struct
+  module CallKind = struct
+    type t = Call | DelegateCall | CallCode | Create | Create2
+  end
+
   (** Equivalent to {{:https://evmc.ethereum.org/structevmc__message.html}[evmc_message]}. *)
   type t =
     { kind : CallKind.t
     ; static : bool
-    ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGATECALL opcode *)
-    ; depth : int
+    ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGAECALL opcode *)
+    ; depth : Int32.t
     ; gas : Uint64.t
     ; recipient : Address.t
     ; sender : Address.t
@@ -88,6 +88,7 @@ module TxInitcode = struct
   (** Equivalent to {{:https://evmc.ethereum.org/structevmc__tx__initcode.html}[evmc_tx_initcode]}. *)
   type t = {hash : U256.t; code : Bytes.t}
 end
+
 module TxContext = struct
   (** Equivalent to {{:https://evmc.ethereum.org/structevmc__tx__context.html}[evmc_tx_context]}. *)
   type t =
@@ -97,12 +98,34 @@ module TxContext = struct
     ; block_number : Uint64.t
     ; block_timestamp : Uint64.t
     ; block_gas_limit : Uint64.t
-    ; block_prev_randao : Address.t
+    ; block_prev_randao : U256.t
     ; chain_id : U256.t
     ; block_base_fee : U256.t
     ; blob_base_fee : U256.t
     ; blob_hashes : U256.t list
     ; initcodes : TxInitcode.t list }
+end
+
+module StorageStatus = struct
+  type t =
+    (* 0 -> 0 -> Z *)
+    | Added
+    (* X -> X -> 0 *)
+    | Deleted
+    (* X -> X -> Z *)
+    | Modified
+    (* X -> 0 -> Z *)
+    | DeletedAdded
+    (* X -> Y -> 0 *)
+    | ModifiedDeleted
+    (* X -> 0 -> X *)
+    | DeletedRestored
+    (* 0 -> Y -> 0 *)
+    | AddedDeleted
+    (* X -> Y -> X *)
+    | ModifiedRestored
+    (* X -> Y -> Z *)
+    | Assigned
 end
 
 module Host = struct
@@ -115,13 +138,13 @@ module Host = struct
     val account_exists : Address.t -> bool t
 
     val get_storage : Address.t -> U256.t -> U256.t t
-    val set_storage : Address.t -> U256.t -> U256.t -> unit t
+    val set_storage : Address.t -> U256.t -> U256.t -> StorageStatus.t t
 
     val get_balance : Address.t -> U256.t t
 
-    val get_code_size : Address.t -> U256.t t
+    val get_code_size : Address.t -> Uint64.t t
     val get_code_hash : Address.t -> U256.t t
-    val copy_code : Address.t -> Bytes.t t
+    val copy_code : Address.t -> offset:int -> size:int -> Bytes.t t
 
     val selfdestruct : address:Address.t -> beneficiary:Address.t -> bool t
 
@@ -129,15 +152,15 @@ module Host = struct
 
     val get_tx_context : TxContext.t t
 
-    val get_block_hash : U256.t -> U256.t t
+    val get_block_hash : Uint64.t -> U256.t t
 
     val emit_log : Address.t -> data:Bytes.t -> topics:U256.t list -> unit t
 
     val access_account : Address.t -> [`Warm | `Cold] t
     val access_storage : Address.t -> U256.t -> [`Warm | `Cold] t
 
-    val get_transient_storage : U256.t -> U256.t t
-    val set_transient_storage : U256.t -> U256.t -> unit t
+    val get_transient_storage : Address.t -> U256.t -> U256.t t
+    val set_transient_storage : Address.t -> U256.t -> U256.t -> unit t
   end
 
   (* Lift a host monad through a transformer stack *)
@@ -152,7 +175,7 @@ module Host = struct
 
     let get_code_size addr = MT.lift (M.get_code_size addr)
     let get_code_hash addr = MT.lift (M.get_code_hash addr)
-    let copy_code addr = MT.lift (M.copy_code addr)
+    let copy_code addr ~offset ~size = MT.lift (M.copy_code addr ~offset ~size)
 
     let selfdestruct ~address ~beneficiary = MT.lift (M.selfdestruct ~address ~beneficiary)
 
@@ -167,8 +190,8 @@ module Host = struct
     let access_account addr = MT.lift (M.access_account addr)
     let access_storage addr k = MT.lift (M.access_storage addr k)
 
-    let get_transient_storage addr = MT.lift (M.get_transient_storage addr)
-    let set_transient_storage addr k = MT.lift (M.set_transient_storage addr k)
+    let get_transient_storage addr k = MT.lift (M.get_transient_storage addr k)
+    let set_transient_storage addr k v = MT.lift (M.set_transient_storage addr k v)
   end
 end
 
@@ -199,10 +222,7 @@ end
 
 (** A dummy OCaml implementation for testing, backed by a simple mapping of accounts to storage. Does not
     use a MPT or store any cross-transaction state. *)
-module DummyHost (Params : sig
-  val chain_id : U256.t
-end) =
-struct
+module DummyHost = struct
   open Chain.Ethereum
   open Lens.Infix
 
@@ -328,19 +348,24 @@ struct
     let get_storage addr key =
       !(account addr |-- storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
-    let set_storage addr key v = account addr |-- storage |-- U256.Map.at key := Some v
+    let set_storage addr key v =
+      let$ () = account addr |-- storage |-- U256.Map.at key := Some v in
+      (* TODO: make this accurate. *)
+      return StorageStatus.Assigned
 
     let get_balance addr = !(account addr |-- balance)
 
     let get_code_size addr =
       let$ code = !(account addr |-- code) in
-      return (U256.of_int (Bytes.length code))
+      return (Uint64.of_int (Bytes.length code))
 
     let get_code_hash addr =
       let$ code = !(account addr |-- code) in
       return (Crypto.keccak_256 code)
 
-    let copy_code addr = !(account addr |-- code)
+    let copy_code addr ~offset ~size =
+      let$ code = !(account addr |-- code) in
+      return (Bytes.sub_with_zero_padding code offset size)
 
     let selfdestruct ~address ~beneficiary =
       let$ account_balance = !(account address |-- balance) in
@@ -375,7 +400,7 @@ struct
             ; gas_left = 0L
             ; gas_refund = 0L
             ; output_data = Bytes.empty
-            ; create_address = None }
+            ; create_address = Address.zero }
       else
         let$ () =
           update_field accounts_created_in_current_transaction (fun addresses ->
@@ -404,7 +429,7 @@ struct
                       if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
             else
               let$ () = account create_address |-- code := contract_code in
-              return {result with create_address = Some create_address}
+              return {result with create_address}
         | _ -> return result
 
     let call (msg : Message.t) =
@@ -426,8 +451,8 @@ struct
           ; block_number = 0L
           ; block_timestamp = 0L
           ; block_gas_limit = 99999L
-          ; block_prev_randao = Address.zero
-          ; chain_id = Params.chain_id
+          ; block_prev_randao = U256.zero
+          ; chain_id = U256.zero
           ; block_base_fee = U256.zero
           ; blob_base_fee = U256.zero
           ; blob_hashes = []
@@ -436,7 +461,7 @@ struct
     let get_block_hash i =
       (* This host is not backed by an actual block database, so we return the hash of i which is enough for
          testing *)
-      return (Crypto.keccak_256 (U256.to_bytes_be i))
+      return (Crypto.keccak_256 U256.(to_bytes_be (of_uint64 i)))
 
     let emit_log address ~(data : Bytes.t) ~(topics : U256.t list) =
       let log : Log.t = {address; topics; data} in
@@ -456,9 +481,10 @@ struct
         let$ () = touch_storage addr key in
         return `Cold
 
-    let get_transient_storage key =
+    let get_transient_storage _addr key =
       !(transient_storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
-    let set_transient_storage key value = transient_storage |-- U256.Map.at key := Some value
+    let set_transient_storage _addr key value =
+      transient_storage |-- U256.Map.at key := Some value
   end
 end

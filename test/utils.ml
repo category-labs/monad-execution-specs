@@ -7,17 +7,13 @@ module Revision = struct
 end
 
 module Params = struct
-  let trace = true
+  let trace = false
 end
 
-module HostImpl = Evmc.DummyHost (struct
-  let chain_id = U256.zero
-end)
-
 module Evm = struct
-  module Evm0 = Evmc.Instantiate (HostImpl.M) (HostImpl.Make) (Vm.Make (Params))
+  module Evm0 = Evmc.Instantiate (Evmc.DummyHost.M) (Evmc.DummyHost.Make) (Vm.Make (Params))
 
-  (* Unfold one level of recursion to get access to the full signature of Vm and Host *)
+  (* Unfold one level of recursion to get access to the full signature of Vm *)
   module Vm = Vm.Make (Params) (Evm0.Host)
   module Host = Evm0.Host
 end
@@ -96,16 +92,16 @@ let test_message
   (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
      With better VM instrumentation we can remove the duplucation *)
   let action =
-    let open HostImpl in
+    let open Evmc.DummyHost in
     let open Evm.Host in
     let$ () = prepare_env in
     let$ tx_context = get_tx_context in
-    let ctx = Vm.Context.make tx_context msg in
+    let ctx = Vm.Context.make tx_context msg msg.code in
     let$ res, ctx =
       Evm.Vm.M.(
-        let$ () = prepare_vm in
-        let$ () = Evm.Vm.run msg.code in
-        match check_vm_state with None -> return () | Some check -> check )
+          (let$ () = prepare_vm in
+           let$ () = Evm.Vm.run msg.code in
+           match check_vm_state with None -> return () | Some check -> check ) )
         ctx
     in
     let$ () = check_env_state in
@@ -117,7 +113,7 @@ let test_message
             ; gas_left = Uint.to_uint64 ctx.machine_state.gas
             ; gas_refund = 0L
             ; output_data = ctx.machine_state.output_buffer
-            ; create_address = None }
+            ; create_address = Address.zero }
       | Error err -> (
         match err with
         | Success -> assert false
@@ -129,16 +125,16 @@ let test_message
               ; gas_left = Uint.to_uint64 ctx.machine_state.gas
               ; gas_refund = 0L
               ; output_data = ctx.machine_state.output_buffer
-              ; create_address = None }
+              ; create_address = Address.zero }
         | _ ->
             Evmc.Result.
               { status_code = err
               ; gas_left = 0L
               ; gas_refund = 0L
               ; output_data = Bytes.empty
-              ; create_address = None } ) )
+              ; create_address = Address.zero } ) )
   in
-  let result, state = action HostImpl.State.empty in
+  let result, state = action Evmc.DummyHost.State.empty in
   (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
@@ -151,7 +147,7 @@ let bytecode_to_call_message code =
       { kind = CallKind.Call
       ; delegated = false
       ; static = false
-      ; depth = 0
+      ; depth = 0l
       ; gas = 100_000_000L
       ; recipient = Address.zero
       ; sender = Address.zero
