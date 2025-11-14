@@ -13,7 +13,7 @@ end
 module type SIG_MONAD = SIG
 
 (** Useful combinators for any monad. *)
-module Make (M : SIG) = struct
+module[@inline] Make (M : SIG) = struct
   include M
 
   let[@inline] ( let$ ) x f = M.(x >>= f)
@@ -157,8 +157,8 @@ struct
       let[@inline] return (type a) (x : a) : a t = {run = (fun s cont -> (cont [@inlined]) s x)}
       let[@inline] ( >>= ) (type a b) (x : a t) (f : a -> b t) : b t =
         let[@inline] run s cont =
-          let[@inline] cont' s xe = (((f [@inlined]) xe).run [@inlined]) s cont in
-          (x.run [@inlined]) s cont'
+          let[@inline] cont' s xe = (((f [@inlined]) xe).run [@unrolled 1]) s cont in
+          (x.run [@unrolled 1]) s cont'
         in
         {run}
 
@@ -225,8 +225,8 @@ struct
 
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
         let[@inline] run cont_ok cont_err =
-          let[@inline] cont_ok' x = (((f[@inlined]) x).run[@inlined]) cont_ok cont_err in
-          (x.run[@inlined]) cont_ok' cont_err
+          let[@inline] cont_ok' x = (((f[@inlined]) x).run[@unrolled 1]) cont_ok cont_err in
+          (x.run[@unrolled 1]) cont_ok' cont_err
         in
         {run}
 
@@ -276,8 +276,8 @@ struct
 
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) : 'b t =
         let[@inline] run s cont =
-          let[@inline] cont' xe = (((f[@inline]) xe).run[@inlined]) s cont in
-          (x.run[@inlined]) s cont'
+          let[@inline] cont' xe = (((f[@inline]) xe).run[@unrolled 1]) s cont in
+          (x.run[@unrolled 1]) s cont'
         in
         {run}
 
