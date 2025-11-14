@@ -325,7 +325,7 @@ struct
     end
 
     let run (x : 'a t) (ctx : Context.t) : (('a, Evmc.Result.StatusCode.t) result * Context.t) Host.t =
-      StHost.run x ctx
+      StHost.run (ErrStHost.run x) ctx
   end
   open M
 

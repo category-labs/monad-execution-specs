@@ -145,7 +145,8 @@ struct
     let[@inline] update_field (l : (T.t, 'x) Lens.t) (f : 'x -> 'x) : unit t =
       let$ v = !l in
       l := f v
-  end[@@inline]
+  end
+  [@@inline]
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
@@ -153,19 +154,21 @@ struct
     module Impl = struct
       type 'a t = {run : 'r. T.t -> (T.t -> 'a -> 'r Inner.t) -> 'r Inner.t} [@@unboxed]
 
-      let[@inline] return (type a) (x : a) : a t = {run = (fun s cont -> (cont[@inlined]) s x)}
+      let[@inline] return (type a) (x : a) : a t = {run = (fun s cont -> (cont [@inlined]) s x)}
       let[@inline] ( >>= ) (type a b) (x : a t) (f : a -> b t) : b t =
-        {run = (fun s cont -> (x.run) s (fun s xe -> (((f[@inlined]) xe).run) s cont))}
+        {run = (fun s cont -> x.run s (fun s xe -> ((f [@inlined]) xe).run s cont))}
 
-      let[@inline] get : T.t t = {run = (fun s cont -> (cont[@inlined]) s s)}
-      let[@inline] put (s : T.t) : unit t = {run = (fun _s cont -> (cont[@inlined]) s ())}
+      let[@inline] get : T.t t = {run = (fun s cont -> (cont [@inlined]) s s)}
+      let[@inline] put (s : T.t) : unit t = {run = (fun _s cont -> (cont [@inlined]) s ())}
     end
     include Make (Impl)
 
-    let[@inline] lift (type a) (x : a Inner.t) : a t = {run = (fun s cont -> Inner.(x >>= (cont[@inlined]) s))}
+    let[@inline] lift (type a) (x : a Inner.t) : a t =
+      {run = (fun s cont -> Inner.(x >>= (cont [@inlined]) s))}
 
     let[@inline] run (x : 'a t) (s : T.t) : ('a * T.t) Inner.t = x.run s (fun s' y -> Inner.return (y, s'))
-  end[@@inline]
+  end
+  [@@inline]
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
     include Make (struct
@@ -173,10 +176,12 @@ struct
       let get : T.t MT.t = MT.lift M.get
       let put x = MT.lift (M.put x)
     end)
-  end[@@inline]
+  end
+  [@@inline]
 
   include Trans (Identity)
-end[@@inline]
+end
+[@@inline]
 
 module Result (T : sig
   type t
@@ -196,33 +201,41 @@ struct
 
       let or_fail (err : T.t) = function None -> S.fail err | Some x -> S.return x
     end
-  end[@@inline]
+  end
+  [@@inline]
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) : SIG = struct
     include Make (struct
       include MT
       let fail (x : T.t) : 'a MT.t = MT.lift (M.fail x)
     end)
-  end[@@inline]
+  end
+  [@@inline]
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
 
-    include Make (struct
-      type 'a t = ('a, T.t) result Inner.t
-      let[@inline] return (x : 'a) : 'a t = Inner.return (Ok x)
+    module Impl = struct
+      type 'a t = {run : 'r. ('a -> 'r Inner.t) -> (T.t -> 'r Inner.t) -> 'r Inner.t}
+      let[@inline] return (x : 'a) : 'a t = {run = (fun cont_ok _cont_err -> cont_ok x)}
+
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
-        Inner.(x >>= function Error err -> Inner.return (Error err) | Ok x -> (f) x)
+        {run = (fun cont_ok cont_err -> x.run (fun x -> (f x).run cont_ok cont_err) cont_err)}
 
-      let[@inline] fail (err : T.t) = Inner.return (Error err)
-    end)
+      let[@inline] fail (err : T.t) = {run = (fun _cont_ok cont_err -> cont_err err)}
+    end
+    include Make (Impl)
 
-    let[@inline] lower (x : ('a, T.t) result) : 'a t = Inner.return x
-    let[@inline] lift (x : 'a Inner.t) : 'a t = Inner.fmap Result.ok x
-  end[@@inline]
+    let[@inline] lift (x : 'a Inner.t) : 'a t = {run = (fun cont_ok _cont_err -> Inner.(x >>= cont_ok))}
+
+    let run (x : 'a t) : ('a, T.t) result Inner.t =
+      x.run (fun x -> Inner.return (Ok x)) (fun err -> Inner.return (Error err))
+  end
+  [@@inline]
 
   include Trans (Identity)
-end[@@inline]
+end
+[@@inline]
 
 module Reader (T : sig
   type t
@@ -236,12 +249,14 @@ struct
   module Make (S : SIG) = struct
     include S
     include Make_Monad (S)
-  end[@@inline]
+  end
+  [@@inline]
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) : SIG = Make (struct
     include MT
     let read = MT.lift M.read
-  end)[@@inline]
+  end)
+  [@@inline]
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
@@ -249,19 +264,21 @@ struct
     module Impl = struct
       type 'a t = {run : 'r. T.t -> ('a -> 'r Inner.t) -> 'r Inner.t} [@@unboxed]
 
-      let[@inline] return (x : 'a) : 'a t = {run = (fun _s cont -> (cont[@inlined]) x)}
+      let[@inline] return (x : 'a) : 'a t = {run = (fun _s cont -> (cont [@inlined]) x)}
 
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) : 'b t =
-        {run = (fun s cont -> (x.run) s (fun xe -> (((f) xe).run) s cont))}
+        {run = (fun s cont -> x.run s (fun xe -> (f xe).run s cont))}
 
-      let[@inline] read = {run = (fun s cont -> (cont[@inlined]) s)}
+      let[@inline] read = {run = (fun s cont -> (cont [@inlined]) s)}
     end
     include Make (Impl)
 
     let[@inline] lift (x : 'a Inner.t) : 'a t = {run = (fun _s cont -> Inner.(x >>= cont))}
 
     let[@inline] run (x : 'a t) (s : T.t) : 'a Inner.t = x.run s (fun x -> Inner.return x)
-  end[@@inline]
+  end
+  [@@inline]
 
   include Trans (Identity)
-end[@@inline]
+end
+[@@inline]
