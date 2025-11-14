@@ -210,15 +210,15 @@ struct
 
     include Make (struct
       type 'a t = ('a, T.t) result Inner.t
-      let return (x : 'a) : 'a t = Inner.return (Ok x)
+      let[@inline] return (x : 'a) : 'a t = Inner.return (Ok x)
       let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
         Inner.(x >>= function Error err -> Inner.return (Error err) | Ok x -> f x)
 
-      let fail (err : T.t) = Inner.return (Error err)
+      let[@inline] fail (err : T.t) = Inner.return (Error err)
     end)
 
-    let lower (x : ('a, T.t) result) : 'a t = Inner.return x
-    let lift (x : 'a Inner.t) : 'a t = Inner.fmap Result.ok x
+    let[@inline] lower (x : ('a, T.t) result) : 'a t = Inner.return x
+    let[@inline] lift (x : 'a Inner.t) : 'a t = Inner.fmap Result.ok x
   end[@@inline]
 
   include Trans (Identity)
