@@ -1940,4 +1940,4 @@ struct
                 ; gas_refund = 0L
                 ; output_data = Bytes.empty
                 ; create_address = Address.zero } ) )
-end
+end[@@inline]

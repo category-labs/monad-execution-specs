@@ -192,7 +192,7 @@ module Host = struct
 
     let get_transient_storage addr k = MT.lift (M.get_transient_storage addr k)
     let set_transient_storage addr k v = MT.lift (M.set_transient_storage addr k v)
-  end
+  end[@@inline]
 end
 
 (** The type of EVMC VMs over monad M, broadly based on
@@ -218,7 +218,7 @@ end = struct
   module rec Host : (H.SIG with type 'a t = 'a M.t) = HostF (Vm)
 
   and Vm : V(M).SIG = VmF (Host)
-end
+end[@@inline]
 
 (** A dummy OCaml implementation for testing, backed by a simple mapping of accounts to storage. Does not
     use a MPT or store any cross-transaction state. *)
@@ -486,5 +486,5 @@ module DummyHost = struct
 
     let set_transient_storage _addr key value =
       transient_storage |-- U256.Map.at key := Some value
-  end
+  end[@@inline]
 end
