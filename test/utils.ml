@@ -163,12 +163,13 @@ let expect_stack expected_stack =
   let open Evm.Vm.M in
   let$ stack = !(Vm.Context.machine_state |-- Vm.MachineState.stack) in
   Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
-    ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
+    ~expected:(List.length expected_stack)
+    ~actual:(List.length (fst stack)) ;
   return
     (List.iteri
        (fun i (expected, actual) ->
          Alcotest.check' u256 ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
-       (List.combine expected_stack stack) )
+       (List.combine expected_stack (fst stack)) )
 
 let test_bytecode_pure bc ~input_stack ~output_stack =
   let open Lens.Infix in
@@ -176,7 +177,8 @@ let test_bytecode_pure bc ~input_stack ~output_stack =
   let msg = bytecode_to_call_message bc in
   ignore
     (test_message
-       ~prepare_vm:(Vm.Context.machine_state |-- Vm.MachineState.stack := input_stack)
+       ~prepare_vm:
+         (Vm.Context.machine_state |-- Vm.MachineState.stack := (input_stack, List.length input_stack))
        ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =

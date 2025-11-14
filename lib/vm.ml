@@ -90,7 +90,7 @@ module MachineState = struct
     { gas : Uint.t (* μ_g *)
     ; pc : U256.t (* μ_pc *)
     ; memory : Memory.t (* μ_m, μ_i *)
-    ; stack : U256.t list (* μ_s *)
+    ; stack : (U256.t list * int) (* μ_s *)
     ; output_buffer : Bytes.t (* μ_o *)
     ; gas_refund : Integer.t
           (* A_r *)
@@ -105,7 +105,7 @@ module MachineState = struct
     { gas = Uint.zero
     ; pc = U256.zero
     ; memory = Memory.empty
-    ; stack = []
+    ; stack = ([], 0)
     ; output_buffer = Bytes.empty
     ; gas_refund = Integer.zero }
 end
@@ -349,15 +349,16 @@ struct
   let self : Address.t M.t = !(execution_environment |-- address)
 
   let push (x : U256.t) : unit M.t =
-    let$ s = !(machine_state |-- stack) in
-    if List.length s >= max_stack_depth then fail Stack_overflow else machine_state |-- stack := x :: s
+    let$ (s, d) = !(machine_state |-- stack) in
+    if d >= max_stack_depth then fail Stack_overflow else
+      machine_state |-- stack := (x :: s, d + 1)
 
   let pop : U256.t M.t =
     let$ s = !(machine_state |-- stack) in
     match s with
-    | [] -> fail Stack_underflow
-    | hd :: tl ->
-        let$ () = machine_state |-- stack := tl in
+    | ([], _) -> fail Stack_underflow
+    | (hd :: tl, d) ->
+        let$ () = machine_state |-- stack := (tl, d-1) in
         return hd
 
   let finish_execution : bool M.t = return false
@@ -1076,7 +1077,7 @@ struct
     (* Stack *)
     let$ nth_elt =
       !(machine_state |-- stack)
-      |> M.fmap (fun l -> List.nth_opt l (i - 1))
+      |> M.fmap (fun (l, _) -> List.nth_opt l (i - 1))
       >>= M.Option.or_fail Stack_underflow
     in
 
@@ -1101,10 +1102,10 @@ struct
     assert (i <= 16) ;
     (* Stack *)
     let$ first = pop in
-    let$ nth, stack' =
-      !(machine_state |-- stack) |> M.fmap (replace_list (i - 1) first) >>= Option.or_fail Stack_underflow
-    in
-    let$ () = machine_state |-- stack := stack' in
+    let$ (s, d) = !(machine_state |-- stack) in
+    let$ (nth, s') = Option.or_fail Stack_underflow (replace_list (i - 1) first s) in
+    let d' = d - 1 in
+    let$ () = machine_state |-- stack := (s', d') in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -1879,7 +1880,7 @@ struct
       Format.printf "PC: %s\n" (U256.to_string ms.pc) ;
       Format.printf "Gas: %s\n" (Uint.to_string ms.gas) ;
       Format.printf "Stack: \n" ;
-      trace_stack ms.stack ;
+      trace_stack (fst ms.stack) ;
       Format.printf "Memory: \n" ;
       Memory.dump ms.memory ;
       Format.print_flush () ;
