@@ -156,7 +156,11 @@ struct
 
       let[@inline] return (type a) (x : a) : a t = {run = (fun s cont -> (cont [@inlined]) s x)}
       let[@inline] ( >>= ) (type a b) (x : a t) (f : a -> b t) : b t =
-        {run = (fun s cont -> x.run s (fun s xe -> ((f [@inlined]) xe).run s cont))}
+        let[@inline] run s cont =
+          let[@inline] cont' s xe = (((f [@inlined]) xe).run [@inlined]) s cont in
+          (x.run [@inlined]) s cont'
+        in
+        {run}
 
       let[@inline] get : T.t t = {run = (fun s cont -> (cont [@inlined]) s s)}
       let[@inline] put (s : T.t) : unit t = {run = (fun _s cont -> (cont [@inlined]) s ())}
@@ -220,7 +224,11 @@ struct
       let[@inline] return (x : 'a) : 'a t = {run = (fun cont_ok _cont_err -> cont_ok x)}
 
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
-        {run = (fun cont_ok cont_err -> x.run (fun x -> (f x).run cont_ok cont_err) cont_err)}
+        let[@inline] run cont_ok cont_err =
+          let[@inline] cont_ok' x = (((f[@inlined]) x).run[@inlined]) cont_ok cont_err in
+          (x.run[@inlined]) cont_ok' cont_err
+        in
+        {run}
 
       let[@inline] fail (err : T.t) = {run = (fun _cont_ok cont_err -> cont_err err)}
     end
@@ -267,7 +275,11 @@ struct
       let[@inline] return (x : 'a) : 'a t = {run = (fun _s cont -> (cont [@inlined]) x)}
 
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) : 'b t =
-        {run = (fun s cont -> x.run s (fun xe -> (f xe).run s cont))}
+        let[@inline] run s cont =
+          let[@inline] cont' xe = (((f[@inline]) xe).run[@inlined]) s cont in
+          (x.run[@inlined]) s cont'
+        in
+        {run}
 
       let[@inline] read = {run = (fun s cont -> (cont [@inlined]) s)}
     end
