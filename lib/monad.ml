@@ -153,16 +153,16 @@ struct
     module Impl = struct
       type 'a t = {run : 'r. T.t -> (T.t -> 'a -> 'r Inner.t) -> 'r Inner.t} [@@unboxed]
 
-      let[@inline] return (type a) (x : a) : a t = {run = (fun s cont -> cont s x)}
+      let[@inline] return (type a) (x : a) : a t = {run = (fun s cont -> (cont[@inlined]) s x)}
       let[@inline] ( >>= ) (type a b) (x : a t) (f : a -> b t) : b t =
         {run = (fun s cont -> x.run s (fun s xe -> (f xe).run s cont))}
 
-      let[@inline] get : T.t t = {run = (fun s cont -> cont s s)}
-      let[@inline] put (s : T.t) : unit t = {run = (fun _s cont -> cont s ())}
+      let[@inline] get : T.t t = {run = (fun s cont -> (cont[@inlined]) s s)}
+      let[@inline] put (s : T.t) : unit t = {run = (fun _s cont -> (cont[@inlined]) s ())}
     end
     include Make (Impl)
 
-    let[@inline] lift (type a) (x : a Inner.t) : a t = {run = (fun s cont -> Inner.(x >>= cont s))}
+    let[@inline] lift (type a) (x : a Inner.t) : a t = {run = (fun s cont -> Inner.(x >>= (cont[@inlined]) s))}
 
     let[@inline] run (x : 'a t) (s : T.t) : ('a * T.t) Inner.t = x.run s (fun s' y -> Inner.return (y, s'))
   end[@@inline]
@@ -249,12 +249,12 @@ struct
     module Impl = struct
       type 'a t = {run : 'r. T.t -> ('a -> 'r Inner.t) -> 'r Inner.t} [@@unboxed]
 
-      let[@inline] return (x : 'a) : 'a t = {run = (fun _s cont -> cont x)}
+      let[@inline] return (x : 'a) : 'a t = {run = (fun _s cont -> (cont[@inlined]) x)}
 
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) : 'b t =
         {run = (fun s cont -> x.run s (fun xe -> (f xe).run s cont))}
 
-      let[@inline] read = {run = (fun s cont -> cont s)}
+      let[@inline] read = {run = (fun s cont -> (cont[@inlined]) s)}
     end
     include Make (Impl)
 
