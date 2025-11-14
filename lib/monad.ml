@@ -211,7 +211,7 @@ struct
     include Make (struct
       type 'a t = ('a, T.t) result Inner.t
       let[@inline] return (x : 'a) : 'a t = Inner.return (Ok x)
-      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+      let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
         Inner.(x >>= function Error err -> Inner.return (Error err) | Ok x -> f x)
 
       let[@inline] fail (err : T.t) = Inner.return (Error err)
