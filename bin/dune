@@ -7,4 +7,4 @@
 (env
  (release
   (ocamlopt_flags
-   (:standard -unsafe -noassert -inline 100 -O3 -w -64-55))))
+   (:standard -unsafe -noassert -inlining-report -inline 100 -O3 -w -64-55))))
