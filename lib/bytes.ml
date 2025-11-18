@@ -1,6 +1,8 @@
 (** Immutable byte arrays, as opposed to the mutable [Stdlib.Bytes.t], and associated utilities. *)
 include String
 
+type bytes = t
+
 (** [sub_with_zero_padding bytes i sz] returns a [sz]-length byte array formed by zero-padding
       the array [bytes[i, min(len(bytes), i+sz))]] to [length sz]. *)
 let sub_with_zero_padding bytes i sz =
@@ -24,3 +26,12 @@ let of_hex_string str =
 let reverse (bs : t) : t =
   let l = length bs in
   init l (fun i -> bs.[l - i - 1])
+
+let of_chars chrs = of_seq (List.to_seq chrs)
+
+module Map = Map.Make(String)
+
+module type ENCODABLE = sig
+  type t
+  val to_bytes : t -> bytes
+end
