@@ -2,3 +2,13 @@
  (name numeric)
  (modules numeric)
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
+ (name rlp)
+ (modules rlp)
+ (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
+ (name mpt)
+ (modules mpt)
+ (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
