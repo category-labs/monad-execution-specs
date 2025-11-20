@@ -108,8 +108,6 @@ module Trie = struct
 end
 
 module PatriciaTrie = struct
-  let branching_factor = Trie.branching_factor
-
   type t =
     | Empty
     | Branch of t Iarray.t * Rlp.t
@@ -120,18 +118,20 @@ module PatriciaTrie = struct
     match t with
     | Empty -> Empty
     | Branch (branches, v) -> (
+        (* Patricialize sub-branches *)
+        let branches = Iarray.map of_trie branches in
         let first_non_empty_nibble =
           Iarray.find_mapi
-            (fun index branch -> if branch <> Trie.Empty then Some (index, branch) else None)
+            (fun index branch -> if branch <> Empty then Some (index, branch) else None)
             branches
         in
         let non_empty_nibbles =
-          Iarray.fold_left (fun n branch -> n + if branch <> Trie.Empty then 1 else 0) 0 branches
+          Iarray.fold_left (fun n branch -> n + if branch <> Empty then 1 else 0) 0 branches
         in
         match (first_non_empty_nibble, non_empty_nibbles) with
-        | Some (k_i, b), 1 -> (
-          (* Exactly one non-empty branch: we can compress the entry *)
-          match of_trie b with
+        | Some (k_i, b), 1 when v = Bytes Bytes.empty -> (
+          (* Exactly one non-empty branch: we can compress the entry, but only if it didn't contain a value. *)
+          match b with
           | Empty -> Empty
           | Branch (_, _) as bp ->
               Extension {path_segment = Nibbles.make 1 (Char.unsafe_chr k_i); subtree = bp}
@@ -139,9 +139,9 @@ module PatriciaTrie = struct
           | Extension {path_segment; subtree} ->
               Extension {path_segment = Nibbles.prepend (Char.unsafe_chr k_i) path_segment; subtree} )
         | None, 0 ->
-            (* Terminal: we can compress the entry to a Leaf *)
-            Leaf {path = Nibbles.empty; value = v}
-        | _ -> Branch (Iarray.map of_trie branches, v) )
+            (* Terminal: we can compress the entry to a Leaf, or Empty if v = "" *)
+            if v = Rlp.Bytes Bytes.empty then Empty else Leaf {path = Nibbles.empty; value = v}
+        | _ -> Branch (branches, v) )
 
   let rec find (k : Nibbles.t) ?(depth = 0) (trie : t) =
     match trie with
@@ -162,48 +162,60 @@ module PatriciaTrie = struct
 end
 
 module Node = struct
-  type small_node_or_hash = Bytes.t (* At most 32 bytes, either a hash or a RLP-encoded node *)
+  type small_node_or_hash = Small of t | Hash of Bytes.t
   and t =
     | Empty
     | Branch of small_node_or_hash Iarray.t * Rlp.t
     | Leaf of {path : Nibbles.t; value : Rlp.t}
     | Extension of {path_segment : Nibbles.t; subtree : small_node_or_hash}
 
-  let to_rlp = function
+  let rec to_rlp = function
     | Empty -> Rlp.Bytes Bytes.empty (* See YP (207) *)
     | Branch (branches, value) ->
-        let branches = Iarray.to_seq branches |> Seq.map (fun branch -> Rlp.Bytes branch) in
+        let branches = Iarray.to_seq branches |> Seq.map small_node_or_hash_to_rlp in
         Rlp.List (List.of_seq Seq.(append branches (singleton value)))
     | Leaf {path; value} -> Rlp.(List [Bytes (Nibbles.hex_prefix_encode path true); value])
     | Extension {path_segment; subtree} ->
-        Rlp.(List [Bytes (Nibbles.hex_prefix_encode path_segment false); Bytes subtree])
+        Rlp.(List [Bytes (Nibbles.hex_prefix_encode path_segment false); small_node_or_hash_to_rlp subtree])
 
-  let of_rlp = function
+  and small_node_or_hash_to_rlp = function
+    | Small node ->
+        let enc = to_rlp node in
+        assert (Bytes.length (Rlp.encode enc) < 32) ;
+        enc
+    | Hash h -> Rlp.Bytes h
+
+  let rec of_rlp = function
     | Rlp.Bytes "" -> Empty
-    | Rlp.List [Bytes p; v] -> (
+    | Rlp.List [Bytes p; v] ->
         let ns, is_leaf = Nibbles.hex_prefix_decode p in
         if is_leaf then Leaf {path = ns; value = v}
-        else match v with Bytes bs -> Extension {path_segment = ns; subtree = bs} | List _ -> assert false )
-    | Rlp.List
-        [ Bytes b0
-        ; Bytes b1
-        ; Bytes b2
-        ; Bytes b3
-        ; Bytes b4
-        ; Bytes b5
-        ; Bytes b6
-        ; Bytes b7
-        ; Bytes b8
-        ; Bytes b9
-        ; Bytes b10
-        ; Bytes b11
-        ; Bytes b12
-        ; Bytes b13
-        ; Bytes b14
-        ; Bytes b15
-        ; v ] ->
-        Branch ([|b0; b1; b2; b3; b4; b5; b6; b7; b8; b9; b10; b11; b12; b13; b14; b15|], v)
+        else Extension {path_segment = ns; subtree = small_node_or_hash_of_rlp v}
+    | Rlp.List [b0; b1; b2; b3; b4; b5; b6; b7; b8; b9; b10; b11; b12; b13; b14; b15; v] ->
+        Branch
+          ( [| small_node_or_hash_of_rlp b0
+             ; small_node_or_hash_of_rlp b1
+             ; small_node_or_hash_of_rlp b2
+             ; small_node_or_hash_of_rlp b3
+             ; small_node_or_hash_of_rlp b4
+             ; small_node_or_hash_of_rlp b5
+             ; small_node_or_hash_of_rlp b6
+             ; small_node_or_hash_of_rlp b7
+             ; small_node_or_hash_of_rlp b8
+             ; small_node_or_hash_of_rlp b9
+             ; small_node_or_hash_of_rlp b10
+             ; small_node_or_hash_of_rlp b11
+             ; small_node_or_hash_of_rlp b12
+             ; small_node_or_hash_of_rlp b13
+             ; small_node_or_hash_of_rlp b14
+             ; small_node_or_hash_of_rlp b15 |]
+          , v )
     | _ -> assert false
+
+  and small_node_or_hash_of_rlp = function
+    | Rlp.Bytes "" -> Small Empty
+    | Rlp.Bytes bs -> Hash bs
+    | rlp -> Small (of_rlp rlp)
 end
 
 type t = {inv_hashes : Node.t U256.Map.t; root_hash : U256.t}
@@ -212,6 +224,7 @@ module M = struct
   include Monad.State (struct
     type t = Node.t U256.Map.t
   end)
+
   let hash (node : Node.t) : U256.t t =
     let hash = Crypto.keccak_256 (Rlp.encode (Node.to_rlp node)) in
     let$ () = update (U256.Map.add hash node) in
@@ -219,7 +232,11 @@ module M = struct
 
   let to_small_node_or_hash (node : Node.t) : Node.small_node_or_hash t =
     let encoded = Rlp.encode (Node.to_rlp node) in
-    if Bytes.length encoded < 32 then return encoded else U256.to_bytes_be <$> hash node
+    if Bytes.length encoded < 32 then return (Node.Small node)
+    else
+      let hash = Crypto.keccak_256 encoded in
+      let$ () = update (U256.Map.add hash node) in
+      return (Node.Hash (U256.to_bytes_be hash))
 end
 
 (* Internal *)
@@ -259,10 +276,12 @@ let make (entries : (Bytes.t * Rlp.t) list) =
   |> of_patricia
 
 let find (k : Nibbles.t) {inv_hashes; root_hash} =
-  let get_node (n : Node.small_node_or_hash) =
-    if Bytes.length n < 32 then Node.of_rlp (Rlp.decode n) else U256.Map.find (U256.of_bytes_be n) inv_hashes
+  let get_node = function
+    | Node.Small node -> node
+    | Node.Hash h -> U256.Map.find (U256.of_bytes_be h) inv_hashes
   in
-  let rec loop depth = function
+  let rec loop depth node =
+    match node with
     | Node.Empty -> None
     | Branch (_branches, v) when depth = Nibbles.length k -> Some v
     | Branch (branches, _) ->
