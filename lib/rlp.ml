@@ -21,9 +21,14 @@ let encode_payload payload ~long_payload_prefix ~short_payload_prefix =
   let header =
     if len <= 55 then Bytes.make 1 (Char.chr (short_payload_prefix + len))
     else
-      let len_str = Uint.(to_bytes_be ~$len) in
-      let len_str_len = Bytes.length len_str in
-      Bytes.make 1 (Char.chr (long_payload_prefix + len_str_len)) ^ len_str
+      let len = Uint.of_int len in
+      let len_bytes = Uint.significant_bytes len in
+      let len_str =
+        let bytes = Uint.to_bytes_be len in
+        let pos = Bytes.length bytes - len_bytes in
+        Bytes.sub bytes pos len_bytes
+      in
+      Bytes.make 1 (Char.chr (long_payload_prefix + len_bytes)) ^ len_str
   in
   header ^ payload
 
@@ -33,7 +38,7 @@ let short_list_prefix = 0xc0
 let long_list_prefix = 0xf7
 
 (* TODO: OCaml's maximum string length is much smaller than 2^64, so we should switch to Bigarray *)
-let rec encode (obj : t): Bytes.t =
+let rec encode (obj : t) : Bytes.t =
   match obj with
   | Bytes bs when Bytes.length bs = 1 && Char.code bs.[0] < short_bytes_prefix -> bs
   | Bytes bs ->

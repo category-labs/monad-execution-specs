@@ -7,11 +7,12 @@
 (package
  (name monad-spec)
  (depends
-    (ocaml (>= 5.3))
+    (ocaml (>= 5.4))
     utop
     (zarith (>= 1.14))
     (lens (>= 1.2.5))
     (digestif (>= 1.3.0))
     (alcotest (>= 1.9.0))
     (qcheck-core (>= 0.26))
-    (qcheck-alcotest (>= 0.26))))
+    (qcheck-alcotest (>= 0.26))
+    (yojson (>= 3.0.0))))
