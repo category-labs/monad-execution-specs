@@ -1,6 +1,8 @@
 (** Definitions for Ethereum types: accounts, blocks, transactions.
     Work in progress, will be expanded as needed. *)
-module Address = Numeric.U160
+open Numeric
+
+module Address = U160
 
 module Revision = struct
   type t =
@@ -53,4 +55,114 @@ module Revision = struct
     (* The unspecified EVM revision used for EVM implementations to expose
        experimental features. *)
     | Experimental
+end
+
+module Transaction = struct
+  module Access = struct
+    type t = {account_address : Address.t (* E_a *); storage_keys : U256.t list (* E_s *)}
+  end
+
+  type call_or_create =
+    | Call of {to_ : Address.t (* T_t *); data : Bytes.t (* T_d *)}
+    | Create of {init : Bytes.t (* T_i *)}
+
+  (* YP 4.2 *)
+  type t =
+    | Legacy of
+        { nonce : U256.t (* T_n *)
+        ; gas_limit : Uint.t (* T_g *)
+        ; call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
+        ; value : U256.t (* T_v *)
+        ; r : U256.t (* T_r *)
+        ; s : U256.t (* T_s *)
+        ; gas_price : Uint.t (* T_p *)
+        ; w : U256.t (* T_w *) }
+    | AccessList of
+        (* Type-1 transaction as specified in EIP-2930 *)
+        
+        { nonce : U256.t (* T_n *)
+        ; gas_limit : Uint.t (* T_g *)
+        ; call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
+        ; value : U256.t (* T_v *)
+        ; r : U256.t (* T_r *)
+        ; s : U256.t (* T_s *)
+        ; gas_price : Uint.t (* T_p *)
+        ; access_list : Access.t list (* T_A *)
+        ; chain_id : U256.t (* T_c *)
+        ; y_parity : U256.t (* T_y *) }
+    | FeeMarket of
+        (* Type-2 transaction as specified in EIP-1559 *)
+        
+        { nonce : U256.t (* T_n *)
+        ; gas_limit : Uint.t (* T_g *)
+        ; call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
+        ; value : U256.t (* T_v *)
+        ; r : U256.t (* T_r *)
+        ; s : U256.t (* T_s *)
+        ; max_fee_per_gas : Uint.t (* T_m *)
+        ; max_pority_fee_per_gas : Uint.t (* T_f *)
+        ; access_list : Access.t list (* T_A *)
+        ; chain_id : U256.t (* T_c *)
+        ; y_parity : U256.t (* T_y *) }
+    | Blob of
+        (* Blob transaction as specified in EIP-4844 *)
+        
+        { nonce : U256.t (* T_n *)
+        ; gas_limit : Uint.t (* T_g *)
+        ; to_ : Address.t (* T_t *)
+        ; data : Bytes.t (* T_d *)
+        ; value : U256.t (* T_v *)
+        ; r : U256.t (* T_r *)
+        ; s : U256.t (* T_s *)
+        ; max_fee_per_gas : Uint.t (* T_m *)
+        ; max_priority_fee_per_gas : Uint.t (* T_f *)
+        ; access_list : Access.t list (* T_A *)
+        ; max_fee_per_blob_gas : U256.t (* EIP-4844 *)
+        ; blob_versioned_hashes : U256.t list (* EIP-4844 *)
+        ; chain_id : U256.t (* T_c *)
+        ; y_parity : U256.t (* T_y *) }
+end
+
+module Withdrawal = struct
+  (* YP 4.3 *)
+  type t =
+    { global_index : Uint64.t (* W_g *)
+    ; validator_index : Uint64.t (* W_v *)
+    ; recipient : Address.t (* W_r *)
+    ; amount : U256.t (* W_a *) }
+end
+
+module Block = struct
+  module Header = struct
+    (* YP 4.4 *)
+    type t =
+      { parent_hash : U256.t (* H_p *)
+      ; ommers_hash : U256.t (* H_o *)
+      ; beneficiary : Address.t (* H_c *)
+      ; state_root : U256.t (* H_r *)
+      ; transactions_root : U256.t (* H_t *)
+      ; receipts_root : U256.t (* H_e *)
+      ; logs_bloom : U256.t (* H_b *)
+      ; difficulty : Uint.t (* H_d *)
+      ; number : Uint.t (* H_i *)
+      ; gas_limit : Uint.t (* H_l *)
+      ; gas_used : Uint.t (* H_g *)
+      ; timestamp : U256.t (* H_s *)
+      ; extra_data : Bytes.t (* H_x *)
+      ; prev_randao : U256.t (* H_a *)
+      ; nonce : Uint64.t (* H_n *)
+      ; base_fee_per_gas : Uint.t (* H_f *)
+      ; withdrawals_root : U256.t (* H_w *)
+      ; blob_gas_used : Uint64.t (* EIP-4844 *)
+      ; excess_blob_gas : Uint64.t (* EIP-4844 *)
+      ; parent_beacon_block_root : U256.t (* EIP-4788 *)
+      ; requests_hash : U256.t (* EIP-7685 *) }
+  end
+
+  (* YP 4.4 (23) *)
+  type t =
+    { header : Header.t (* B_H *)
+    ; transactions : Transaction.t list (* B_T *)
+    ; ommers : Header.t list (* B_U *)
+    ; withdrawals : Withdrawal.t list (* B_W *) }
 end
