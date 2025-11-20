@@ -78,8 +78,7 @@ module Make (M : SIG) = struct
           let$ xs = sequence mxs in
           M.return (Seq.cons x xs)
 
-    let mapM ~(f : 'a -> 'b M.t) (seq : 'a M.t Seq.t) : 'b Seq.t M.t =
-      sequence (map (fun x -> x >>= f) seq)
+    let mapM ~(f : 'a -> 'b M.t) (seq : 'a M.t Seq.t) : 'b Seq.t M.t = sequence (map (fun x -> x >>= f) seq)
 
     let rec iterM ~(f : 'a -> unit M.t) (seq : 'a Seq.t) : unit M.t =
       let open M in
