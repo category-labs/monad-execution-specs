@@ -203,6 +203,10 @@ module Context = struct
     ; initial_storage = U256.Map.empty }
 end
 
+let max_stack_depth = 1024
+let max_code_size = 0x6000
+let max_init_code_size = 2 * max_code_size
+
 module Make
     (Params : sig
       val trace : bool
@@ -325,10 +329,6 @@ struct
     end
   end
   open M
-
-  let max_stack_depth = 1024
-  let max_code_size = 0x6000
-  let max_init_code_size = 2 * max_code_size
 
   let spend (amount : Uint.t) =
     let$ gas_remaining = !(machine_state |-- gas) in

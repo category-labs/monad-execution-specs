@@ -67,25 +67,15 @@ module Transaction = struct
     | Create of {init : Bytes.t (* T_i *)}
 
   (* YP 4.2 *)
-  type t =
+  type kind =
     | Legacy of
-        { nonce : U256.t (* T_n *)
-        ; gas_limit : Uint.t (* T_g *)
-        ; call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
-        ; value : U256.t (* T_v *)
-        ; r : U256.t (* T_r *)
-        ; s : U256.t (* T_s *)
+        { call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
         ; gas_price : Uint.t (* T_p *)
         ; w : U256.t (* T_w *) }
     | AccessList of
         (* Type-1 transaction as specified in EIP-2930 *)
         
-        { nonce : U256.t (* T_n *)
-        ; gas_limit : Uint.t (* T_g *)
-        ; call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
-        ; value : U256.t (* T_v *)
-        ; r : U256.t (* T_r *)
-        ; s : U256.t (* T_s *)
+        { call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
         ; gas_price : Uint.t (* T_p *)
         ; access_list : Access.t list (* T_A *)
         ; chain_id : U256.t (* T_c *)
@@ -93,27 +83,17 @@ module Transaction = struct
     | FeeMarket of
         (* Type-2 transaction as specified in EIP-1559 *)
         
-        { nonce : U256.t (* T_n *)
-        ; gas_limit : Uint.t (* T_g *)
-        ; call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
-        ; value : U256.t (* T_v *)
-        ; r : U256.t (* T_r *)
-        ; s : U256.t (* T_s *)
+        { call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
         ; max_fee_per_gas : Uint.t (* T_m *)
-        ; max_pority_fee_per_gas : Uint.t (* T_f *)
+        ; max_priority_fee_per_gas : Uint.t (* T_f *)
         ; access_list : Access.t list (* T_A *)
         ; chain_id : U256.t (* T_c *)
         ; y_parity : U256.t (* T_y *) }
     | Blob of
         (* Blob transaction as specified in EIP-4844 *)
         
-        { nonce : U256.t (* T_n *)
-        ; gas_limit : Uint.t (* T_g *)
-        ; to_ : Address.t (* T_t *)
+        { to_ : Address.t (* T_t *)
         ; data : Bytes.t (* T_d *)
-        ; value : U256.t (* T_v *)
-        ; r : U256.t (* T_r *)
-        ; s : U256.t (* T_s *)
         ; max_fee_per_gas : Uint.t (* T_m *)
         ; max_priority_fee_per_gas : Uint.t (* T_f *)
         ; access_list : Access.t list (* T_A *)
@@ -121,6 +101,25 @@ module Transaction = struct
         ; blob_versioned_hashes : U256.t list (* EIP-4844 *)
         ; chain_id : U256.t (* T_c *)
         ; y_parity : U256.t (* T_y *) }
+  type t =
+    { nonce : U256.t (* T_n *)
+    ; gas_limit : Uint.t (* T_g *)
+    ; value : U256.t (* T_v *)
+    ; r : U256.t (* T_r *)
+    ; s : U256.t (* T_s *)
+    ; kind : kind }
+
+  let call_or_create txn =
+    match txn.kind with
+    | Legacy {call_or_create; _} | AccessList {call_or_create; _} | FeeMarket {call_or_create; _} ->
+        call_or_create
+    | Blob {to_; data; _} -> Call {to_; data}
+  let data_or_initcode = function Call {data; _} -> data | Create {init} -> init
+
+  let access_list txn =
+    match txn.kind with
+    | Legacy _ -> []
+    | AccessList {access_list; _} | FeeMarket {access_list; _} | Blob {access_list; _} -> access_list
 end
 
 module Withdrawal = struct
@@ -165,4 +164,21 @@ module Block = struct
     ; transactions : Transaction.t list (* B_T *)
     ; ommers : Header.t list (* B_U *)
     ; withdrawals : Withdrawal.t list (* B_W *) }
+end
+
+module Log = struct
+  (* YP 4.4.1 (28) *)
+  type t = {address : Address.t (* O_a *); topics : U256.t list (* O_t *); data : Bytes.t (* O_d *)}
+end
+
+module Receipt = struct
+  type transaction_type = Legacy | AccessList | FeeMarket | Blob
+
+  (* YP 4.4.1. *)
+  type t =
+    { tx_type : transaction_type (* R_x *)
+    ; succeeded : bool (* R_z *)
+    ; cumulative_gas_used : Uint.t (* R_u *)
+    ; bloom : Bytes256.t (* R_b *)
+    ; logs : Log.t list (* R_l *) }
 end

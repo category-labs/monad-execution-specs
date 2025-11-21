@@ -6,6 +6,17 @@ open Numeric
 (* Bring Uint into scope so the operators are all available to users *)
 include Uint
 
+let tx_calldata_token_gas = ~$4
+let tx_calldata_floor_token_gas = ~$10
+
+let tx_create_gas = ~$32_000
+let tx_initcode_gas_per_word = ~$2
+
+let tx_base_gas = ~$21_000
+
+let tx_access_list_address = ~$2_400
+let tx_access_list_storage = ~$1_900
+
 let jumpdest = ~$1
 
 let base = ~$2

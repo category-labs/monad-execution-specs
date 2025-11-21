@@ -15,4 +15,6 @@ include Comparable.Make (struct
   let compare = Stdlib.Int64.unsigned_compare
 end)
 
+let max_uint = 0xffffffffffffffffL
+
 module Hashtbl = Stdlib.Hashtbl.Make (Stdlib.Int64)

@@ -198,7 +198,8 @@ end
 (** The type of EVMC VMs over monad M, broadly based on
     {{:https://evmc.ethereum.org/structevmc__vm.html}[evmc_vm]}, minus the ancilliary introspection
     operations. *)
-module Vm (M : Monad.SIG) = struct
+module
+  Vm (M : Monad.SIG) = struct
   module type SIG = sig
     val execute : Message.t -> Bytes.t -> Result.t M.t
   end
@@ -293,7 +294,7 @@ module DummyHost = struct
   end
   open State
 
-  module M = Monad.State (State)
+  module M = Monad.State(State)
   include M
 
   let touch_account addr = M.update_field (substate |-- accessed_addresses) (Address.Set.add addr)

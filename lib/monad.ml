@@ -134,17 +134,18 @@ struct
   module Make (S : SIG) = struct
     include S
     include Make (S)
-    let update (f : T.t -> T.t) : unit t = get >>= fun s -> put (f s)
+    type state = T.t
+    let update (f : state -> state) : unit t = get >>= fun s -> put (f s)
 
-    let ( := ) (l : (T.t, 'x) Lens.t) (x : 'x) =
+    let ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
       let$ state = get in
       put (l.set x state)
 
-    let ( ! ) (l : (T.t, 'x) Lens.t) : 'x t =
+    let ( ! ) (l : (state, 'x) Lens.t) : 'x t =
       let$ state = get in
       return (l.get state)
 
-    let update_field (l : (T.t, 'x) Lens.t) (f : 'x -> 'x) : unit t =
+    let update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t =
       let$ v = !l in
       l := f v
   end
@@ -165,7 +166,7 @@ struct
       let put (s : T.t) : unit t = fun _ -> Inner.return ((), s)
     end)
 
-    let lower (x : T.t -> 'a * T.t) : 'a t = fun s -> Inner.return (x s)
+    let lower (x : state -> 'a * state) : 'a t = fun s -> Inner.return (x s)
     let lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (x, s)) x
   end
 
@@ -192,11 +193,12 @@ struct
   module Make (S : SIG) = struct
     include S
     include Make_Monad (S)
+    type err = T.t
 
     module Option = struct
       include Option
 
-      let or_fail (err : T.t) = function None -> S.fail err | Some x -> S.return x
+      let or_fail (err : err) = function None -> S.fail err | Some x -> S.return x
     end
   end
 
@@ -224,4 +226,41 @@ struct
   end
 
   include Trans (Identity)
+end
+
+(** A monad that produces either a state change or an error. Note that this provides the capabilities of both
+    State and Result but is not equal to their composition. *)
+module StErr = struct
+  module Make (T : sig
+    type state
+    type err
+  end) =
+  struct
+    module Trans (Inner : SIG_MONAD) = struct
+      module Impl = struct
+        module Inner = Make_Monad (Inner)
+        type 'a t = T.state -> ('a * T.state, T.err) Stdlib.Result.t Inner.t
+        let return (x : 'a) : 'a t = fun s -> Inner.return (Ok (x, s))
+        let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+         fun s -> Inner.(x s >>= function Error err -> Inner.return (Error err) | Ok (x, s') -> f x s')
+
+        let fail (err : T.err) : 'a t = fun _s -> Inner.return (Error err)
+        let get = fun s -> Inner.return (Ok (s, s))
+        let put s' = fun _s -> Inner.return (Ok ((), s'))
+      end
+
+      module State = State (struct
+        type t = T.state
+      end)
+      module Result = Result (struct
+        type t = T.err
+      end)
+      include Impl
+      include Make_Monad (Impl)
+      include State.Make (Impl)
+      include Result.Make (Impl)
+    end
+
+    include Trans (Identity)
+  end
 end
