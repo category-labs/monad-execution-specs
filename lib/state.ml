@@ -29,66 +29,95 @@ module Log = struct
   include TLens
 end
 
-module State = struct
-  module Chain = struct
-    (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
+module WorldState = struct
+  (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
         includes the world state as per YP 4.1. *)
-    type t =
-      { history : Block.t list
-      ; accounts : Account.t Address.Map.t (* σ[a] *)
-      ; storage : U256.t U256.Map.t U256.Map.t (* σ[a]_s *) }
-    [@@deriving lens {submodule = true; prefix = true}]
+  type t =
+    { history : Block.t list
+    ; accounts : Account.t Address.Map.t (* σ[a] *)
+    ; storage : U256.t U256.Map.t U256.Map.t (* σ[a]_s *)
+    ; chain_id : U256.t (* β *) }
+  [@@deriving lens {submodule = true; prefix = true}]
 
-    include TLens
+  include TLens
 
-    type state = t
+  let make chain_id = {history = []; accounts = Address.Map.empty; storage = U256.Map.empty; chain_id}
+  type error = Invalid_transaction of Transaction.t | Invalid_block of Block.t
 
-    let empty = {history = []; accounts = Address.Map.empty; storage = U256.Map.empty}
-    type error = Invalid_transaction of Transaction.t | Invalid_block of Block.t
+  let account addr = accounts |-- Address.Map.at addr
 
-    module M = Monad.State (struct
-      type t = state
-    end)
-  end
+  module M = Monad.State (struct
+    type nonrec t = t
+  end)
+end
 
-  module Transaction = struct
-    (** State within a single transaction. Tracks the initial block state, any changes to its storage,
-          and variables that are internal to the transaction such as the accrued substate (YP 6.1). *)
-    type t =
-      { initial : Chain.t
-      ; state : Chain.t
-      ; block : Block.t
-      ; transient_storage : U256.t U256.Map.t Address.Map.t
-      ; accounts_created_in_current_transaction : Address.Set.t
-      ; self_destruct : Address.Set.t  (** A_s *)
-      ; logs : Log.t list  (** A_l *)
-      ; touched : Address.Set.t  (** A_t *)
-      ; refund : U256.t  (** A_r *)
-      ; accessed_addresses : Address.Set.t  (** A_a *)
-      ; accessed_keys : StorageKey.Set.t  (** A_K *) }
-    [@@deriving lens {submodule = true; prefix = true}]
+module BlockState = struct
+  (** State across multiple transactions in a single block. Tracks the world state, the gas that has been
+        consumed so far by transactions in the block, logs and receipts. *)
+  type t =
+    { world_state : WorldState.t
+    ; current_block : Block.t
+    ; gas_used : Gas.t
+    ; blob_gas_used : Gas.t
+    ; transactions_processed : (Transaction.t * Receipt.t) list
+    ; logs_bloom : Bytes256.t }
+  [@@deriving lens {submodule = true; prefix = true}]
 
-    include TLens
+  include TLens
+  let make (world_state : WorldState.t) (current_block : Block.t) =
+    { world_state
+    ; current_block
+    ; gas_used = Gas.zero
+    ; blob_gas_used = Gas.zero
+    ; transactions_processed = []
+    ; logs_bloom = Bytes256.zeros }
 
-    type state = t
+  let merge (_state : t) : unit WorldState.M.t = failwith "TODO"
 
-    let make state block =
-      { initial = state
-      ; state
-      ; block
-      ; transient_storage = Address.Map.empty
-      ; accounts_created_in_current_transaction = Address.Set.empty
-      ; self_destruct = Address.Set.empty
-      ; logs = []
-      ; touched = Address.Set.empty
-      ; refund = U256.zero
-      ; accessed_addresses = Address.Set.empty
-      ; accessed_keys = StorageKey.Set.empty }
+  module M = Monad.State (struct
+    type nonrec t = t
+  end)
+end
 
-    module M = Monad.State (struct
-      type t = state
-    end)
-  end
+module TransactionState = struct
+  (** State within a single transaction. Tracks the initial world state, any changes to its storage,
+        and variables that are internal to the transaction such as the accrued substate (YP 6.1). *)
+  type t =
+    { initial_world_state : WorldState.t
+    ; world_state : WorldState.t
+    ; current_block : Block.t
+    ; current_transaction : Transaction.t
+    ; transient_storage : U256.t U256.Map.t Address.Map.t
+    ; accounts_created_in_current_transaction : Address.Set.t
+    ; self_destruct : Address.Set.t  (** A_s *)
+    ; logs : Log.t list  (** A_l *)
+    ; touched : Address.Set.t  (** A_t *)
+    ; refund : U256.t  (** A_r *)
+    ; accessed_addresses : Address.Set.t  (** A_a *)
+    ; accessed_keys : StorageKey.Set.t  (** A_K *) }
+  [@@deriving lens {submodule = true; prefix = true}]
+
+  include TLens
+
+  let make (block_state : BlockState.t) current_transaction =
+    { initial_world_state = block_state.world_state
+    ; world_state = block_state.world_state
+    ; current_block = block_state.current_block
+    ; current_transaction
+    ; transient_storage = Address.Map.empty
+    ; accounts_created_in_current_transaction = Address.Set.empty
+    ; self_destruct = Address.Set.empty
+    ; logs = []
+    ; touched = Address.Set.empty
+    ; refund = U256.zero
+    ; accessed_addresses = Address.Set.empty
+    ; accessed_keys = StorageKey.Set.empty }
+
+  let merge (_result : t) : unit BlockState.M.t = failwith "TODO"
+
+  module M = Monad.State (struct
+    type nonrec t = t
+  end)
 end
 
 module BlockOutput = struct
@@ -128,35 +157,57 @@ let intrinsic_and_floor_gas (txn : Transaction.t) =
   in
   {intrinsic = Gas.(calldata_gas + create_gas + transaction_gas + access_list_gas); floor = calldata_floor_gas}
 
-let validate_transaction (txn : Transaction.t) : (intrinsic_and_floor_gas, validation_error) Result.t =
-  Result.(
-    let gas_costs = intrinsic_and_floor_gas txn in
+let validate_transaction (txn : Transaction.t) : intrinsic_and_floor_gas =
+  let gas_costs = intrinsic_and_floor_gas txn in
+  if Gas.(gas_costs.floor > txn.gas_limit || gas_costs.intrinsic > txn.gas_limit) then
+    failwith "Invalid transaction" ;
+  if U256.(txn.nonce >= of_uint64 Uint64.max_uint) then failwith "Invalid transaction" ;
+  ( match Transaction.call_or_create txn with
+  | Create {init} when Bytes.length init > 2 * Vm.max_init_code_size -> failwith "Invalid transaction"
+  | _ -> () ) ;
+  gas_costs
 
-    let$ () =
-      if Gas.(gas_costs.floor > txn.gas_limit || gas_costs.intrinsic > txn.gas_limit) then
-        fail (Invalid_transaction txn)
-      else return ()
-    in
+type gas_prices = {effective_gas_price : Gas.t; max_gas_fee : Gas.t}
+let check_transaction (state : BlockState.t) (txn : Transaction.t) : unit =
+  let gas_available = Gas.(state.current_block.header.gas_limit - state.gas_used) in
+  if Gas.(txn.gas_limit > gas_available) then failwith "Invalid block" ;
+  let blob_gas_available = Gas.(max_blob_gas_per_block - state.blob_gas_used) in
+  if Gas.(tx_total_blob_gas txn > blob_gas_available) then failwith "Invalid block" ;
 
-    let$ () =
-      if U256.(txn.nonce >= of_uint64 Uint64.max_uint) then fail (Invalid_transaction txn) else return ()
-    in
+  let sender_address = Transaction.recover_sender state.world_state.chain_id txn in
+  let sender_account = state.world_state |. WorldState.account sender_address in
 
-    let$ () =
-      match Transaction.call_or_create txn with
-      | Create {init} when Bytes.length init > 2 * Vm.max_init_code_size -> fail (Invalid_transaction txn)
-      | _ -> return ()
-    in
+  let base_fee_per_gas = state.current_block.header.base_fee_per_gas in
+  let gas_prices =
+    match txn.kind with
+    | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas; _}
+     |Blob {max_fee_per_gas; max_priority_fee_per_gas; _} ->
+        if Gas.(max_fee_per_gas < max_priority_fee_per_gas) then failwith "Invalid block" ;
+        if Gas.(max_fee_per_gas < base_fee_per_gas) then failwith "Invalid block" ;
+        let priority_fee_per_gas = Gas.(min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas)) in
+        let effective_gas_price = Gas.(priority_fee_per_gas + base_fee_per_gas) in
+        let max_gas_fee = Gas.((txn.gas_limit * max_fee_per_gas) + tx_total_blob_gas txn) in
+        {effective_gas_price; max_gas_fee}
+    | Legacy {gas_price; _} | AccessList {gas_price; _} ->
+        if Gas.(gas_price < base_fee_per_gas) then failwith "Invalid block" ;
+        {effective_gas_price = gas_price; max_gas_fee = Gas.(txn.gas_limit * gas_price)}
+  in
 
-    return gas_costs )
+  (* Blob txn validation *)
+  match txn.kind with
+  | Blob {blob_versioned_hashes; max_fee_per_blob_gas; _} ->
+      if blob_versioned_hashes = [] then failwith "Invalid transaction" ;
+      List.iter
+        (fun hash ->
+          if not (Bytes.starts_with ~prefix:versioned_hash_version_kzg hash) then
+            failwith "Invalid transaction" )
+        blob_versioned_hashes;
+      
+  | _ -> () ; failwith "TODO"
 
-let touch_account addr = State.Transaction.(M.update_field accessed_addresses (Address.Set.add addr))
+let touch_account addr = failwith ""
 
-let touch_storage addr key =
-  State.Transaction.(
-    M.(
-      let$ () = touch_account addr in
-      update_field accessed_keys (StorageKey.Set.add (addr, key)) ) )
+let touch_storage addr key = failwith ""
 
 let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
 
@@ -171,7 +222,7 @@ let move_ether sender recipient amount =
   in
   update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount))
 
-let should_transfer (msg : Message.t) =
+let should_transfer (msg : Evmc.Message.t) =
   U256.(msg.value > zero)
   && (match msg.kind with Call | CallCode | Create | Create2 -> true | DelegateCall -> false)
   && not msg.static
@@ -193,7 +244,7 @@ let address_for ~sender ~create2_salt ~code =
               ^ U256.to_bytes_be (Crypto.keccak_256 code) ) ) )
 
 module Make (Vm : sig
-  val execute : Message.t -> Bytes.t -> Evmc.Result.t M.t
+  val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t M.t
 end) =
 struct
   include M
@@ -233,12 +284,12 @@ struct
       return alive_before_selfdestruct
     else return false
 
-  let process_call (msg : Message.t) =
+  let process_call (msg : Evmc.Message.t) =
     let$ () = when_ (should_transfer msg) (move_ether msg.sender msg.recipient msg.value) in
     (* TODO: check whether it's a precompile *)
     execute msg msg.code
 
-  let process_create (msg : Message.t) =
+  let process_create (msg : Evmc.Message.t) =
     let$ create_address =
       (* Note that we use the sender nonce _before_ increasing it *)
       address_for ~sender:msg.sender
@@ -286,7 +337,7 @@ struct
             return {result with create_address}
       | _ -> return result
 
-  let call (msg : Message.t) =
+  let call (msg : Evmc.Message.t) =
     let$ initial_state = get in
     let$ result =
       match msg.kind with
