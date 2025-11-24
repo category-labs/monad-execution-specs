@@ -6,6 +6,14 @@ open Numeric
 (* Bring Uint into scope so the operators are all available to users *)
 include Uint
 
+let gas_per_blob = exp ~$2 ~$17
+let max_blob_gas_per_block = ~$1_179_648
+
+let tx_total_blob_gas (txn : Chain.Ethereum.Transaction.t) =
+  match txn.kind with
+  | Blob {blob_versioned_hashes; _} -> gas_per_blob * ~$(List.length blob_versioned_hashes)
+  | _ -> zero
+
 let tx_calldata_token_gas = ~$4
 let tx_calldata_floor_token_gas = ~$10
 

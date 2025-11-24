@@ -2,8 +2,8 @@
 
 include Stdlib.Result
 
-(* Lightweight monadic operations for Result, when instantiating the monomorphic version is not worth it. *)
-let (let$) = bind
-let return x = Ok x
-
-let fail err = Error err
+include Monad.Make2 (struct
+  type nonrec ('a, 'err) t = ('a, 'err) t
+  let return x = Ok x
+  let ( >>= ) x f = match x with Ok x -> f x | Error err -> Error err
+end)
