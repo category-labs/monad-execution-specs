@@ -1,5 +1,3 @@
-open Numeric
-
 type t = Bytes of Bytes.t | List of t list
 type rlp = t
 
@@ -21,10 +19,10 @@ let encode_payload payload ~long_payload_prefix ~short_payload_prefix =
   let header =
     if len <= 55 then Bytes.make 1 (Char.chr (short_payload_prefix + len))
     else
-      let len = Uint.of_int len in
-      let len_bytes = Uint.significant_bytes len in
+      let len = Z.of_int len in
+      let len_bytes = (Z.(numbits len) + 7) / 8 in
       let len_str =
-        let bytes = Uint.to_bytes_be len in
+        let bytes = Bytes.reverse (Z.to_bits len) in
         let pos = Bytes.length bytes - len_bytes in
         Bytes.sub bytes pos len_bytes
       in
@@ -59,12 +57,12 @@ let rec decode_first (bs : Bytes.t) : t * Bytes.t =
     | b when b >= short_bytes_prefix && b <= long_bytes_prefix -> (1, b - short_bytes_prefix)
     | b when b > long_bytes_prefix && b < short_list_prefix ->
         let payload_len_len = b - long_bytes_prefix in
-        let payload_len = Uint.(to_int (of_bytes_be (Bytes.sub bs 1 payload_len_len))) in
+        let payload_len = Z.(to_int (of_bits (Bytes.reverse (Bytes.sub bs 1 payload_len_len)))) in
         (1 + payload_len_len, payload_len)
     | b when b >= short_list_prefix && b <= long_list_prefix -> (1, b - short_list_prefix)
     | b ->
         let payload_len_len = b - long_list_prefix in
-        let payload_len = Uint.(to_int (of_bytes_be (Bytes.sub bs 1 payload_len_len))) in
+        let payload_len = Z.(to_int (of_bits (Bytes.reverse (Bytes.sub bs 1 payload_len_len)))) in
         (1 + payload_len_len, payload_len)
   in
   let payload = Bytes.sub bs payload_start payload_len in

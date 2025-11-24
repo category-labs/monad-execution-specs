@@ -9,3 +9,11 @@ let keccak_256 (input : Bytes.t) : U256.t =
 
 (** The Keccak-256 encoding of the empty byte array. *)
 let keccak_256_empty = keccak_256 Bytes.empty
+
+let secp256k1b = U256.(~$7)
+let secp256k1p = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F")
+let secp256k1n = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141")
+
+let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (hash : U256.t) : Bytes.t =
+  ignore (r, s, v, hash) ;
+  failwith "TODO"

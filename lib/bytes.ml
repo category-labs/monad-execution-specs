@@ -30,6 +30,14 @@ let reverse (bs : t) : t =
 
 let of_chars chrs = of_seq (List.to_seq chrs)
 
+type zero_and_nonzero_counts = {zero_bytes : int; nonzero_bytes : int}
+let count_zero_and_nonzero_bytes (bs : t) =
+  fold_left
+    (fun counts byte ->
+      if byte = '\x00' then {counts with zero_bytes = counts.zero_bytes + 1}
+      else {counts with nonzero_bytes = counts.nonzero_bytes + 1} )
+    {zero_bytes = 0; nonzero_bytes = 0} bs
+
 module Map = Map.Make (String)
 
 module type ENCODABLE = sig

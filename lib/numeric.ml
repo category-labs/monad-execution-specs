@@ -221,6 +221,9 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
   let bytes_to_whole_words (x : t) =
     let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
     of_z_exn q + if Z.(equal r zero) then zero else one
+
+  let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
+  let of_rlp_exn (x : Rlp.t) = match x with Bytes bs -> of_bytes_be bs | List _ -> assert false
 end
 
 module Size = struct
@@ -321,12 +324,15 @@ end
 module Bits256 = TwosComplement (Size.Bits256)
 
 (** Unsigned 256-bit integers. {!U256.t} is used to represent Ethereum 256-bit words. *)
-module U256 = struct
-  include Bits256.Unsigned
-end
+module U256 = Bits256.Unsigned
 
 (** Signed 256-bit integers. {!I256.t} is used for signed arithmetic on Ethereum 256-bit words. *)
 module I256 = Bits256.Signed
+
+(** Signed and unsigned 64-bit integers. More operations than the versions in stdlib. *)
+module Bits64 = TwosComplement (Size.Bits64)
+module U64 = Bits64.Unsigned
+module I64 = Bits64.Signed
 
 module Bits160 = TwosComplement (Size.Bits160)
 

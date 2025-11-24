@@ -60,6 +60,9 @@ end
 module Transaction = struct
   module Access = struct
     type t = {account_address : Address.t (* E_a *); storage_keys : U256.t list (* E_s *)}
+
+    let to_rlp {account_address; storage_keys} =
+      Rlp.List [Address.to_rlp account_address; Rlp.List (List.map U256.to_rlp storage_keys)]
   end
 
   type call_or_create =
@@ -71,7 +74,7 @@ module Transaction = struct
     | Legacy of
         { call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
         ; gas_price : Uint.t (* T_p *)
-        ; w : U256.t (* T_w *) }
+        ; v : U256.t (* T_w *) }
     | AccessList of
         (* Type-1 transaction as specified in EIP-2930 *)
         
@@ -116,6 +119,108 @@ module Transaction = struct
     | Blob {to_; data; _} -> Call {to_; data}
   let data_or_initcode = function Call {data; _} -> data | Create {init} -> init
 
+  type fee_mechanism =
+    | Legacy of {gas_price : Uint.t}
+    | FeeMarket of {max_fee_per_gas : Uint.t; max_priority_fee_per_gas : Uint.t}
+  let fee_mechanism (txn : t) =
+    match txn.kind with
+    | Legacy {gas_price; _} | AccessList {gas_price; _} -> Legacy {gas_price}
+    | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas; _}
+     |Blob {max_fee_per_gas; max_priority_fee_per_gas; _} ->
+        FeeMarket {max_fee_per_gas; max_priority_fee_per_gas}
+
+  let signing_hash chain_id txn =
+    let to_, data =
+      match call_or_create txn with Call {to_; data} -> (to_, data) | Create {init} -> (Address.zero, init)
+    in
+    let bytes =
+      match txn.kind with
+      | Legacy {gas_price; v; _} when U256.(v = ~$27 || v = ~$28) ->
+          (* Pre EIP-155 transaction *)
+          Rlp.encode
+            (Rlp.List
+               [ U256.to_rlp txn.nonce
+               ; Uint.to_rlp gas_price
+               ; Uint.to_rlp txn.gas_limit
+               ; Address.to_rlp to_
+               ; U256.to_rlp txn.value
+               ; Rlp.Bytes data ] )
+      | Legacy {gas_price; _} ->
+          (* EIP-155 transaction *)
+          Rlp.encode
+            (Rlp.List
+               [ U256.to_rlp txn.nonce
+               ; Uint.to_rlp gas_price
+               ; Uint.to_rlp txn.gas_limit
+               ; Address.to_rlp to_
+               ; U256.to_rlp txn.value
+               ; Rlp.Bytes data
+               ; Uint.to_rlp chain_id
+               ; U256.(to_rlp zero)
+               ; U256.(to_rlp zero) ] )
+      | AccessList {gas_price; access_list; _} ->
+          (* EIP-2930 *)
+          "\x01"
+          ^ Rlp.encode
+              (Rlp.List
+                 [ Uint.to_rlp chain_id
+                 ; U256.to_rlp txn.nonce
+                 ; Uint.to_rlp gas_price
+                 ; Uint.to_rlp txn.gas_limit
+                 ; Address.to_rlp to_
+                 ; U256.to_rlp txn.value
+                 ; Rlp.Bytes data
+                 ; Rlp.List (List.map Access.to_rlp access_list) ] )
+      | FeeMarket {max_priority_fee_per_gas; max_fee_per_gas; access_list; _} ->
+          (* EIP-1559 *)
+          "\x02"
+          ^ Rlp.encode
+              (Rlp.List
+                 [ Uint.to_rlp chain_id
+                 ; U256.to_rlp txn.nonce
+                 ; Uint.to_rlp max_priority_fee_per_gas
+                 ; Uint.to_rlp max_fee_per_gas
+                 ; Uint.to_rlp txn.gas_limit
+                 ; Address.to_rlp to_
+                 ; U256.to_rlp txn.value
+                 ; Rlp.Bytes data
+                 ; Rlp.List (List.map Access.to_rlp access_list) ] )
+      | Blob
+          { max_priority_fee_per_gas
+          ; max_fee_per_gas
+          ; access_list
+          ; max_fee_per_blob_gas
+          ; blob_versioned_hashes
+          ; _ } ->
+          (* EIP-4844 *)
+          "\x03"
+          ^ Rlp.encode
+              (Rlp.List
+                 [ Uint.to_rlp chain_id
+                 ; U256.to_rlp txn.nonce
+                 ; Uint.to_rlp max_priority_fee_per_gas
+                 ; Uint.to_rlp max_fee_per_gas
+                 ; Uint.to_rlp txn.gas_limit
+                 ; Address.to_rlp to_
+                 ; U256.to_rlp txn.value
+                 ; Rlp.Bytes data
+                 ; Rlp.List (List.map Access.to_rlp access_list)
+                 ; U256.to_rlp max_fee_per_blob_gas
+                 ; Rlp.List (List.map U256.to_rlp blob_versioned_hashes) ] )
+    in
+    Crypto.keccak_256 bytes
+
+  let sender (chain_id : Uint.t) ({r; s; kind; _} as txn : t) =
+    assert (U256.(r > zero && r < Crypto.secp256k1n)) ;
+    assert (U256.(s > zero && s < Crypto.secp256k1n / ~$2)) ;
+    let y_parity =
+      match kind with
+      | Legacy {v; _} -> if U256.(v = ~$27 || v = ~$28) then U256.(v - ~$27) else failwith "TODO"
+      | AccessList {y_parity; _} | FeeMarket {y_parity; _} | Blob {y_parity; _} -> y_parity
+    in
+    let public_key = Crypto.secp256k1_recover r s y_parity (signing_hash chain_id txn) in
+    Address.of_bytes_be (Bytes.sub (U256.to_bytes_be (Crypto.keccak_256 public_key)) 12 (32 - 12))
+
   let access_list txn =
     match txn.kind with
     | Legacy _ -> []
@@ -125,8 +230,8 @@ end
 module Withdrawal = struct
   (* YP 4.3 *)
   type t =
-    { global_index : Uint64.t (* W_g *)
-    ; validator_index : Uint64.t (* W_v *)
+    { global_index : U64.t (* W_g *)
+    ; validator_index : U64.t (* W_v *)
     ; recipient : Address.t (* W_r *)
     ; amount : U256.t (* W_a *) }
 end
@@ -149,11 +254,11 @@ module Block = struct
       ; timestamp : U256.t (* H_s *)
       ; extra_data : Bytes.t (* H_x *)
       ; prev_randao : U256.t (* H_a *)
-      ; nonce : Uint64.t (* H_n *)
+      ; nonce : U64.t (* H_n *)
       ; base_fee_per_gas : Uint.t (* H_f *)
       ; withdrawals_root : U256.t (* H_w *)
-      ; blob_gas_used : Uint64.t (* EIP-4844 *)
-      ; excess_blob_gas : Uint64.t (* EIP-4844 *)
+      ; blob_gas_used : U64.t (* EIP-4844 *)
+      ; excess_blob_gas : U64.t (* EIP-4844 *)
       ; parent_beacon_block_root : U256.t (* EIP-4788 *)
       ; requests_hash : U256.t (* EIP-7685 *) }
   end
