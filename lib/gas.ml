@@ -2,6 +2,7 @@
     unsigned integers [Uint.t]. *)
 
 open Numeric
+open Chain.Ethereum
 
 (* Bring Uint into scope so the operators are all available to users *)
 include Uint
@@ -9,10 +10,23 @@ include Uint
 let gas_per_blob = exp ~$2 ~$17
 let max_blob_gas_per_block = ~$1_179_648
 
-let tx_total_blob_gas (txn : Chain.Ethereum.Transaction.t) =
-  match txn.kind with
-  | Blob {blob_versioned_hashes; _} -> gas_per_blob * ~$(List.length blob_versioned_hashes)
-  | _ -> zero
+let taylor_approximation_exponential ~factor ~numerator ~denominator =
+  let i = ref one in
+  let output = ref zero in
+  let numerator_accumulated = ref (factor * denominator) in
+  while !numerator_accumulated > zero do
+    output := !output + !numerator_accumulated ;
+    numerator_accumulated := !numerator_accumulated * numerator / (denominator * !i) ;
+    i := !i + one
+  done ;
+  !output / denominator
+
+let min_blob_gas_price = one
+let blob_base_fee_update_fraction = ~$5_007_716
+
+let block_blob_gas_price (excess_blob_gas : t) =
+  taylor_approximation_exponential ~factor:min_blob_gas_price ~numerator:excess_blob_gas
+    ~denominator:blob_base_fee_update_fraction
 
 let tx_calldata_token_gas = ~$4
 let tx_calldata_floor_token_gas = ~$10
@@ -20,10 +34,37 @@ let tx_calldata_floor_token_gas = ~$10
 let tx_create_gas = ~$32_000
 let tx_initcode_gas_per_word = ~$2
 
-let tx_base_gas = ~$21_000
-
 let tx_access_list_address = ~$2_400
 let tx_access_list_storage = ~$1_900
+
+let tx_base_gas = ~$21_000
+
+let tokens_in_calldata (txn : Transaction.t) =
+  let Bytes.{zero_bytes; nonzero_bytes} =
+    Bytes.count_zero_and_nonzero_bytes Transaction.(data_or_initcode (call_or_create txn))
+  in
+  Stdlib.(zero_bytes + (4 * nonzero_bytes))
+
+(* YP (64) *)
+let tx_intrinsic_gas (txn : Transaction.t) =
+  let calldata_gas = ~$(tokens_in_calldata txn) * tx_calldata_token_gas in
+  let create_gas =
+    match Transaction.call_or_create txn with
+    | Call _ -> zero
+    | Create {init} -> tx_create_gas + (tx_initcode_gas_per_word * bytes_to_whole_words ~$(Bytes.length init))
+  in
+  let transaction_gas = tx_base_gas in
+  let access_list_gas =
+    List.fold_left
+      (fun g (access : Transaction.Access.t) ->
+        g + tx_access_list_address + (tx_access_list_storage * ~$(List.length access.storage_keys)) )
+      zero (Transaction.access_list txn)
+  in
+  calldata_gas + create_gas + transaction_gas + access_list_gas
+
+(* EIP-7623 *)
+let tx_floor_gas (txn : Transaction.t) =
+  (~$(tokens_in_calldata txn) * tx_calldata_floor_token_gas) + tx_base_gas
 
 let jumpdest = ~$1
 
