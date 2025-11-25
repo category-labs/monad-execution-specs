@@ -2,7 +2,23 @@
     Work in progress, will be expanded as needed. *)
 open Numeric
 
-module Address = U160
+module Address = struct
+  include U160
+
+  type create2_params = {salt : U256.t; code : Bytes.t}
+
+  (* YP (95) *)
+  let of_contract_creation ~sender ~nonce ~create2 =
+    of_u256_truncating
+      (Crypto.keccak_256
+         ( match create2 with
+         | None -> Rlp.(encode (List [to_rlp sender; Uint.to_rlp nonce]))
+         | Some {salt; code} ->
+             Bytes.make 1 '\xff'
+             ^ to_bytes_be sender
+             ^ U256.to_bytes_be salt
+             ^ U256.to_bytes_be (Crypto.keccak_256 code) ) )
+end
 
 module Revision = struct
   type t =
@@ -111,6 +127,14 @@ module Transaction = struct
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
     ; kind : kind }
+
+  type kind_tag = [`Legacy | `AccessList | `FeeMarket | `Blob]
+  let kind_tag txn : kind_tag =
+    match txn.kind with
+    | Legacy _ -> `Legacy
+    | AccessList _ -> `AccessList
+    | FeeMarket _ -> `FeeMarket
+    | Blob _ -> `Blob
 
   let call_or_create txn =
     match txn.kind with
@@ -246,7 +270,7 @@ module Block = struct
       ; state_root : U256.t (* H_r *)
       ; transactions_root : U256.t (* H_t *)
       ; receipts_root : U256.t (* H_e *)
-      ; logs_bloom : U256.t (* H_b *)
+      ; logs_bloom : Bloom.t (* H_b *)
       ; difficulty : Uint.t (* H_d *)
       ; number : Uint.t (* H_i *)
       ; gas_limit : Uint.t (* H_l *)
@@ -261,6 +285,14 @@ module Block = struct
       ; excess_blob_gas : U64.t (* EIP-4844 *)
       ; parent_beacon_block_root : U256.t (* EIP-4788 *)
       ; requests_hash : U256.t (* EIP-7685 *) }
+
+    let verify (h1 : t) (h2 : t) : bool =
+      U256.(h1.state_root = h2.state_root)
+      && U256.(h1.transactions_root = h2.transactions_root)
+      && U256.(h1.receipts_root = h2.receipts_root)
+      && U256.(h1.withdrawals_root = h2.withdrawals_root)
+      && Bloom.(h1.logs_bloom = h2.logs_bloom)
+      && U256.(h1.requests_hash = h2.requests_hash)
   end
 
   (* YP 4.4 (23) *)
@@ -274,16 +306,32 @@ end
 module Log = struct
   (* YP 4.4.1 (28) *)
   type t = {address : Address.t (* O_a *); topics : U256.t list (* O_t *); data : Bytes.t (* O_d *)}
+
+  let to_bloom (log : t) : Bloom.t =
+    let entries = U160.to_u256 log.address :: log.topics in
+    List.fold_left
+      (fun bloom entry -> Bloom.(logor bloom (of_bytes (U256.to_bytes_be entry))))
+      Bloom.zeros entries
 end
 
 module Receipt = struct
-  type transaction_type = Legacy | AccessList | FeeMarket | Blob
-
   (* YP 4.4.1. *)
   type t =
-    { tx_type : transaction_type (* R_x *)
+    { tx_type : Transaction.kind_tag (* R_x *)
     ; succeeded : bool (* R_z *)
     ; cumulative_gas_used : Uint.t (* R_u *)
-    ; bloom : Bytes256.t (* R_b *)
+    ; bloom : Bloom.t (* R_b *)
     ; logs : Log.t list (* R_l *) }
+end
+
+module Account = struct
+  type t =
+    { nonce : Uint.t (* σ[a]_n *)
+    ; balance : U256.t (* σ[a]_b *)
+    ; storage : U256.t U256.Map.t (* σ[a]_s *)
+    ; code : Bytes.t (* σ[a]_c *) }
+  [@@deriving lens {submodule = true; prefix = true}]
+  include TLens
+
+  let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty; nonce = Uint.zero}
 end

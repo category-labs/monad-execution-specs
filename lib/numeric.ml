@@ -331,6 +331,7 @@ module I256 = Bits256.Signed
 
 (** Signed and unsigned 64-bit integers. More operations than the versions in stdlib. *)
 module Bits64 = TwosComplement (Size.Bits64)
+
 module U64 = Bits64.Unsigned
 module I64 = Bits64.Signed
 

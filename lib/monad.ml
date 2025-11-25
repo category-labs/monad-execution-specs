@@ -270,7 +270,7 @@ struct
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
     include Make (struct
       include MT
-      type state =  T.t
+      type state = T.t
       let get : T.t MT.t = MT.lift M.get
       let put x = MT.lift (M.put x)
     end)
