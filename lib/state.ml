@@ -5,37 +5,6 @@ open Lens.Infix
 let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
 
-module Account = struct
-  type t =
-    { nonce : Uint.t (* σ[a]_n *)
-    ; balance : U256.t (* σ[a]_b *)
-    ; storage : U256.t U256.Map.t (* σ[a]_s *)
-    ; code : Bytes.t (* σ[a]_c *) }
-  [@@deriving lens {submodule = true; prefix = true}]
-  include TLens
-
-  let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty; nonce = Uint.zero}
-end
-open Account
-
-module StorageKey = struct
-  module Impl = struct
-    type t = Address.t * U256.t
-    let compare (a1, w1) (a2, w2) =
-      let c1 = Address.compare a1 a2 in
-      if c1 = 0 then U256.compare w1 w2 else c1
-  end
-  include Impl
-  module Set = Set.Make (Impl)
-end
-
-module Log = struct
-  type t = {address : Address.t; topics : U256.t list; data : Bytes.t}
-  [@@deriving lens {submodule = true; prefix = true}]
-
-  include TLens
-end
-
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
         includes the world state as per YP 4.1. *)
@@ -45,13 +14,9 @@ module WorldState = struct
   include TLens
 
   let make chain_id = {history = []; accounts = Address.Map.empty; chain_id}
-  type error = Invalid_transaction of Transaction.t | Invalid_block of Block.t
 
   let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
-
-  module M = Monad.State (struct
-    type nonrec t = t
-  end)
+  let account_opt addr = accounts |-- Address.Map.at addr
 end
 
 module BlockState = struct
@@ -63,7 +28,7 @@ module BlockState = struct
     ; gas_used : Gas.t
     ; blob_gas_used : Gas.t
     ; transactions_processed : (Transaction.t * Receipt.t) list
-    ; logs_bloom : Bytes256.t }
+    ; logs : Log.t list }
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
@@ -73,18 +38,34 @@ module BlockState = struct
     ; gas_used = Gas.zero
     ; blob_gas_used = Gas.zero
     ; transactions_processed = []
-    ; logs_bloom = Bytes256.zeros }
-
-  let merge (_state : t) : unit WorldState.M.t = failwith "TODO"
+    ; logs = [] }
 
   let account addr = world_state |-- WorldState.account addr
+  let account_opt addr = world_state |-- WorldState.account_opt addr
 
-  module M = Monad.State (struct
-    type nonrec t = t
-  end)
+  let transfer_money_and_delete_if_empty (block_state : t) (amount : U256.t) (recipient : Address.t) =
+    let updated_balance = U256.(block_state.^(account recipient).balance + amount) in
+    if U256.(updated_balance = zero) then block_state.^(account_opt recipient) <- None
+    else block_state.^(account recipient |-- Account.balance) <- updated_balance
+
+  (** {!finalize_current_block bs} returns {!bs.current_block} with the roots updated to reflect the
+      new state after block execution. If the block already carries its MPT roots are already calculated,
+      they are overwritten. *)
+  let finalize_current_block (block_state : t) : Block.t = failwith "TODO"
 end
 
 module TransactionState = struct
+  module StorageKey = struct
+    module Impl = struct
+      type t = Address.t * U256.t
+      let compare (a1, w1) (a2, w2) =
+        let c1 = Address.compare a1 a2 in
+        if c1 = 0 then U256.compare w1 w2 else c1
+    end
+    include Impl
+    module Set = Set.Make (Impl)
+  end
+
   (** State within a single transaction. Tracks the initial world state, any changes to its storage,
         and variables that are internal to the transaction such as the accrued substate (YP 6.1). *)
   type t =
@@ -104,21 +85,48 @@ module TransactionState = struct
 
   include TLens
 
-  let make (block_state : BlockState.t) current_transaction =
+  let pre_compiled_contract_addresses = Address.Set.empty (* TODO *)
+
+  let make (block_state : BlockState.t) sender tx access_list =
+    let open BlockState in
+    let open Transaction.Access in
+    let access_list_addresses =
+      List.to_seq access_list |> Seq.map (fun acc -> acc.account_address) |> Address.Set.of_seq
+    in
+    let target_addresses =
+      match Transaction.call_or_create tx with
+      | Call {to_; _} -> (
+        match Delegation.get_delegated_address block_state.^(account sender).code with
+        | None -> Address.Set.singleton to_
+        | Some delegated -> Address.Set.of_list [to_; delegated] )
+      | Create _ ->
+          let nonce = block_state.^(account sender).nonce in
+          Address.Set.singleton (Address.of_contract_creation ~sender ~nonce ~create2:None)
+    in
+    let accessed_addresses =
+      List.fold_left Address.Set.union Address.Set.empty
+        [ access_list_addresses
+        ; pre_compiled_contract_addresses
+        ; Address.Set.singleton sender
+        ; target_addresses ]
+    in
+    let accessed_keys =
+      List.to_seq access_list
+      |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.account_address, k)))
+      |> StorageKey.Set.of_seq
+    in
     { initial_world_state = block_state.world_state
     ; world_state = block_state.world_state
     ; current_block = block_state.current_block
-    ; current_transaction
+    ; current_transaction = tx
     ; transient_storage = Address.Map.empty
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; self_destruct = Address.Set.empty
     ; logs = []
     ; touched = Address.Set.empty
     ; refund = U256.zero
-    ; accessed_addresses = Address.Set.empty
-    ; accessed_keys = StorageKey.Set.empty }
-
-  let merge (_result : t) : unit BlockState.M.t = failwith "TODO"
+    ; accessed_addresses
+    ; accessed_keys }
 
   let account addr = world_state |-- WorldState.account addr
 
@@ -138,84 +146,35 @@ end)
 
 let versioned_hash_version_kzg = '\x01'
 
-let process_transaction (block_state : BlockState.t) (txn : Transaction.t) =
-  (* Basic validity checks. *)
-  (* Nonce *)
-  if U256.(txn.nonce >= of_uint64 Uint64.max_uint) then failwith "Invalid transaction" ;
-  (* Initcode size *)
-  ( match Transaction.call_or_create txn with
-  | Create {init} when Bytes.length init > 2 * Vm.max_init_code_size -> failwith "Invalid transaction"
-  | _ -> () ) ;
-  (* Blob hash length and versioning *)
-  ( match txn.kind with
-  | Blob {blob_versioned_hashes; _} ->
-      if blob_versioned_hashes = [] then failwith "Invalid transaction" ;
-      let check_blob_hash_version hash =
-        if not (U256.byte ~index_le:31 hash = versioned_hash_version_kzg) then failwith "Invalid transaction"
-      in
-      List.iter check_blob_hash_version blob_versioned_hashes
-  | _ -> () ) ;
-
-  (* YP (64) *)
-  let intrinsic_gas = Gas.tx_intrinsic_gas txn in
-  if Gas.(intrinsic_gas > txn.gas_limit) then failwith "Invalid transaction" ;
-
-  (* EIP-7623 *)
-  let floor_gas = Gas.tx_floor_gas txn in
-  if Gas.(floor_gas > txn.gas_limit) then failwith "Invalid transaction" ;
-
-  let block = block_state.current_block in
-  let header = block.header in
-  let base_fee_per_gas = header.base_fee_per_gas in
-  (* Calculate effective gas price and max payable gas fee depending on transaction type. Here we also check
-     that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
-  let effective_gas_price, max_gas_fee, blob_gas_fee =
-    match Transaction.fee_mechanism txn with
-    | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas} -> (
-        if Gas.(max_fee_per_gas < max_priority_fee_per_gas) then failwith "Invalid transaction" ;
-        if Gas.(max_fee_per_gas < base_fee_per_gas) then failwith "Invalid transaction" ;
-        let priority_fee_per_gas = Gas.(min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas)) in
-        let effective_gas_price = Gas.(priority_fee_per_gas + base_fee_per_gas) in
-        let max_gas_fee = Gas.(txn.gas_limit * max_fee_per_gas) in
-        match txn.kind with
-        | Blob {max_fee_per_blob_gas; blob_versioned_hashes; _} ->
-            let max_fee_per_blob_gas = U256.to_unbounded max_fee_per_blob_gas in
-            let blob_gas_price = Gas.block_blob_gas_price (U64.to_unbounded header.excess_blob_gas) in
-            if Gas.(max_fee_per_blob_gas < blob_gas_price) then failwith "Invalid transaction" ;
-            let total_blob_gas = Gas.(gas_per_blob * ~$(List.length blob_versioned_hashes)) in
-            let max_blob_gas_fee = Gas.(total_blob_gas * max_fee_per_blob_gas) in
-            let blob_gas_fee = Gas.(total_blob_gas * blob_gas_price) in
-            (effective_gas_price, Gas.(max_gas_fee + max_blob_gas_fee), blob_gas_fee)
-        | _ -> (effective_gas_price, max_gas_fee, Gas.zero) )
-    | Legacy {gas_price} ->
-        if Gas.(gas_price < base_fee_per_gas) then failwith "Invalid transaction" ;
-        (gas_price, Gas.(txn.gas_limit * gas_price), Gas.zero)
+let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
+  let kind, current_target, data, code, code_address =
+    match Transaction.call_or_create tx with
+    | Call {to_; data} ->
+        let code =
+          let account_code = block_state.^(BlockState.account to_).code in
+          match Delegation.get_delegated_address account_code with
+          | None -> account_code
+          | Some delegated -> block_state.^(BlockState.account delegated).code
+        in
+        (Evmc.Message.CallKind.Call, to_, data, code, to_)
+    | Create {init} ->
+        let nonce = block_state.^(BlockState.account sender).nonce in
+        let target = Address.of_contract_creation ~sender ~nonce ~create2:None in
+        (Evmc.Message.CallKind.Create, target, Bytes.empty, init, Address.zero)
   in
-
-  let sender = Transaction.sender block_state.world_state.chain_id txn in
-  let sender_account = block_state.world_state |. WorldState.account sender in
-  if Uint.(sender_account.nonce <> U256.to_unbounded txn.nonce) then failwith "Invalid transaction" ;
-  if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded txn.value) then
-    failwith "Invalid transaction" ;
-  if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
-    failwith "Invalid transaction" ;
-
-  let effective_gas_fee = Gas.(txn.gas_limit * effective_gas_price) in
-  let total_fee = Gas.(effective_gas_fee + blob_gas_fee) in
-  if total_fee > U256.to_unbounded sender_account.balance then failwith "Invalid transaction" ;
-  let total_fee = U256.of_unbounded_exn total_fee in
-
-  (* pay gas and blob fees, increase nonce *)
-  let block_state =
-    block_state.^(BlockState.account sender) <-
-      { sender_account with
-        balance = U256.(sender_account.balance - total_fee)
-      ; nonce = Uint.(sender_account.nonce + one) }
-  in
-
-  let available_gas = Gas.(txn.gas_limit - intrinsic_gas) in
-
-  failwith "TODO"
+  Evmc.Message.
+    { kind
+    ; sender
+    ; recipient = current_target
+    ; value = tx.value
+    ; gas = Gas.to_int64 gas
+    ; code
+    ; code_address
+    ; static = false
+    ; delegated = Delegation.is_valid_delegation code
+    ; input_data = data
+    ; depth = 0l
+    ; create2_salt = U256.zero }
 
 module Host (Vm : sig
   val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
@@ -283,26 +242,12 @@ struct
     (* TODO: check whether it's a precompile *)
     Vm.execute msg msg.code
 
-  (* YP (95) *)
-  let address_for ~sender ~create2_salt ~code =
-    let$ nonce = !(account sender |-- nonce) in
-    return
-      (Address.of_u256_truncating
-         (Crypto.keccak_256
-            ( match create2_salt with
-            | None -> Rlp.(encode (List [Address.to_rlp sender; Uint.to_rlp nonce]))
-            | Some salt ->
-                Bytes.make 1 '\xff'
-                ^ Address.to_bytes_be sender
-                ^ U256.to_bytes_be salt
-                ^ U256.to_bytes_be (Crypto.keccak_256 code) ) ) )
-
   let process_create (msg : Evmc.Message.t) =
-    let$ create_address =
+    let$ sender_nonce = !(account msg.sender |-- nonce) in
+    let create_address =
       (* Note that we use the sender nonce _before_ increasing it *)
-      address_for ~sender:msg.sender
-        ~create2_salt:(if msg.kind = Create2 then Some msg.create2_salt else None)
-        ~code:msg.code
+      Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce
+        ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; code = msg.code} else None)
     in
     let$ pre_existent_account = !(account create_address) in
     if Uint.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
@@ -412,3 +357,170 @@ struct
 
   let set_transient_storage addr key value = transient_storage addr key := value
 end
+
+let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
+  let open BlockState in
+  (* Basic validity checks. *)
+  (* Nonce *)
+  if U256.(tx.nonce >= of_uint64 Uint64.max_uint) then failwith "Invalid transaction" ;
+  (* Initcode size *)
+  ( match Transaction.call_or_create tx with
+  | Create {init} when Bytes.length init > 2 * Vm.max_init_code_size -> failwith "Invalid transaction"
+  | _ -> () ) ;
+  (* Blob hash length and versioning *)
+  ( match tx.kind with
+  | Blob {blob_versioned_hashes; _} ->
+      if blob_versioned_hashes = [] then failwith "Invalid transaction" ;
+      let check_blob_hash_version hash =
+        if not (U256.byte ~index_le:31 hash = versioned_hash_version_kzg) then failwith "Invalid transaction"
+      in
+      List.iter check_blob_hash_version blob_versioned_hashes
+  | _ -> () ) ;
+
+  (* YP (64) *)
+  let intrinsic_gas = Gas.tx_intrinsic_gas tx in
+  if Gas.(intrinsic_gas > tx.gas_limit) then failwith "Invalid transaction" ;
+
+  (* EIP-7623 *)
+  let floor_gas = Gas.tx_floor_gas tx in
+  if Gas.(floor_gas > tx.gas_limit) then failwith "Invalid transaction" ;
+
+  let block = block_state.current_block in
+  let header = block.header in
+  let base_fee_per_gas = header.base_fee_per_gas in
+  (* Calculate effective gas price and max payable gas fee depending on transaction type. Here we also check
+     that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
+  let effective_gas_price, max_gas_fee, tx_blob_gas_used, blob_gas_fee =
+    match Transaction.fee_mechanism tx with
+    | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas} -> (
+        if Gas.(max_fee_per_gas < max_priority_fee_per_gas) then failwith "Invalid transaction" ;
+        if Gas.(max_fee_per_gas < base_fee_per_gas) then failwith "Invalid transaction" ;
+        let priority_fee_per_gas = Gas.(min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas)) in
+        let effective_gas_price = Gas.(priority_fee_per_gas + base_fee_per_gas) in
+        let max_gas_fee = Gas.(tx.gas_limit * max_fee_per_gas) in
+        match tx.kind with
+        | Blob {max_fee_per_blob_gas; blob_versioned_hashes; _} ->
+            let max_fee_per_blob_gas = U256.to_unbounded max_fee_per_blob_gas in
+            let blob_gas_price = Gas.block_blob_gas_price (U64.to_unbounded header.excess_blob_gas) in
+            if Gas.(max_fee_per_blob_gas < blob_gas_price) then failwith "Invalid transaction" ;
+            let total_blob_gas = Gas.(gas_per_blob * ~$(List.length blob_versioned_hashes)) in
+            let max_blob_gas_fee = Gas.(total_blob_gas * max_fee_per_blob_gas) in
+            let blob_gas_fee = Gas.(total_blob_gas * blob_gas_price) in
+            (effective_gas_price, Gas.(max_gas_fee + max_blob_gas_fee), total_blob_gas, blob_gas_fee)
+        | _ -> (effective_gas_price, max_gas_fee, Gas.zero, Gas.zero) )
+    | Legacy {gas_price} ->
+        if Gas.(gas_price < base_fee_per_gas) then failwith "Invalid transaction" ;
+        (gas_price, Gas.(tx.gas_limit * gas_price), Gas.zero, Gas.zero)
+  in
+
+  let sender = Transaction.sender block_state.world_state.chain_id tx in
+  let sender_account = block_state.world_state |. WorldState.account sender in
+  if Uint.(sender_account.nonce <> U256.to_unbounded tx.nonce) then failwith "Invalid transaction" ;
+  if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded tx.value) then
+    failwith "Invalid transaction" ;
+  if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
+    failwith "Invalid transaction" ;
+
+  let effective_gas_fee = Gas.(tx.gas_limit * effective_gas_price) in
+  let total_fee = Gas.(effective_gas_fee + blob_gas_fee) in
+  if total_fee > U256.to_unbounded sender_account.balance then failwith "Invalid transaction" ;
+  let total_fee = U256.of_unbounded_exn total_fee in
+
+  (* pay gas and blob fees, increase nonce *)
+  let block_state =
+    block_state.^(account sender) <-
+      { sender_account with
+        balance = U256.(sender_account.balance - total_fee)
+      ; nonce = Uint.(sender_account.nonce + one) }
+  in
+
+  let available_gas = Gas.(tx.gas_limit - intrinsic_gas) in
+  let access_list = Transaction.access_list tx in
+  let transaction_state = TransactionState.make block_state sender tx access_list in
+  let message = prepare_message block_state sender available_gas tx in
+  let module H =
+    Evmc.Instantiate (TransactionState.M) (Host)
+      (Vm.Make (struct
+        let trace = false
+      end))
+  in
+  let result, transaction_state = H.Vm.execute message message.code transaction_state in
+
+  let tx_gas_used_before_refund = Gas.(tx.gas_limit - of_int64 result.gas_left) in
+  let tx_gas_refund = Gas.(min (tx_gas_used_before_refund / ~$5) (of_int64 result.gas_refund)) in
+  let tx_gas_used_after_refund = Gas.(max (tx_gas_used_before_refund - tx_gas_refund) floor_gas) in
+
+  (* Refund gas to sender. *)
+  let block_state =
+    let tx_gas_left = Gas.(tx.gas_limit - tx_gas_used_after_refund) in
+    let gas_refund_amount = U256.of_unbounded_exn Gas.(tx_gas_left * effective_gas_price) in
+    block_state.^(account sender |-- Account.balance) <-
+      U256.(block_state.^(account sender |-- Account.balance) + gas_refund_amount)
+  in
+
+  (* Transfer miner fees. *)
+  let priority_fee_per_gas = Gas.(effective_gas_price - base_fee_per_gas) in
+  let transaction_fee = U256.of_unbounded_exn Gas.(tx_gas_used_after_refund * priority_fee_per_gas) in
+  let block_state = transfer_money_and_delete_if_empty block_state transaction_fee header.beneficiary in
+
+  (* Destroy deleted accounts. *)
+  let block_state =
+    transaction_state.self_destruct
+    |> Address.Set.to_seq
+    |> Seq.fold_left
+         (fun block_state touched_account -> block_state.^(account_opt touched_account) <- None)
+         block_state
+  in
+
+  (* Update gas used by the block. *)
+  let block_state =
+    { block_state with
+      gas_used = Gas.(block_state.gas_used + tx_gas_used_after_refund)
+    ; blob_gas_used = Gas.(block_state.blob_gas_used + tx_blob_gas_used) }
+  in
+
+  (* Add receipt and logs. *)
+  let block_state =
+    let receipt =
+      Receipt.
+        { tx_type = Transaction.kind_tag tx
+        ; cumulative_gas_used = block_state.gas_used
+        ; bloom = Bloom.zeros
+        ; succeeded = result.status_code = Success
+        ; logs = transaction_state.logs }
+    in
+    { block_state with
+      transactions_processed = List.append block_state.transactions_processed [(tx, receipt)]
+    ; logs = List.append block_state.logs transaction_state.logs }
+  in
+
+  block_state
+
+let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
+  BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
+
+let validate_header (world_state : WorldState.t) (header : Block.Header.t) = ()
+
+let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
+  validate_header world_state block.header ;
+  if block.ommers <> [] then failwith "Invalid block" ;
+
+  let block_state = BlockState.make world_state block in
+
+  (* TODO: system transactions *)
+
+  (* Process block transactions. *)
+  let block_state = List.fold_left process_transaction block_state block.transactions in
+
+  (* Process block withdrawals. *)
+  let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
+
+  (* TODO process EIP-7685 requests *)
+
+  (* TODO coalesce destructing dead accounts here *)
+
+  (* Compute roots and add the finalized block to the blockchain. *)
+  let finalized_block = BlockState.finalize_current_block block_state in
+  if verify && not (Block.Header.verify block.header finalized_block.header) then
+    failwith "Block verification failed" ;
+  {block_state.world_state with history = block :: world_state.history}
