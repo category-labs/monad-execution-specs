@@ -268,9 +268,9 @@ let of_patricia trie =
   {root_hash; inv_hashes}
 
 (* Convenience function for testing *)
-let make (entries : (Bytes.t * Rlp.t) list) =
+let make (entries : (Bytes.t * Bytes.t) list) =
   List.to_seq entries
-  |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, v))
+  |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, Rlp.Bytes v))
   |> Trie.of_seq
   |> PatriciaTrie.of_trie
   |> of_patricia

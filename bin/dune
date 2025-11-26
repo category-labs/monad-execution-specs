@@ -3,3 +3,9 @@
  (public_name evmrun)
  (modes byte exe)
  (libraries monad_lib))
+
+(executable
+ (name execrun)
+ (public_name execrun)
+ (modes byte exe)
+ (libraries monad_lib))

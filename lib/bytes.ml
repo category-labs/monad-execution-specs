@@ -44,3 +44,11 @@ module type ENCODABLE = sig
   type t
   val to_bytes : t -> bytes
 end
+
+let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+  match json with
+  | `String str -> (
+    try Ok (of_hex_string str) with _ -> Error (Format.sprintf "Cannot parse \"%s\" as a byte string" str) )
+  | _ -> Error "Expected string"
+let of_yojson_exn (json : Yojson.Safe.t) : t = Result.get_ok (of_yojson json)
+let to_yojson (bs : t) : Yojson.Safe.t = `String (Format.sprintf "0x%s" (to_hex_string bs))

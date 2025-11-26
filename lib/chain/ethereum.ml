@@ -75,10 +75,11 @@ end
 
 module Transaction = struct
   module Access = struct
-    type t = {account_address : Address.t (* E_a *); storage_keys : U256.t list (* E_s *)}
+    type t = {address : Address.t (* E_a *); storage_keys : U256.t list [@tag "storageKeys"] (* E_s *)}
+    [@@deriving yojson]
 
-    let to_rlp {account_address; storage_keys} =
-      Rlp.List [Address.to_rlp account_address; Rlp.List (List.map U256.to_rlp storage_keys)]
+    let to_rlp {address; storage_keys} =
+      Rlp.List [Address.to_rlp address; Rlp.List (List.map U256.to_rlp storage_keys)]
   end
 
   type call_or_create =
@@ -144,14 +145,14 @@ module Transaction = struct
   let data_or_initcode = function Call {data; _} -> data | Create {init} -> init
 
   type fee_mechanism =
-    | Legacy of {gas_price : Uint.t}
-    | FeeMarket of {max_fee_per_gas : Uint.t; max_priority_fee_per_gas : Uint.t}
+    | LegacyFee of {gas_price : Uint.t}
+    | FeeMarketFee of {max_fee_per_gas : Uint.t; max_priority_fee_per_gas : Uint.t}
   let fee_mechanism (txn : t) =
     match txn.kind with
-    | Legacy {gas_price; _} | AccessList {gas_price; _} -> Legacy {gas_price}
+    | Legacy {gas_price; _} | AccessList {gas_price; _} -> LegacyFee {gas_price}
     | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas; _}
      |Blob {max_fee_per_gas; max_priority_fee_per_gas; _} ->
-        FeeMarket {max_fee_per_gas; max_priority_fee_per_gas}
+        FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas}
 
   let signing_hash chain_id txn =
     let to_, data =
@@ -249,58 +250,131 @@ module Transaction = struct
     match txn.kind with
     | Legacy _ -> []
     | AccessList {access_list; _} | FeeMarket {access_list; _} | Blob {access_list; _} -> access_list
+
+  let ( .$() ) obj k = Yojson.Safe.Util.member k obj
+
+  let call_or_create_of_yojson (json : Yojson.Safe.t) =
+    Result.(
+      let$ to_ = Address.of_yojson json.$("to") in
+      let$ data = Bytes.of_yojson json.$("data") in
+      return (if to_ = Address.zero then Create {init = data} else Call {to_; data}) )
+
+  let legacy_of_yojson (json : Yojson.Safe.t) : (kind, string) result =
+    Result.(
+      let$ call_or_create = call_or_create_of_yojson json in
+      let$ gas_price = Uint.of_yojson json.$("gasPrice") in
+      let$ v = U256.of_yojson json.$("v") in
+      return (Legacy {call_or_create; gas_price; v}) )
+  let access_list_of_yojson (json : Yojson.Safe.t) =
+    Result.(
+      let$ call_or_create = call_or_create_of_yojson json in
+      let$ gas_price = Uint.of_yojson json.$("gasPrice") in
+      let$ access_list = [%of_yojson: Access.t list] json.$("accessList") in
+      let$ chain_id = U256.of_yojson json.$("chainId") in
+      let$ y_parity = U256.of_yojson json.$("v") in
+      return (AccessList {call_or_create; gas_price; access_list; chain_id; y_parity}) )
+  let fee_market_of_yojson (json : Yojson.Safe.t) =
+    Result.(
+      let$ call_or_create = call_or_create_of_yojson json in
+      let$ max_fee_per_gas = Uint.of_yojson json.$("maxFeePerGas") in
+      let$ max_priority_fee_per_gas = Uint.of_yojson json.$("maxPriorityFeePerGas") in
+      let$ access_list = [%of_yojson: Access.t list] json.$("accessList") in
+      let$ chain_id = U256.of_yojson json.$("chainId") in
+      let$ y_parity = U256.of_yojson json.$("v") in
+      return
+        (FeeMarket {call_or_create; max_fee_per_gas; max_priority_fee_per_gas; access_list; chain_id; y_parity}
+        ) )
+  let blob_of_yojson (json : Yojson.Safe.t) =
+    Result.(
+      let$ call_or_create = call_or_create_of_yojson json in
+      let$ data, to_ =
+        match call_or_create with Call {data; to_} -> return (data, to_) | Create _ -> fail "kind.to_"
+      in
+      let$ max_fee_per_gas = Uint.of_yojson json.$("maxFeePerGas") in
+      let$ max_priority_fee_per_gas = Uint.of_yojson json.$("maxPriorityFeePerGas") in
+      let$ max_fee_per_blob_gas = U256.of_yojson json.$("maxFeePerBlobGas") in
+      let$ blob_versioned_hashes = return [] in
+      let$ access_list = [%of_yojson: Access.t list] json.$("accessList") in
+      let$ chain_id = U256.of_yojson json.$("chainId") in
+      let$ y_parity = U256.of_yojson json.$("v") in
+      return
+        (Blob
+           { data
+           ; to_
+           ; max_fee_per_gas
+           ; max_priority_fee_per_gas
+           ; max_fee_per_blob_gas
+           ; access_list
+           ; chain_id
+           ; y_parity
+           ; blob_versioned_hashes } ) )
+
+  let of_yojson (json : Yojson.Safe.t) =
+    Result.(
+      let$ kind =
+        match json.$("type") with
+        | `Null -> legacy_of_yojson json
+        | `String "0x01" -> access_list_of_yojson json
+        | `String "0x02" -> fee_market_of_yojson json
+        | `String "0x03" -> blob_of_yojson json
+        | invalid ->
+            Error (Format.sprintf "Not a valid transaction type: %s" (Yojson.Safe.pretty_to_string invalid))
+      in
+      let$ nonce = U256.of_yojson json.$("nonce") in
+      let$ gas_limit = Uint.of_yojson json.$("gasLimit") in
+      let$ value = U256.of_yojson json.$("value") in
+      let$ r = U256.of_yojson json.$("r") in
+      let$ s = U256.of_yojson json.$("s") in
+      return {nonce; gas_limit; value; r; s; kind} )
+
+  let to_yojson (_tx : t) : Yojson.Safe.t = failwith "TODO"
 end
 
 module Withdrawal = struct
   (* YP 4.3 *)
   type t =
-    { global_index : U64.t (* W_g *)
-    ; validator_index : U64.t (* W_v *)
-    ; recipient : Address.t (* W_r *)
-    ; amount : U256.t (* W_a *) }
+    { global_index : U64.t [@tag "index"] (* W_g *)
+    ; validator_index : U64.t [@tag "validatorIndex"] (* W_v *)
+    ; recipient : Address.t [@tag "address"] (* W_r *)
+    ; amount : U256.t [@tag "amount"] (* W_a *) }
+  [@@deriving yojson]
 end
 
 module Block = struct
   module Header = struct
     (* YP 4.4 *)
     type t =
-      { parent_hash : U256.t (* H_p *)
-      ; ommers_hash : U256.t (* H_o *)
-      ; beneficiary : Address.t (* H_c *)
-      ; state_root : U256.t (* H_r *)
-      ; transactions_root : U256.t (* H_t *)
-      ; receipts_root : U256.t (* H_e *)
-      ; logs_bloom : Bloom.t (* H_b *)
-      ; difficulty : Uint.t (* H_d *)
-      ; number : Uint.t (* H_i *)
-      ; gas_limit : Uint.t (* H_l *)
-      ; gas_used : Uint.t (* H_g *)
-      ; timestamp : U256.t (* H_s *)
-      ; extra_data : Bytes.t (* H_x *)
-      ; prev_randao : U256.t (* H_a *)
-      ; nonce : U64.t (* H_n *)
-      ; base_fee_per_gas : Uint.t (* H_f *)
-      ; withdrawals_root : U256.t (* H_w *)
-      ; blob_gas_used : U64.t (* EIP-4844 *)
-      ; excess_blob_gas : U64.t (* EIP-4844 *)
-      ; parent_beacon_block_root : U256.t (* EIP-4788 *)
-      ; requests_hash : U256.t (* EIP-7685 *) }
-
-    let verify (h1 : t) (h2 : t) : bool =
-      U256.(h1.state_root = h2.state_root)
-      && U256.(h1.transactions_root = h2.transactions_root)
-      && U256.(h1.receipts_root = h2.receipts_root)
-      && U256.(h1.withdrawals_root = h2.withdrawals_root)
-      && Bloom.(h1.logs_bloom = h2.logs_bloom)
-      && U256.(h1.requests_hash = h2.requests_hash)
+      { parent_hash : U256.t (* H_p *) [@key "parentHash"]
+      ; ommers_hash : U256.t (* H_o *) [@key "uncleHash"]
+      ; beneficiary : Address.t (* H_c *) [@key "coinbase"]
+      ; state_root : U256.t (* H_r *) [@key "stateRoot"]
+      ; transactions_root : U256.t (* H_t *) [@key "transactionsTrie"]
+      ; receipts_root : U256.t (* H_e *) [@key "receiptTrie"]
+      ; logs_bloom : Bloom.t (* H_b *) [@key "bloom"]
+      ; difficulty : Uint.t (* H_d *) [@key "difficulty"]
+      ; number : Uint.t (* H_i *) [@key "number"]
+      ; gas_limit : Uint.t (* H_l *) [@key "gasLimit"]
+      ; gas_used : Uint.t (* H_g *) [@key "gasUsed"]
+      ; timestamp : U256.t (* H_s *) [@key "timestamp"]
+      ; extra_data : Bytes.t (* H_x *) [@key "extraData"]
+      ; prev_randao : U256.t (* H_a *) [@key "mixHash"]
+      ; nonce : U64.t (* H_n *) [@key "nonce"]
+      ; base_fee_per_gas : Uint.t (* H_f *) [@key "baseFeePerGas"]
+      ; withdrawals_root : U256.t (* H_w *) [@key "withdrawalsRoot"]
+      ; blob_gas_used : U64.t (* EIP-4844 *) [@key "blobGasUsed"]
+      ; excess_blob_gas : U64.t (* EIP-4844 *) [@key "excessBlobGas"]
+      ; parent_beacon_block_root : U256.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
+      ; requests_hash : U256.t (* EIP-7685 *) [@key "requestsHash"] }
+    [@@deriving yojson]
   end
 
   (* YP 4.4 (23) *)
   type t =
-    { header : Header.t (* B_H *)
-    ; transactions : Transaction.t list (* B_T *)
-    ; ommers : Header.t list (* B_U *)
-    ; withdrawals : Withdrawal.t list (* B_W *) }
+    { header : Header.t (* B_H *) [@key "blockHeader"]
+    ; transactions : Transaction.t list (* B_T *) [@key "transactions"]
+    ; ommers : Header.t list (* B_U *) [@key "uncleHeaders"]
+    ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] }
+  [@@deriving yojson]
 end
 
 module Log = struct
@@ -330,7 +404,7 @@ module Account = struct
     ; balance : U256.t (* σ[a]_b *)
     ; storage : U256.t U256.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
-  [@@deriving lens {submodule = true; prefix = true}]
+  [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
 
   let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty; nonce = Uint.zero}

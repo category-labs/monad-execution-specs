@@ -1,5 +1,4 @@
 open Monad_lib
-open Numeric
 open Test_utils.Utils
 open QCheck2
 
@@ -46,36 +45,16 @@ let round_trip_hp_ok (nibbles, flag) =
   let nibbles', flag' = Mpt.Nibbles.hex_prefix_decode hp in
   nibbles = nibbles' && flag = flag'
 
-open Yojson.Safe
-open Yojson.Safe.Util
+let test_case_of_fixture (fixture : Fixtures.TrieTests.test_case) =
+  let root' = (Mpt.make fixture.entries).root_hash in
+  Alcotest.(
+    test_case fixture.name `Quick (fun () -> check' u256 ~msg:"Root" ~expected:fixture.root ~actual:root') )
 
-let ( .$() ) json key = member key json
-
-let hex_or_string str = if String.starts_with ~prefix:"0x" str then Bytes.of_hex_string str else str
-
-let load_mpt_entries ~hash_keys (entries : Yojson.Safe.t) =
-  let of_kv (k, v) =
-    let k = hex_or_string k in
-    let k = if hash_keys then U256.to_bytes_be (Crypto.keccak_256 k) else k in
-    let v = Option.map hex_or_string (to_string_option v) in
-    (k, Rlp.Bytes (Option.value v ~default:Bytes.empty))
-  in
-  match entries with
-  | `Assoc kv -> List.map of_kv kv
-  | `List kv -> List.map (fun[@warning "-8"] (`List [k; v] : t) -> of_kv (to_string k, v)) kv
-  | _ -> assert false
-
-let load_mpt_test_case ~hash_keys (name, params) =
-  let entries = load_mpt_entries ~hash_keys params.$("in") in
-  let root = to_string params.$("root") |> U256.of_string in
-  let root' = (Mpt.make entries).root_hash in
-  Alcotest.(test_case name `Quick (fun () -> check' u256 ~msg:"Root" ~expected:root ~actual:root'))
-
-let load_mpt_test_fixtures ?(hash_keys = false) file =
+let test_fixture_file ?(hash_keys = false) file =
   (* TODO: do something disciplined about paths *)
   let path = "../../../../third_party/tests/TrieTests/" ^ file in
-  let test_cases = to_assoc (from_file ~fname:file path) |> List.map (load_mpt_test_case ~hash_keys) in
-  (file, test_cases)
+  let test_fixtures = Fixtures.TrieTests.of_yojson ~hash_keys (Yojson.Safe.from_file ~fname:file path) in
+  (file, List.map test_case_of_fixture test_fixtures)
 
 let () =
   let open Alcotest in
@@ -95,8 +74,8 @@ let () =
     ; ( "MPT round-trip"
       , [ check_prop ~count:1000 ~print:print_entries ~name:"round_trip_mpt_ok entries" gen_entries
             round_trip_mpt_ok ] )
-    ; load_mpt_test_fixtures ~hash_keys:true "hex_encoded_securetrie_test.json"
-    ; load_mpt_test_fixtures ~hash_keys:true "trietest_secureTrie.json"
-    ; load_mpt_test_fixtures ~hash_keys:true "trieanyorder_secureTrie.json"
-    ; load_mpt_test_fixtures "trietest.json"
-    ; load_mpt_test_fixtures "trieanyorder.json" ]
+    ; test_fixture_file ~hash_keys:true "hex_encoded_securetrie_test.json"
+    ; test_fixture_file ~hash_keys:true "trietest_secureTrie.json"
+    ; test_fixture_file ~hash_keys:true "trieanyorder_secureTrie.json"
+    ; test_fixture_file "trietest.json"
+    ; test_fixture_file "trieanyorder.json" ]

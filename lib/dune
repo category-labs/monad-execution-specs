@@ -3,6 +3,6 @@
 (library
  (name monad_lib)
  (public_name monad-spec.monad_lib)
- (libraries zarith lens digestif)
+ (libraries zarith lens digestif yojson ppx_deriving_yojson.runtime)
  (preprocess
-  (pps lens.ppx_deriving)))
+  (pps lens.ppx_deriving ppx_deriving_yojson)))
