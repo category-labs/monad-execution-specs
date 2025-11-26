@@ -15,4 +15,5 @@
     (alcotest (>= 1.9.0))
     (qcheck-core (>= 0.26))
     (qcheck-alcotest (>= 0.26))
-    (yojson (>= 3.0.0))))
+    (yojson (>= 3.0.0))
+    (ppx_deriving_yojson (>= 3.10.0))))

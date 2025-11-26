@@ -173,6 +173,48 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
   let of_string s = of_z_exn (Z.of_string s)
   let ( ~@ ) = of_string
 
+  (* JSON conversions. *)
+  let of_yojson (x : Yojson.Safe.t) =
+    let parse_error str = Error (Format.sprintf "Cannot parse %s as numeric" str) in
+    match x with
+    | `String str -> ( try Ok (of_string str) with _ -> parse_error str )
+    | `Int i -> Ok (of_int i)
+    | `Intlit lit -> ( try Ok (of_string lit) with _ -> parse_error lit )
+    | _ -> Error "Expected int or string"
+  let of_yojson_exn (x : Yojson.Safe.t) = Result.get_ok (of_yojson x)
+  let to_yojson (x : t) : Yojson.Safe.t = `String (to_hex_string x)
+
+  (* JSON conversions for t-indexed maps. *)
+  module Map : sig
+    include module type of Map
+
+    val of_yojson : (Yojson.Safe.t -> ('elt, string) result) -> Yojson.Safe.t -> ('elt t, string) result
+    val to_yojson : ('elt -> Yojson.Safe.t) -> 'elt t -> Yojson.Safe.t
+  end = struct
+    include Map
+
+    exception Value_decoding_error of string
+
+    let of_yojson elt_of_yojson (json : Yojson.Safe.t) : ('elt t, string) result =
+      match json with
+      | `Assoc pairs -> (
+        try
+          Ok
+            ( List.to_seq pairs
+            |> Seq.map (fun (k, v) ->
+                ( of_string k
+                , match elt_of_yojson v with Ok elt -> elt | Error msg -> raise (Value_decoding_error msg) ) )
+            |> Map.of_seq )
+        with Value_decoding_error err -> Error err )
+      | _ -> Error "map"
+
+    let to_yojson elt_to_yojson (map : 'elt t) : Yojson.Safe.t =
+      to_seq map
+      |> Seq.map (fun (k, v) -> (to_hex_string k, elt_to_yojson v))
+      |> List.of_seq
+      |> fun entries -> `Assoc entries
+  end
+
   let of_z_after_op = match of_z_truncating with Some of_z -> of_z | None -> of_z_exn
 
   let lift_1 f = fun x -> of_z_after_op (f (to_z x))
@@ -189,7 +231,7 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
   let ( * ) = lift_2 Z.( * )
   let ( / ) = lift_2 Z.( / )
 
-  (* Will be signed or unsigned depending on the signedness of the module *)
+  (* Will be signed or unsigned depending on the signedness of the module. *)
   let modulo = lift_2 Z.rem
 
   let addmod x y m = of_z_after_op Z.(rem (to_z x + to_z y) (to_z m))

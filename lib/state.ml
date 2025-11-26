@@ -51,7 +51,9 @@ module BlockState = struct
   (** {!finalize_current_block bs} returns {!bs.current_block} with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
-  let finalize_current_block (block_state : t) : Block.t = failwith "TODO"
+  let finalize_current_block (block_state : t) : Block.t =
+    let header = {block_state.current_block.header with state_root = U256.zero} in
+    {block_state.current_block with header}
 end
 
 module TransactionState = struct
@@ -91,7 +93,7 @@ module TransactionState = struct
     let open BlockState in
     let open Transaction.Access in
     let access_list_addresses =
-      List.to_seq access_list |> Seq.map (fun acc -> acc.account_address) |> Address.Set.of_seq
+      List.to_seq access_list |> Seq.map (fun acc -> acc.address) |> Address.Set.of_seq
     in
     let target_addresses =
       match Transaction.call_or_create tx with
@@ -112,7 +114,7 @@ module TransactionState = struct
     in
     let accessed_keys =
       List.to_seq access_list
-      |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.account_address, k)))
+      |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.address, k)))
       |> StorageKey.Set.of_seq
     in
     { initial_world_state = block_state.world_state
@@ -392,7 +394,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
      that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
   let effective_gas_price, max_gas_fee, tx_blob_gas_used, blob_gas_fee =
     match Transaction.fee_mechanism tx with
-    | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas} -> (
+    | FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas} -> (
         if Gas.(max_fee_per_gas < max_priority_fee_per_gas) then failwith "Invalid transaction" ;
         if Gas.(max_fee_per_gas < base_fee_per_gas) then failwith "Invalid transaction" ;
         let priority_fee_per_gas = Gas.(min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas)) in
@@ -408,7 +410,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
             let blob_gas_fee = Gas.(total_blob_gas * blob_gas_price) in
             (effective_gas_price, Gas.(max_gas_fee + max_blob_gas_fee), total_blob_gas, blob_gas_fee)
         | _ -> (effective_gas_price, max_gas_fee, Gas.zero, Gas.zero) )
-    | Legacy {gas_price} ->
+    | LegacyFee {gas_price} ->
         if Gas.(gas_price < base_fee_per_gas) then failwith "Invalid transaction" ;
         (gas_price, Gas.(tx.gas_limit * gas_price), Gas.zero, Gas.zero)
   in
@@ -499,7 +501,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
   BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
 
-let validate_header (world_state : WorldState.t) (header : Block.Header.t) = ()
+let validate_header (_world_state : WorldState.t) (_header : Block.Header.t) = ()
 
 let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
   validate_header world_state block.header ;
@@ -521,6 +523,5 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
 
   (* Compute roots and add the finalized block to the blockchain. *)
   let finalized_block = BlockState.finalize_current_block block_state in
-  if verify && not (Block.Header.verify block.header finalized_block.header) then
-    failwith "Block verification failed" ;
+  if verify && block.header <> finalized_block.header then failwith "Block verification failed" ;
   {block_state.world_state with history = block :: world_state.history}

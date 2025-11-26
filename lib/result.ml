@@ -7,3 +7,5 @@ include Monad.Make2 (struct
   let return x = Ok x
   let ( >>= ) x f = match x with Ok x -> f x | Error err -> Error err
 end)
+
+let fail err = Error err
