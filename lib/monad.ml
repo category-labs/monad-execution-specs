@@ -162,6 +162,18 @@ module Make2 (M : SIG2) = struct
             let$ x' = f x in
             let$ xs' = mapM ~f xs in
             return (x' :: xs') )
+
+    let rec filter_mapM ~f l =
+      match l with
+      | [] -> M.return []
+      | x :: xs -> (
+          M.(
+            let$ x' = f x in
+            match x' with
+            | None -> filter_mapM ~f xs
+            | Some x' ->
+                let$ xs' = filter_mapM ~f xs in
+                return (x' :: xs') ) )
   end
 
   module Seq = struct
