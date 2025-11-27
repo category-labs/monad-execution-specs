@@ -86,6 +86,7 @@ module Transaction = struct
     | Call of {to_ : Address.t (* T_t *); data : Bytes.t (* T_d *)}
     | Create of {init : Bytes.t (* T_i *)}
 
+  (* TODO: separate these entirely, since we aren't actually removing any duplication *)
   (* YP 4.2 *)
   type kind =
     | Legacy of
@@ -259,6 +260,10 @@ module Transaction = struct
       let$ data = Bytes.of_yojson json.$("data") in
       return (if to_ = Address.zero then Create {init = data} else Call {to_; data}) )
 
+  let call_or_create_to_yojson_fields = function
+    | Call {to_; data} -> [("to", Address.to_yojson to_); ("data", Bytes.to_yojson data)]
+    | Create {init} -> [("to", Address.(to_yojson zero)); ("data", Bytes.to_yojson init)]
+
   let legacy_of_yojson (json : Yojson.Safe.t) : (kind, string) result =
     Result.(
       let$ call_or_create = call_or_create_of_yojson json in
@@ -327,7 +332,52 @@ module Transaction = struct
       let$ s = U256.of_yojson json.$("s") in
       return {nonce; gas_limit; value; r; s; kind} )
 
-  let to_yojson (_tx : t) : Yojson.Safe.t = failwith "TODO"
+  let kind_to_yojson_fields (k : kind) : (string * Yojson.Safe.t) list =
+    match k with
+    | Legacy {call_or_create; gas_price; v} ->
+        [("gasPrice", Uint.to_yojson gas_price); ("v", U256.to_yojson v)]
+        @ call_or_create_to_yojson_fields call_or_create
+    | AccessList {call_or_create; gas_price; access_list; chain_id; y_parity} ->
+        [ ("gasPrice", Uint.to_yojson gas_price)
+        ; ("accessList", [%to_yojson: Access.t list] access_list)
+        ; ("chainId", U256.to_yojson chain_id)
+        ; ("v", U256.to_yojson y_parity) ]
+        @ call_or_create_to_yojson_fields call_or_create
+    | FeeMarket {call_or_create; max_fee_per_gas; max_priority_fee_per_gas; access_list; chain_id; y_parity}
+      ->
+        [ ("maxFeePerGas", Uint.to_yojson max_fee_per_gas)
+        ; ("maxPriorityFeePerGas", Uint.to_yojson max_priority_fee_per_gas)
+        ; ("accessList", [%to_yojson: Access.t list] access_list)
+        ; ("chainId", U256.to_yojson chain_id)
+        ; ("v", U256.to_yojson y_parity) ]
+        @ call_or_create_to_yojson_fields call_or_create
+    | Blob
+        { to_
+        ; data
+        ; max_fee_per_gas
+        ; max_priority_fee_per_gas
+        ; access_list
+        ; max_fee_per_blob_gas
+        ; blob_versioned_hashes
+        ; chain_id
+        ; y_parity } ->
+        [ ("maxFeePerGas", Uint.to_yojson max_fee_per_gas)
+        ; ("maxPriorityFeePerGas", Uint.to_yojson max_priority_fee_per_gas)
+        ; ("accessList", [%to_yojson: Access.t list] access_list)
+        ; ("maxFeePerBlobGas", U256.to_yojson max_fee_per_blob_gas)
+        ; ("blobVersionedHashes", [%to_yojson: U256.t list] blob_versioned_hashes)
+        ; ("chainId", U256.to_yojson chain_id)
+        ; ("v", U256.to_yojson y_parity) ]
+        @ call_or_create_to_yojson_fields (Call {to_; data})
+
+  let to_yojson {nonce; gas_limit; value; r; s; kind} : Yojson.Safe.t =
+    `Assoc
+      ( [ ("nonce", U256.to_yojson nonce)
+        ; ("gasLimit", Uint.to_yojson gas_limit)
+        ; ("value", U256.to_yojson value)
+        ; ("r", U256.to_yojson r)
+        ; ("s", U256.to_yojson s) ]
+      @ kind_to_yojson_fields kind )
 end
 
 module Withdrawal = struct
@@ -365,7 +415,7 @@ module Block = struct
       ; excess_blob_gas : U64.t (* EIP-4844 *) [@key "excessBlobGas"]
       ; parent_beacon_block_root : U256.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
       ; requests_hash : U256.t (* EIP-7685 *) [@key "requestsHash"] }
-    [@@deriving yojson]
+    [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}]
   end
 
   (* YP 4.4 (23) *)
@@ -374,7 +424,7 @@ module Block = struct
     ; transactions : Transaction.t list (* B_T *) [@key "transactions"]
     ; ommers : Header.t list (* B_U *) [@key "uncleHeaders"]
     ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] }
-  [@@deriving yojson]
+  [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}]
 end
 
 module Log = struct

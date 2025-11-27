@@ -45,15 +45,17 @@ let round_trip_hp_ok (nibbles, flag) =
   let nibbles', flag' = Mpt.Nibbles.hex_prefix_decode hp in
   nibbles = nibbles' && flag = flag'
 
-let test_case_of_fixture (fixture : Fixtures.TrieTests.test_case) =
+let test_case_of_fixture (name, fixture) =
+  let open Fixtures.TrieTest in
   let root' = (Mpt.make fixture.entries).root_hash in
-  Alcotest.(
-    test_case fixture.name `Quick (fun () -> check' u256 ~msg:"Root" ~expected:fixture.root ~actual:root') )
+  Alcotest.(test_case name `Quick (fun () -> check' u256 ~msg:"Root" ~expected:fixture.root ~actual:root'))
 
 let test_fixture_file ?(hash_keys = false) file =
   (* TODO: do something disciplined about paths *)
   let path = "../../../../third_party/tests/TrieTests/" ^ file in
-  let test_fixtures = Fixtures.TrieTests.of_yojson ~hash_keys (Yojson.Safe.from_file ~fname:file path) in
+  let test_fixtures =
+    Result.get_ok (Fixtures.TrieTest.of_yojson ~hash_keys (Yojson.Safe.from_file ~fname:file path))
+  in
   (file, List.map test_case_of_fixture test_fixtures)
 
 let () =
