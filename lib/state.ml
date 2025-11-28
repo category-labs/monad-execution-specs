@@ -159,16 +159,16 @@ let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas
           | Some delegated -> block_state.^(BlockState.account delegated).code
         in
         (Evmc.Message.CallKind.Call, to_, data, code, to_)
-    | Create {init} ->
+    | Create {initcode} ->
         let nonce = block_state.^(BlockState.account sender).nonce in
         let target = Address.of_contract_creation ~sender ~nonce ~create2:None in
-        (Evmc.Message.CallKind.Create, target, Bytes.empty, init, Address.zero)
+        (Evmc.Message.CallKind.Create, target, Bytes.empty, initcode, Address.zero)
   in
   Evmc.Message.
     { kind
     ; sender
     ; recipient = current_target
-    ; value = tx.value
+    ; value = Transaction.value tx
     ; gas = Gas.to_int64 gas
     ; code
     ; code_address
@@ -362,15 +362,19 @@ end
 
 let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   let open BlockState in
+  let tx_gas_limit = Transaction.gas_limit tx in
+  let tx_value = Transaction.value tx in
+  let tx_nonce = Transaction.nonce tx in
+
   (* Basic validity checks. *)
   (* Nonce *)
-  if U256.(tx.nonce >= of_uint64 Uint64.max_uint) then failwith "Invalid transaction" ;
+  if U256.(tx_nonce >= of_uint64 Uint64.max_uint) then failwith "Invalid transaction" ;
   (* Initcode size *)
   ( match Transaction.call_or_create tx with
-  | Create {init} when Bytes.length init > 2 * Vm.max_init_code_size -> failwith "Invalid transaction"
+  | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size -> failwith "Invalid transaction"
   | _ -> () ) ;
   (* Blob hash length and versioning *)
-  ( match tx.kind with
+  ( match tx with
   | Blob {blob_versioned_hashes; _} ->
       if blob_versioned_hashes = [] then failwith "Invalid transaction" ;
       let check_blob_hash_version hash =
@@ -381,11 +385,11 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   (* YP (64) *)
   let intrinsic_gas = Gas.tx_intrinsic_gas tx in
-  if Gas.(intrinsic_gas > tx.gas_limit) then failwith "Invalid transaction" ;
+  if Gas.(intrinsic_gas > tx_gas_limit) then failwith "Invalid transaction" ;
 
   (* EIP-7623 *)
   let floor_gas = Gas.tx_floor_gas tx in
-  if Gas.(floor_gas > tx.gas_limit) then failwith "Invalid transaction" ;
+  if Gas.(floor_gas > tx_gas_limit) then failwith "Invalid transaction" ;
 
   let block = block_state.current_block in
   let header = block.header in
@@ -399,8 +403,8 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
         if Gas.(max_fee_per_gas < base_fee_per_gas) then failwith "Invalid transaction" ;
         let priority_fee_per_gas = Gas.(min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas)) in
         let effective_gas_price = Gas.(priority_fee_per_gas + base_fee_per_gas) in
-        let max_gas_fee = Gas.(tx.gas_limit * max_fee_per_gas) in
-        match tx.kind with
+        let max_gas_fee = Gas.(Transaction.gas_limit tx * max_fee_per_gas) in
+        match tx with
         | Blob {max_fee_per_blob_gas; blob_versioned_hashes; _} ->
             let max_fee_per_blob_gas = U256.to_unbounded max_fee_per_blob_gas in
             let blob_gas_price = Gas.block_blob_gas_price (U64.to_unbounded header.excess_blob_gas) in
@@ -412,18 +416,18 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
         | _ -> (effective_gas_price, max_gas_fee, Gas.zero, Gas.zero) )
     | LegacyFee {gas_price} ->
         if Gas.(gas_price < base_fee_per_gas) then failwith "Invalid transaction" ;
-        (gas_price, Gas.(tx.gas_limit * gas_price), Gas.zero, Gas.zero)
+        (gas_price, Gas.(tx_gas_limit * gas_price), Gas.zero, Gas.zero)
   in
 
   let sender = Transaction.sender block_state.world_state.chain_id tx in
   let sender_account = block_state.world_state |. WorldState.account sender in
-  if Uint.(sender_account.nonce <> U256.to_unbounded tx.nonce) then failwith "Invalid transaction" ;
-  if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded tx.value) then
+  if Uint.(sender_account.nonce <> U256.to_unbounded tx_nonce) then failwith "Invalid transaction" ;
+  if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded tx_value) then
     failwith "Invalid transaction" ;
   if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
     failwith "Invalid transaction" ;
 
-  let effective_gas_fee = Gas.(tx.gas_limit * effective_gas_price) in
+  let effective_gas_fee = Gas.(tx_gas_limit * effective_gas_price) in
   let total_fee = Gas.(effective_gas_fee + blob_gas_fee) in
   if total_fee > U256.to_unbounded sender_account.balance then failwith "Invalid transaction" ;
   let total_fee = U256.of_unbounded_exn total_fee in
@@ -436,7 +440,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
       ; nonce = Uint.(sender_account.nonce + one) }
   in
 
-  let available_gas = Gas.(tx.gas_limit - intrinsic_gas) in
+  let available_gas = Gas.(tx_gas_limit - intrinsic_gas) in
   let access_list = Transaction.access_list tx in
   let transaction_state = TransactionState.make block_state sender tx access_list in
   let message = prepare_message block_state sender available_gas tx in
@@ -448,13 +452,13 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   in
   let result, transaction_state = H.Vm.execute message message.code transaction_state in
 
-  let tx_gas_used_before_refund = Gas.(tx.gas_limit - of_int64 result.gas_left) in
+  let tx_gas_used_before_refund = Gas.(tx_gas_limit - of_int64 result.gas_left) in
   let tx_gas_refund = Gas.(min (tx_gas_used_before_refund / ~$5) (of_int64 result.gas_refund)) in
   let tx_gas_used_after_refund = Gas.(max (tx_gas_used_before_refund - tx_gas_refund) floor_gas) in
 
   (* Refund gas to sender. *)
   let block_state =
-    let tx_gas_left = Gas.(tx.gas_limit - tx_gas_used_after_refund) in
+    let tx_gas_left = Gas.(tx_gas_limit - tx_gas_used_after_refund) in
     let gas_refund_amount = U256.of_unbounded_exn Gas.(tx_gas_left * effective_gas_price) in
     block_state.^(account sender |-- Account.balance) <-
       U256.(block_state.^(account sender |-- Account.balance) + gas_refund_amount)

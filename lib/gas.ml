@@ -39,32 +39,31 @@ let tx_access_list_storage = ~$1_900
 
 let tx_base_gas = ~$21_000
 
-let tokens_in_calldata (txn : Transaction.t) =
-  let Bytes.{zero_bytes; nonzero_bytes} =
-    Bytes.count_zero_and_nonzero_bytes Transaction.(data_or_initcode (call_or_create txn))
-  in
+let tokens_in_calldata (tx : Transaction.t) =
+  let Bytes.{zero_bytes; nonzero_bytes} = Bytes.count_zero_and_nonzero_bytes Transaction.(data tx) in
   Stdlib.(zero_bytes + (4 * nonzero_bytes))
 
 (* YP (64) *)
-let tx_intrinsic_gas (txn : Transaction.t) =
-  let calldata_gas = ~$(tokens_in_calldata txn) * tx_calldata_token_gas in
+let tx_intrinsic_gas (tx : Transaction.t) =
+  let calldata_gas = ~$(tokens_in_calldata tx) * tx_calldata_token_gas in
   let create_gas =
-    match Transaction.call_or_create txn with
+    match Transaction.call_or_create tx with
     | Call _ -> zero
-    | Create {init} -> tx_create_gas + (tx_initcode_gas_per_word * bytes_to_whole_words ~$(Bytes.length init))
+    | Create {initcode} ->
+        tx_create_gas + (tx_initcode_gas_per_word * bytes_to_whole_words ~$(Bytes.length initcode))
   in
   let transaction_gas = tx_base_gas in
   let access_list_gas =
     List.fold_left
       (fun g (access : Transaction.Access.t) ->
         g + tx_access_list_address + (tx_access_list_storage * ~$(List.length access.storage_keys)) )
-      zero (Transaction.access_list txn)
+      zero (Transaction.access_list tx)
   in
   calldata_gas + create_gas + transaction_gas + access_list_gas
 
 (* EIP-7623 *)
-let tx_floor_gas (txn : Transaction.t) =
-  (~$(tokens_in_calldata txn) * tx_calldata_floor_token_gas) + tx_base_gas
+let tx_floor_gas (tx : Transaction.t) =
+  (~$(tokens_in_calldata tx) * tx_calldata_floor_token_gas) + tx_base_gas
 
 let jumpdest = ~$1
 

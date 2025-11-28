@@ -82,302 +82,222 @@ module Transaction = struct
       Rlp.List [Address.to_rlp address; Rlp.List (List.map U256.to_rlp storage_keys)]
   end
 
-  type call_or_create =
-    | Call of {to_ : Address.t (* T_t *); data : Bytes.t (* T_d *)}
-    | Create of {init : Bytes.t (* T_i *)}
-
-  (* TODO: separate these entirely, since we aren't actually removing any duplication *)
   (* YP 4.2 *)
-  type kind =
-    | Legacy of
-        { call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
-        ; gas_price : Uint.t (* T_p *)
-        ; v : U256.t (* T_w *) }
-    | AccessList of
-        (* Type-1 transaction as specified in EIP-2930 *)
-        
-        { call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
-        ; gas_price : Uint.t (* T_p *)
-        ; access_list : Access.t list (* T_A *)
-        ; chain_id : U256.t (* T_c *)
-        ; y_parity : U256.t (* T_y *) }
-    | FeeMarket of
-        (* Type-2 transaction as specified in EIP-1559 *)
-        
-        { call_or_create : call_or_create (* Either T_i or (T_t, T_d) *)
-        ; max_fee_per_gas : Uint.t (* T_m *)
-        ; max_priority_fee_per_gas : Uint.t (* T_f *)
-        ; access_list : Access.t list (* T_A *)
-        ; chain_id : U256.t (* T_c *)
-        ; y_parity : U256.t (* T_y *) }
-    | Blob of
-        (* Blob transaction as specified in EIP-4844 *)
-        
-        { to_ : Address.t (* T_t *)
-        ; data : Bytes.t (* T_d *)
-        ; max_fee_per_gas : Uint.t (* T_m *)
-        ; max_priority_fee_per_gas : Uint.t (* T_f *)
-        ; access_list : Access.t list (* T_A *)
-        ; max_fee_per_blob_gas : U256.t (* EIP-4844 *)
-        ; blob_versioned_hashes : U256.t list (* EIP-4844 *)
-        ; chain_id : U256.t (* T_c *)
-        ; y_parity : U256.t (* T_y *) }
-  type t =
+  type legacy_tx =
     { nonce : U256.t (* T_n *)
-    ; gas_limit : Uint.t (* T_g *)
+    ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
-    ; kind : kind }
+    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; data : Bytes.t (* Either T_d or T_i *)
+    ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
+    ; v : U256.t (* T_w *) }
+  [@@deriving yojson {strict = false}]
+  type access_list_tx =
+    { nonce : U256.t (* T_n *)
+    ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
+    ; value : U256.t (* T_v *)
+    ; r : U256.t (* T_r *)
+    ; s : U256.t (* T_s *)
+    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; data : Bytes.t (* Either T_d or T_i *)
+    ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
+    ; access_list : Access.t list (* T_A *) [@key "accessList"]
+    ; chain_id : Uint.t (* T_c *) [@key "chainId"]
+    ; y_parity : U256.t (* T_y *) [@key "v"] }
+  [@@deriving yojson {strict = false}]
+  type fee_market_tx =
+    { nonce : U256.t (* T_n *)
+    ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
+    ; value : U256.t (* T_v *)
+    ; r : U256.t (* T_r *)
+    ; s : U256.t (* T_s *)
+    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; data : Bytes.t (* Either T_d or T_i *)
+    ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
+    ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
+    ; access_list : Access.t list (* T_A *) [@key "accessList"]
+    ; chain_id : Uint.t (* T_c *) [@key "chainId"]
+    ; y_parity : U256.t (* T_y *) [@key "v"] }
+  [@@deriving yojson {strict = false}]
+  type blob_tx =
+    { nonce : U256.t (* T_n *)
+    ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
+    ; value : U256.t (* T_v *)
+    ; r : U256.t (* T_r *)
+    ; s : U256.t (* T_s *)
+    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; data : Bytes.t (* T_d *)
+    ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
+    ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
+    ; access_list : Access.t list (* T_A *) [@key "accessList"]
+    ; chain_id : Uint.t (* T_c *) [@key "chainId"]
+    ; y_parity : U256.t (* T_y *) [@key "v"]
+    ; max_fee_per_blob_gas : U256.t (* EIP-4844 *) [@key "maxFeePerBlobGas"]
+    ; blob_versioned_hashes : U256.t list (* EIP-4844 *) [@key "blobVersionedHashes"] }
+  [@@deriving yojson {strict = false}]
+  type t = Legacy of legacy_tx | AccessList of access_list_tx | FeeMarket of fee_market_tx | Blob of blob_tx
+
+  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+    Result.(
+      (* Ethereum text fixtures encode numeric values as hex strings, but yojson assumes primitive number types
+         are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
+         match on it. *)
+      match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
+      | Ok None -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
+      | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
+      | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
+      | Ok (Some 3) -> [%of_yojson: blob_tx] json >>= fun tx -> return (Blob tx)
+      | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
+
+  let to_yojson (tx : t) : Yojson.Safe.t =
+    match tx with
+    | Legacy tx -> [%to_yojson: legacy_tx] tx
+    | AccessList tx -> [%to_yojson: access_list_tx] tx
+    | FeeMarket tx -> [%to_yojson: fee_market_tx] tx
+    | Blob tx -> [%to_yojson: blob_tx] tx
 
   type kind_tag = [`Legacy | `AccessList | `FeeMarket | `Blob]
-  let kind_tag txn : kind_tag =
-    match txn.kind with
+  let kind_tag tx : kind_tag =
+    match tx with
     | Legacy _ -> `Legacy
     | AccessList _ -> `AccessList
     | FeeMarket _ -> `FeeMarket
     | Blob _ -> `Blob
 
-  let call_or_create txn =
-    match txn.kind with
-    | Legacy {call_or_create; _} | AccessList {call_or_create; _} | FeeMarket {call_or_create; _} ->
-        call_or_create
-    | Blob {to_; data; _} -> Call {to_; data}
-  let data_or_initcode = function Call {data; _} -> data | Create {init} -> init
+  let to_ tx =
+    match tx with Legacy {to_; _} | AccessList {to_; _} | FeeMarket {to_; _} | Blob {to_; _} -> to_
+
+  let nonce tx =
+    match tx with
+    | Legacy {nonce; _} | AccessList {nonce; _} | FeeMarket {nonce; _} | Blob {nonce; _} -> nonce
+
+  let data tx =
+    match tx with Legacy {data; _} | AccessList {data; _} | FeeMarket {data; _} | Blob {data; _} -> data
+
+  let value tx =
+    match tx with
+    | Legacy {value; _} | AccessList {value; _} | FeeMarket {value; _} | Blob {value; _} -> value
+
+  let gas_limit tx =
+    match tx with
+    | Legacy {gas_limit; _} | AccessList {gas_limit; _} | FeeMarket {gas_limit; _} | Blob {gas_limit; _} ->
+        gas_limit
+
+  type signature = {r : U256.t; s : U256.t}
+  let signature tx =
+    match tx with Legacy {r; s; _} | AccessList {r; s; _} | FeeMarket {r; s; _} | Blob {r; s; _} -> {r; s}
 
   type fee_mechanism =
     | LegacyFee of {gas_price : Uint.t}
     | FeeMarketFee of {max_fee_per_gas : Uint.t; max_priority_fee_per_gas : Uint.t}
-  let fee_mechanism (txn : t) =
-    match txn.kind with
+  let fee_mechanism (tx : t) =
+    match tx with
     | Legacy {gas_price; _} | AccessList {gas_price; _} -> LegacyFee {gas_price}
     | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas; _}
      |Blob {max_fee_per_gas; max_priority_fee_per_gas; _} ->
         FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas}
 
-  let signing_hash chain_id txn =
-    let to_, data =
-      match call_or_create txn with Call {to_; data} -> (to_, data) | Create {init} -> (Address.zero, init)
-    in
+  let signing_hash chain_id tx =
     let bytes =
-      match txn.kind with
-      | Legacy {gas_price; v; _} when U256.(v = ~$27 || v = ~$28) ->
+      match tx with
+      | Legacy tx when U256.(tx.v = ~$27 || tx.v = ~$28) ->
           (* Pre EIP-155 transaction *)
           Rlp.encode
             (Rlp.List
-               [ U256.to_rlp txn.nonce
-               ; Uint.to_rlp gas_price
-               ; Uint.to_rlp txn.gas_limit
-               ; Address.to_rlp to_
-               ; U256.to_rlp txn.value
-               ; Rlp.Bytes data ] )
-      | Legacy {gas_price; _} ->
+               [ U256.to_rlp tx.nonce
+               ; Uint.to_rlp tx.gas_price
+               ; Uint.to_rlp tx.gas_limit
+               ; Address.to_rlp tx.to_
+               ; U256.to_rlp tx.value
+               ; Rlp.Bytes tx.data ] )
+      | Legacy tx ->
           (* EIP-155 transaction *)
           Rlp.encode
             (Rlp.List
-               [ U256.to_rlp txn.nonce
-               ; Uint.to_rlp gas_price
-               ; Uint.to_rlp txn.gas_limit
-               ; Address.to_rlp to_
-               ; U256.to_rlp txn.value
-               ; Rlp.Bytes data
+               [ U256.to_rlp tx.nonce
+               ; Uint.to_rlp tx.gas_price
+               ; Uint.to_rlp tx.gas_limit
+               ; Address.to_rlp tx.to_
+               ; U256.to_rlp tx.value
+               ; Rlp.Bytes tx.data
                ; Uint.to_rlp chain_id
                ; U256.(to_rlp zero)
                ; U256.(to_rlp zero) ] )
-      | AccessList {gas_price; access_list; _} ->
+      | AccessList tx ->
+          assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-2930 *)
           "\x01"
           ^ Rlp.encode
               (Rlp.List
                  [ Uint.to_rlp chain_id
-                 ; U256.to_rlp txn.nonce
-                 ; Uint.to_rlp gas_price
-                 ; Uint.to_rlp txn.gas_limit
-                 ; Address.to_rlp to_
-                 ; U256.to_rlp txn.value
-                 ; Rlp.Bytes data
-                 ; Rlp.List (List.map Access.to_rlp access_list) ] )
-      | FeeMarket {max_priority_fee_per_gas; max_fee_per_gas; access_list; _} ->
+                 ; U256.to_rlp tx.nonce
+                 ; Uint.to_rlp tx.gas_price
+                 ; Uint.to_rlp tx.gas_limit
+                 ; Address.to_rlp tx.to_
+                 ; U256.to_rlp tx.value
+                 ; Rlp.Bytes tx.data
+                 ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
+      | FeeMarket tx ->
+          assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-1559 *)
           "\x02"
           ^ Rlp.encode
               (Rlp.List
                  [ Uint.to_rlp chain_id
-                 ; U256.to_rlp txn.nonce
-                 ; Uint.to_rlp max_priority_fee_per_gas
-                 ; Uint.to_rlp max_fee_per_gas
-                 ; Uint.to_rlp txn.gas_limit
-                 ; Address.to_rlp to_
-                 ; U256.to_rlp txn.value
-                 ; Rlp.Bytes data
-                 ; Rlp.List (List.map Access.to_rlp access_list) ] )
-      | Blob
-          { max_priority_fee_per_gas
-          ; max_fee_per_gas
-          ; access_list
-          ; max_fee_per_blob_gas
-          ; blob_versioned_hashes
-          ; _ } ->
+                 ; U256.to_rlp tx.nonce
+                 ; Uint.to_rlp tx.max_priority_fee_per_gas
+                 ; Uint.to_rlp tx.max_fee_per_gas
+                 ; Uint.to_rlp tx.gas_limit
+                 ; Address.to_rlp tx.to_
+                 ; U256.to_rlp tx.value
+                 ; Rlp.Bytes tx.data
+                 ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
+      | Blob tx ->
+          assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-4844 *)
           "\x03"
           ^ Rlp.encode
               (Rlp.List
                  [ Uint.to_rlp chain_id
-                 ; U256.to_rlp txn.nonce
-                 ; Uint.to_rlp max_priority_fee_per_gas
-                 ; Uint.to_rlp max_fee_per_gas
-                 ; Uint.to_rlp txn.gas_limit
-                 ; Address.to_rlp to_
-                 ; U256.to_rlp txn.value
-                 ; Rlp.Bytes data
-                 ; Rlp.List (List.map Access.to_rlp access_list)
-                 ; U256.to_rlp max_fee_per_blob_gas
-                 ; Rlp.List (List.map U256.to_rlp blob_versioned_hashes) ] )
+                 ; U256.to_rlp tx.nonce
+                 ; Uint.to_rlp tx.max_priority_fee_per_gas
+                 ; Uint.to_rlp tx.max_fee_per_gas
+                 ; Uint.to_rlp tx.gas_limit
+                 ; Address.to_rlp tx.to_
+                 ; U256.to_rlp tx.value
+                 ; Rlp.Bytes tx.data
+                 ; Rlp.List (List.map Access.to_rlp tx.access_list)
+                 ; U256.to_rlp tx.max_fee_per_blob_gas
+                 ; Rlp.List (List.map U256.to_rlp tx.blob_versioned_hashes) ] )
     in
     Crypto.keccak_256 bytes
 
-  let sender (chain_id : Uint.t) ({r; s; kind; _} as txn : t) =
+  let sender (chain_id : Uint.t) (tx : t) =
+    let {r; s} = signature tx in
     assert (U256.(r > zero && r < Crypto.secp256k1n)) ;
     assert (U256.(s > zero && s < Crypto.secp256k1n / ~$2)) ;
     let y_parity =
-      match kind with
+      match tx with
       | Legacy {v; _} -> if U256.(v = ~$27 || v = ~$28) then U256.(v - ~$27) else failwith "TODO"
       | AccessList {y_parity; _} | FeeMarket {y_parity; _} | Blob {y_parity; _} -> y_parity
     in
-    let public_key = Crypto.secp256k1_recover r s y_parity (signing_hash chain_id txn) in
+    let public_key = Crypto.secp256k1_recover r s y_parity (signing_hash chain_id tx) in
     Address.of_bytes_be (Bytes.sub (U256.to_bytes_be (Crypto.keccak_256 public_key)) 12 (32 - 12))
 
-  let access_list txn =
-    match txn.kind with
+  let access_list tx =
+    match tx with
     | Legacy _ -> []
     | AccessList {access_list; _} | FeeMarket {access_list; _} | Blob {access_list; _} -> access_list
 
-  let ( .$() ) obj k = Yojson.Safe.Util.member k obj
-
-  let call_or_create_of_yojson (json : Yojson.Safe.t) =
-    Result.(
-      let$ to_ = Address.of_yojson json.$("to") in
-      let$ data = Bytes.of_yojson json.$("data") in
-      return (if to_ = Address.zero then Create {init = data} else Call {to_; data}) )
-
-  let call_or_create_to_yojson_fields = function
-    | Call {to_; data} -> [("to", Address.to_yojson to_); ("data", Bytes.to_yojson data)]
-    | Create {init} -> [("to", Address.(to_yojson zero)); ("data", Bytes.to_yojson init)]
-
-  let legacy_of_yojson (json : Yojson.Safe.t) : (kind, string) result =
-    Result.(
-      let$ call_or_create = call_or_create_of_yojson json in
-      let$ gas_price = Uint.of_yojson json.$("gasPrice") in
-      let$ v = U256.of_yojson json.$("v") in
-      return (Legacy {call_or_create; gas_price; v}) )
-  let access_list_of_yojson (json : Yojson.Safe.t) =
-    Result.(
-      let$ call_or_create = call_or_create_of_yojson json in
-      let$ gas_price = Uint.of_yojson json.$("gasPrice") in
-      let$ access_list = [%of_yojson: Access.t list] json.$("accessList") in
-      let$ chain_id = U256.of_yojson json.$("chainId") in
-      let$ y_parity = U256.of_yojson json.$("v") in
-      return (AccessList {call_or_create; gas_price; access_list; chain_id; y_parity}) )
-  let fee_market_of_yojson (json : Yojson.Safe.t) =
-    Result.(
-      let$ call_or_create = call_or_create_of_yojson json in
-      let$ max_fee_per_gas = Uint.of_yojson json.$("maxFeePerGas") in
-      let$ max_priority_fee_per_gas = Uint.of_yojson json.$("maxPriorityFeePerGas") in
-      let$ access_list = [%of_yojson: Access.t list] json.$("accessList") in
-      let$ chain_id = U256.of_yojson json.$("chainId") in
-      let$ y_parity = U256.of_yojson json.$("v") in
-      return
-        (FeeMarket {call_or_create; max_fee_per_gas; max_priority_fee_per_gas; access_list; chain_id; y_parity}
-        ) )
-  let blob_of_yojson (json : Yojson.Safe.t) =
-    Result.(
-      let$ call_or_create = call_or_create_of_yojson json in
-      let$ data, to_ =
-        match call_or_create with Call {data; to_} -> return (data, to_) | Create _ -> fail "kind.to_"
-      in
-      let$ max_fee_per_gas = Uint.of_yojson json.$("maxFeePerGas") in
-      let$ max_priority_fee_per_gas = Uint.of_yojson json.$("maxPriorityFeePerGas") in
-      let$ max_fee_per_blob_gas = U256.of_yojson json.$("maxFeePerBlobGas") in
-      let$ blob_versioned_hashes = return [] in
-      let$ access_list = [%of_yojson: Access.t list] json.$("accessList") in
-      let$ chain_id = U256.of_yojson json.$("chainId") in
-      let$ y_parity = U256.of_yojson json.$("v") in
-      return
-        (Blob
-           { data
-           ; to_
-           ; max_fee_per_gas
-           ; max_priority_fee_per_gas
-           ; max_fee_per_blob_gas
-           ; access_list
-           ; chain_id
-           ; y_parity
-           ; blob_versioned_hashes } ) )
-
-  let of_yojson (json : Yojson.Safe.t) =
-    Result.(
-      let$ kind =
-        match json.$("type") with
-        | `Null -> legacy_of_yojson json
-        | `String "0x01" -> access_list_of_yojson json
-        | `String "0x02" -> fee_market_of_yojson json
-        | `String "0x03" -> blob_of_yojson json
-        | invalid ->
-            Error (Format.sprintf "Not a valid transaction type: %s" (Yojson.Safe.pretty_to_string invalid))
-      in
-      let$ nonce = U256.of_yojson json.$("nonce") in
-      let$ gas_limit = Uint.of_yojson json.$("gasLimit") in
-      let$ value = U256.of_yojson json.$("value") in
-      let$ r = U256.of_yojson json.$("r") in
-      let$ s = U256.of_yojson json.$("s") in
-      return {nonce; gas_limit; value; r; s; kind} )
-
-  let kind_to_yojson_fields (k : kind) : (string * Yojson.Safe.t) list =
-    match k with
-    | Legacy {call_or_create; gas_price; v} ->
-        [("gasPrice", Uint.to_yojson gas_price); ("v", U256.to_yojson v)]
-        @ call_or_create_to_yojson_fields call_or_create
-    | AccessList {call_or_create; gas_price; access_list; chain_id; y_parity} ->
-        [ ("gasPrice", Uint.to_yojson gas_price)
-        ; ("accessList", [%to_yojson: Access.t list] access_list)
-        ; ("chainId", U256.to_yojson chain_id)
-        ; ("v", U256.to_yojson y_parity) ]
-        @ call_or_create_to_yojson_fields call_or_create
-    | FeeMarket {call_or_create; max_fee_per_gas; max_priority_fee_per_gas; access_list; chain_id; y_parity}
-      ->
-        [ ("maxFeePerGas", Uint.to_yojson max_fee_per_gas)
-        ; ("maxPriorityFeePerGas", Uint.to_yojson max_priority_fee_per_gas)
-        ; ("accessList", [%to_yojson: Access.t list] access_list)
-        ; ("chainId", U256.to_yojson chain_id)
-        ; ("v", U256.to_yojson y_parity) ]
-        @ call_or_create_to_yojson_fields call_or_create
-    | Blob
-        { to_
-        ; data
-        ; max_fee_per_gas
-        ; max_priority_fee_per_gas
-        ; access_list
-        ; max_fee_per_blob_gas
-        ; blob_versioned_hashes
-        ; chain_id
-        ; y_parity } ->
-        [ ("maxFeePerGas", Uint.to_yojson max_fee_per_gas)
-        ; ("maxPriorityFeePerGas", Uint.to_yojson max_priority_fee_per_gas)
-        ; ("accessList", [%to_yojson: Access.t list] access_list)
-        ; ("maxFeePerBlobGas", U256.to_yojson max_fee_per_blob_gas)
-        ; ("blobVersionedHashes", [%to_yojson: U256.t list] blob_versioned_hashes)
-        ; ("chainId", U256.to_yojson chain_id)
-        ; ("v", U256.to_yojson y_parity) ]
-        @ call_or_create_to_yojson_fields (Call {to_; data})
-
-  let to_yojson {nonce; gas_limit; value; r; s; kind} : Yojson.Safe.t =
-    `Assoc
-      ( [ ("nonce", U256.to_yojson nonce)
-        ; ("gasLimit", Uint.to_yojson gas_limit)
-        ; ("value", U256.to_yojson value)
-        ; ("r", U256.to_yojson r)
-        ; ("s", U256.to_yojson s) ]
-      @ kind_to_yojson_fields kind )
+  type call_or_create =
+    | Call of {data : Bytes.t (* T_d *); to_ : Address.t (* T_t *)}
+    | Create of {initcode : Bytes.t (* T_i *)}
+  let call_or_create tx =
+    let to_ = to_ tx in
+    let data = data tx in
+    if Address.(to_ = zero) then Create {initcode = data} else Call {data; to_}
 end
 
 module Withdrawal = struct
