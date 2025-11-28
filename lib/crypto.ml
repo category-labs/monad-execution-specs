@@ -15,5 +15,9 @@ let secp256k1p = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 let secp256k1n = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141")
 
 let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (hash : U256.t) : Bytes.t =
-  ignore (r, s, v, hash) ;
-  failwith "TODO"
+  let open U256 in
+  let is_square =
+    exp_mod (exp_mod r ~$3 ~modulo:secp256k1p + secp256k1b) ((secp256k1p - ~$1) / ~$2) ~modulo:secp256k1p
+  in
+  assert (is_square = one) ;
+  ()

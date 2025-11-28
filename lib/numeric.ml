@@ -256,6 +256,10 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
         in
         loop ~$1 x y
 
+  (* Not constant-time. *)
+  let exp_mod ~(modulo:t) (x:t) (y:t) =
+    of_z_after_op (Z.powm (to_z x) (to_z y) (to_z modulo))
+
   (* YP 331 *)
   let minus_1_64th (x : t) : t = x - (x / ~$64)
 
