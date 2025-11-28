@@ -280,9 +280,12 @@ module Transaction = struct
     assert (U256.(s > zero && s < Crypto.secp256k1n / ~$2)) ;
     let y_parity =
       match tx with
-      | Legacy {v; _} -> if U256.(v = ~$27 || v = ~$28) then U256.(v - ~$27) else failwith "TODO"
+      | Legacy {v; _} ->
+          if U256.(v = ~$27 || v = ~$28) then U256.(v - ~$27)
+          else (* EIP-155 *) U256.(v - ~$35 - (~$2 * U256.of_unbounded_exn chain_id))
       | AccessList {y_parity; _} | FeeMarket {y_parity; _} | Blob {y_parity; _} -> y_parity
     in
+    assert (U256.(y_parity <= ~$1)) ;
     let public_key = Crypto.secp256k1_recover r s y_parity (signing_hash chain_id tx) in
     Address.of_bytes_be (Bytes.sub (U256.to_bytes_be (Crypto.keccak_256 public_key)) 12 (32 - 12))
 

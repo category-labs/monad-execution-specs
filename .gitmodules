@@ -1,3 +1,6 @@
 [submodule "third_party/tests"]
 	path = third_party/tests
 	url = https://github.com/ethereum/tests.git
+[submodule "third_party/secp256k1"]
+	path = third_party/secp256k1
+	url = https://github.com/bitcoin-core/secp256k1
