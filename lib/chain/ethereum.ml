@@ -272,7 +272,8 @@ module Transaction = struct
                  ; U256.to_rlp tx.max_fee_per_blob_gas
                  ; Rlp.List (List.map U256.to_rlp tx.blob_versioned_hashes) ] )
     in
-    Crypto.keccak_256 bytes
+    let hash = Crypto.keccak_256 bytes in
+    hash
 
   let sender (chain_id : Uint.t) (tx : t) =
     let {r; s} = signature tx in

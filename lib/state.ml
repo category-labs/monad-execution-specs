@@ -421,15 +421,19 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   let sender = Transaction.sender block_state.world_state.chain_id tx in
   let sender_account = block_state.world_state |. WorldState.account sender in
-  if Uint.(sender_account.nonce <> U256.to_unbounded tx_nonce) then failwith "Invalid transaction" ;
-  if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded tx_value) then
-    failwith "Invalid transaction" ;
+  if Uint.(sender_account.nonce <> U256.to_unbounded tx_nonce) then failwith "Invalid transaction 1" ;
+  if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded tx_value) then (
+    Format.eprintf "Account %s (%s) cannot afford to pay %s gas fees + %s tx_value\n"
+      (Address.to_hex_string sender)
+      (U256.to_string sender_account.balance)
+      (Gas.to_string max_gas_fee) (U256.to_string tx_value) ;
+    failwith "Invalid transaction 2" ) ;
   if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
-    failwith "Invalid transaction" ;
+    failwith "Invalid transaction 3" ;
 
   let effective_gas_fee = Gas.(tx_gas_limit * effective_gas_price) in
   let total_fee = Gas.(effective_gas_fee + blob_gas_fee) in
-  if total_fee > U256.to_unbounded sender_account.balance then failwith "Invalid transaction" ;
+  if total_fee > U256.to_unbounded sender_account.balance then failwith "Invalid transaction 4" ;
   let total_fee = U256.of_unbounded_exn total_fee in
 
   (* pay gas and blob fees, increase nonce *)

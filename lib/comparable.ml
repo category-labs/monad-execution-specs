@@ -17,5 +17,8 @@ struct
   let min x y = if x < y then x else y
 
   module Set = Set.Make (T)
-  module Map = Map.Make (T)
+  module Map = struct
+    include Map.Make (T)
+    let keys (map : 'a t) : Set.t = to_seq map |> Seq.map (fun (k, _) -> k) |> Set.of_seq
+  end
 end

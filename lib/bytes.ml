@@ -10,8 +10,7 @@ let sub_with_zero_padding bytes i sz =
 
 (** Print [bytes] as a hexadecimal string, without a '0x' prefix. *)
 let to_hex_string bytes =
-  if bytes = empty then "00"
-  else to_seq bytes |> Seq.map Char.code |> Seq.map (Format.sprintf "%02x") |> List.of_seq |> String.concat ""
+  to_seq bytes |> Seq.map Char.code |> Seq.map (Format.sprintf "%02x") |> List.of_seq |> String.concat ""
 
 (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
       '0x', into an array of bytes. *)

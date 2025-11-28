@@ -12,6 +12,7 @@
     (zarith (>= 1.14))
     (lens (>= 1.2.5))
     (digestif (>= 1.3.0))
+    (secp256k1-internal (>= 0.4.0))
     (alcotest (>= 1.9.0))
     (qcheck-core (>= 0.26))
     (qcheck-alcotest (>= 0.26))
