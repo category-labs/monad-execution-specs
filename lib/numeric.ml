@@ -268,7 +268,12 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
     let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
     of_z_exn q + if Z.(equal r zero) then zero else one
 
-  let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
+  let to_rlp (x : t) : Rlp.t =
+    let x_bytes = to_bytes_be x in
+    let sig_bytes = significant_bytes x in
+    let num_bytes = Bytes.length x_bytes in
+    let pos = Stdlib.(num_bytes - sig_bytes) in
+    Rlp.Bytes (Bytes.sub x_bytes pos sig_bytes)
   let of_rlp_exn (x : Rlp.t) = match x with Bytes bs -> of_bytes_be bs | List _ -> assert false
 end
 
