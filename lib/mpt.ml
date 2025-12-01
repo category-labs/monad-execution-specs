@@ -267,13 +267,17 @@ let of_patricia trie =
   in
   {root_hash; inv_hashes}
 
-(* Convenience function for testing *)
-let make (entries : (Bytes.t * Bytes.t) list) =
-  List.to_seq entries
+(** {!of_seq seq} builds an MPT representing the mapping given by the key-value pairs in the input sequence. *)
+let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
+  entries
   |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, Rlp.Bytes v))
   |> Trie.of_seq
   |> PatriciaTrie.of_trie
   |> of_patricia
+
+(** {!of_seq_i seq} works as {!of_seq}, but it uses the position of every entry in the sequence as the key. *)
+let of_seq_i (entries : Bytes.t Seq.t) =
+  of_seq (Seq.mapi (fun i v -> (U64.(to_bytes_be (of_int i)), v)) entries)
 
 let find (k : Nibbles.t) {inv_hashes; root_hash} =
   let get_node = function
