@@ -17,6 +17,20 @@ module WorldState = struct
 
   let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
   let account_opt addr = accounts |-- Address.Map.at addr
+
+  let state_root state =
+    let mpt =
+      state.accounts
+      |> Address.Map.to_seq
+      |> Seq.filter_map (fun (addr, acc) ->
+          if Account.is_empty acc then None
+          else
+            (* YP (11) *)
+            let address_hash = Crypto.keccak_256 (Address.to_bytes_be addr) in
+            Some (U256.to_bytes_be address_hash, Rlp.encode (Account.to_rlp acc)) )
+      |> Mpt.of_seq
+    in
+    mpt.root_hash
 end
 
 module BlockState = struct
@@ -28,7 +42,8 @@ module BlockState = struct
     ; gas_used : Gas.t
     ; blob_gas_used : Gas.t
     ; transactions_processed : (Transaction.t * Receipt.t) list
-    ; logs : Log.t list }
+    ; withdrawals_processed : Withdrawal.t list
+    ; requests : Bytes.t list (* EIP-7685 execution layer requests *) }
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
@@ -38,7 +53,8 @@ module BlockState = struct
     ; gas_used = Gas.zero
     ; blob_gas_used = Gas.zero
     ; transactions_processed = []
-    ; logs = [] }
+    ; withdrawals_processed = []
+    ; requests = [] }
 
   let account addr = world_state |-- WorldState.account addr
   let account_opt addr = world_state |-- WorldState.account_opt addr
@@ -52,7 +68,61 @@ module BlockState = struct
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
   let finalize_current_block (block_state : t) : Block.t =
-    let header = {block_state.current_block.header with state_root = U256.zero} in
+    Format.eprintf "Finalizing block\n" ;
+    List.iter
+      (fun (tx, receipt) ->
+        Format.eprintf "Transaction: %s\n" (Yojson.Safe.pretty_to_string (Transaction.to_yojson tx)) ;
+        Format.eprintf "Receipt: %s\n" (Yojson.Safe.pretty_to_string (Receipt.to_yojson receipt)) )
+      block_state.transactions_processed ;
+
+    (* YP (35) *)
+    let state_root = WorldState.state_root block_state.world_state in
+    let transactions_root =
+      ( block_state.transactions_processed
+      |> List.to_seq
+      |> Seq.map (fun (tx, _) -> Transaction.encode tx)
+      |> Mpt.of_seq_i )
+        .root_hash
+    in
+    let receipts_root =
+      ( block_state.transactions_processed
+      |> List.to_seq
+      |> Seq.map (fun (_, receipt) -> Receipt.encode receipt)
+      |> Mpt.of_seq_i )
+        .root_hash
+    in
+    let withdrawals_root =
+      ( block_state.withdrawals_processed
+      |> List.to_seq
+      |> Seq.map (fun w -> Withdrawal.encode w)
+      |> Mpt.of_seq_i )
+        .root_hash
+    in
+    let logs_bloom =
+      block_state.transactions_processed
+      |> List.to_seq
+      |> Seq.map (fun (_, receipt) -> receipt.Receipt.bloom)
+      |> Bloom.union
+    in
+
+    (* See https://eips.ethereum.org/EIPS/eip-7685#block-header *)
+    let requests_hash =
+      block_state.requests
+      |> List.filter (fun req -> Bytes.length req > 1)
+      |> List.sort (fun r_a r_b -> Char.compare r_a.[0] r_b.[0])
+      |> Bytes.concat ""
+      |> Crypto.keccak_256
+    in
+
+    let header =
+      { block_state.current_block.header with
+        state_root
+      ; transactions_root
+      ; receipts_root
+      ; logs_bloom
+      ; withdrawals_root
+      ; requests_hash }
+    in
     {block_state.current_block with header}
 end
 
@@ -252,7 +322,7 @@ struct
         ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; code = msg.code} else None)
     in
     let$ pre_existent_account = !(account create_address) in
-    if Uint.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
+    if U256.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
       (* EIP-684 *)
       return
         Evmc.Result.
@@ -267,7 +337,7 @@ struct
             Address.Set.add create_address addresses )
       in
       let$ () = account create_address |-- storage := U256.Map.empty in
-      let$ () = account create_address |-- nonce := Uint.one in
+      let$ () = account create_address |-- nonce := U256.one in
 
       (* Ether, if any, is transferred by process_call *)
       let$ result : Evmc.Result.t = process_call msg in
@@ -421,7 +491,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   let sender = Transaction.sender block_state.world_state.chain_id tx in
   let sender_account = block_state.world_state |. WorldState.account sender in
-  if Uint.(sender_account.nonce <> U256.to_unbounded tx_nonce) then failwith "Invalid transaction 1" ;
+  if U256.(sender_account.nonce <> tx_nonce) then failwith "Invalid transaction 1" ;
   if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded tx_value) then (
     Format.eprintf "Account %s (%s) cannot afford to pay %s gas fees + %s tx_value\n"
       (Address.to_hex_string sender)
@@ -438,10 +508,12 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   (* pay gas and blob fees, increase nonce *)
   let block_state =
+    (* The yellow paper does not specify a behaviour for nonce overflows. *)
+    assert (U256.(sender_account.nonce < max_t)) ;
     block_state.^(account sender) <-
       { sender_account with
         balance = U256.(sender_account.balance - total_fee)
-      ; nonce = Uint.(sender_account.nonce + one) }
+      ; nonce = U256.(sender_account.nonce + one) }
   in
 
   let available_gas = Gas.(tx_gas_limit - intrinsic_gas) in
@@ -492,16 +564,15 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   (* Add receipt and logs. *)
   let block_state =
     let receipt =
+      let bloom = Bloom.union (Seq.map Log.to_bloom (List.to_seq transaction_state.logs)) in
       Receipt.
         { tx_type = Transaction.kind_tag tx
         ; cumulative_gas_used = block_state.gas_used
-        ; bloom = Bloom.zeros
+        ; bloom
         ; succeeded = result.status_code = Success
         ; logs = transaction_state.logs }
     in
-    { block_state with
-      transactions_processed = List.append block_state.transactions_processed [(tx, receipt)]
-    ; logs = List.append block_state.logs transaction_state.logs }
+    {block_state with transactions_processed = List.append block_state.transactions_processed [(tx, receipt)]}
   in
 
   block_state

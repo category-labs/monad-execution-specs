@@ -12,7 +12,7 @@ module Address = struct
     of_u256_truncating
       (Crypto.keccak_256
          ( match create2 with
-         | None -> Rlp.(encode (List [to_rlp sender; Uint.to_rlp nonce]))
+         | None -> Rlp.(encode (List [to_rlp sender; U256.to_rlp nonce]))
          | Some {salt; code} ->
              Bytes.make 1 '\xff'
              ^ to_bytes_be sender
@@ -166,6 +166,31 @@ module Transaction = struct
     | FeeMarket _ -> `FeeMarket
     | Blob _ -> `Blob
 
+  let kind_tag_to_byte : kind_tag -> char = function
+    | `Legacy -> '\x00'
+    | `AccessList -> '\x01'
+    | `FeeMarket -> '\x02'
+    | `Blob -> '\x03'
+
+  let byte_to_kind_tag : char -> kind_tag option = function
+    | '\x00' -> Some `Legacy
+    | '\x01' -> Some `AccessList
+    | '\x02' -> Some `FeeMarket
+    | '\x03' -> Some `Blob
+    | _ -> None
+
+  let kind_tag_to_yojson (tag : kind_tag) : Yojson.Safe.t =
+    let bytestring = Format.sprintf "0x%s" (Bytes.to_hex_string (Bytes.make 1 (kind_tag_to_byte tag))) in
+    `String bytestring
+  let kind_tag_of_yojson (json : Yojson.Safe.t) : (kind_tag, string) result =
+    Result.(
+      match U64.(to_int <$> of_yojson json) with
+      | Ok i when i >= 0 && i < 256 -> (
+        match byte_to_kind_tag (Char.unsafe_chr i) with
+        | Some tag -> return tag
+        | None -> fail "Ethereum.Transaction.kind_tag" )
+      | _ -> fail "Ethereum.Transaction.kind_tag" )
+
   let to_ tx =
     match tx with Legacy {to_; _} | AccessList {to_; _} | FeeMarket {to_; _} | Blob {to_; _} -> to_
 
@@ -198,6 +223,68 @@ module Transaction = struct
     | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas; _}
      |Blob {max_fee_per_gas; max_priority_fee_per_gas; _} ->
         FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas}
+
+  (* YP (16). Note that this is different to the encoding used by the signing hash function below. *)
+  let to_rlp tx =
+    match tx with
+    | Legacy tx ->
+        Rlp.List
+          [ U256.to_rlp tx.nonce
+          ; Uint.to_rlp tx.gas_price
+          ; Uint.to_rlp tx.gas_limit
+          ; Address.to_rlp tx.to_
+          ; U256.to_rlp tx.value
+          ; Rlp.Bytes tx.data
+          ; U256.to_rlp tx.v
+          ; U256.to_rlp tx.r
+          ; U256.to_rlp tx.s ]
+    | AccessList tx ->
+        Rlp.List
+          [ Uint.to_rlp tx.chain_id
+          ; U256.to_rlp tx.nonce
+          ; Uint.to_rlp tx.gas_price
+          ; Uint.to_rlp tx.gas_limit
+          ; Address.to_rlp tx.to_
+          ; U256.to_rlp tx.value
+          ; Rlp.Bytes tx.data
+          ; Rlp.List (List.map Access.to_rlp tx.access_list)
+          ; U256.to_rlp tx.y_parity
+          ; U256.to_rlp tx.r
+          ; U256.to_rlp tx.s ]
+    | FeeMarket tx ->
+        Rlp.List
+          [ Uint.to_rlp tx.chain_id
+          ; U256.to_rlp tx.nonce
+          ; Uint.to_rlp tx.max_priority_fee_per_gas
+          ; Uint.to_rlp tx.max_fee_per_gas
+          ; Address.to_rlp tx.to_
+          ; U256.to_rlp tx.value
+          ; Rlp.Bytes tx.data
+          ; Rlp.List (List.map Access.to_rlp tx.access_list)
+          ; U256.to_rlp tx.y_parity
+          ; U256.to_rlp tx.r
+          ; U256.to_rlp tx.s ]
+    | Blob tx ->
+        Rlp.List
+          [ Uint.to_rlp tx.chain_id
+          ; U256.to_rlp tx.nonce
+          ; Uint.to_rlp tx.max_priority_fee_per_gas
+          ; Uint.to_rlp tx.max_fee_per_gas
+          ; Address.to_rlp tx.to_
+          ; U256.to_rlp tx.value
+          ; Rlp.Bytes tx.data
+          ; Rlp.List (List.map Access.to_rlp tx.access_list)
+          ; U256.to_rlp tx.max_fee_per_blob_gas
+          ; Rlp.List (List.map U256.to_rlp tx.blob_versioned_hashes)
+          ; U256.to_rlp tx.y_parity
+          ; U256.to_rlp tx.r
+          ; U256.to_rlp tx.s ]
+
+  (* YP (37) *)
+  let encode tx =
+    match kind_tag tx with
+    | `Legacy -> Rlp.encode (to_rlp tx)
+    | tag -> Format.sprintf "%c%s" (kind_tag_to_byte tag) (Rlp.encode (to_rlp tx))
 
   let signing_hash chain_id tx =
     let bytes =
@@ -312,6 +399,13 @@ module Withdrawal = struct
     ; recipient : Address.t [@tag "address"] (* W_r *)
     ; amount : U256.t [@tag "amount"] (* W_a *) }
   [@@deriving yojson]
+
+  (* YP (21) *)
+  let to_rlp {global_index; validator_index; recipient; amount} =
+    Rlp.List
+      [U64.to_rlp global_index; U64.to_rlp validator_index; Address.to_rlp recipient; U256.to_rlp amount]
+
+  let encode (withdrawal : t) = Rlp.encode (to_rlp withdrawal)
 end
 
 module Block = struct
@@ -354,12 +448,17 @@ end
 module Log = struct
   (* YP 4.4.1 (28) *)
   type t = {address : Address.t (* O_a *); topics : U256.t list (* O_t *); data : Bytes.t (* O_d *)}
+  [@@deriving yojson]
 
+  (* YP (30) *)
   let to_bloom (log : t) : Bloom.t =
-    let entries = U160.to_u256 log.address :: log.topics in
+    let entries = Address.to_u256 log.address :: log.topics in
     List.fold_left
       (fun bloom entry -> Bloom.(logor bloom (of_bytes (U256.to_bytes_be entry))))
       Bloom.zeros entries
+
+  let to_rlp {address; topics; data} =
+    Rlp.List [Address.to_rlp address; Rlp.List (List.map U256.to_rlp topics); Rlp.Bytes data]
 end
 
 module Receipt = struct
@@ -367,19 +466,53 @@ module Receipt = struct
   type t =
     { tx_type : Transaction.kind_tag (* R_x *)
     ; succeeded : bool (* R_z *)
-    ; cumulative_gas_used : Uint.t (* R_u *)
-    ; bloom : Bloom.t (* R_b *)
+    ; cumulative_gas_used : Uint.t (* R_u *) [@tag "cumulativeGasUsed"]
+    ; bloom : Bloom.t (* R_b *) [@tag "logsBloom"]
     ; logs : Log.t list (* R_l *) }
+  [@@deriving yojson]
+
+  (* YP (25) *)
+  let to_rlp {tx_type; succeeded; cumulative_gas_used; bloom; logs} =
+    ignore tx_type ;
+    Rlp.List
+      [ U64.(to_rlp (of_bool succeeded))
+      ; Uint.to_rlp cumulative_gas_used
+      ; Bloom.to_rlp bloom
+      ; Rlp.List (List.map Log.to_rlp logs) ]
+
+  (* YP (38) *)
+  let encode (receipt : t) =
+    match receipt.tx_type with
+    | `Legacy -> Rlp.encode (to_rlp receipt)
+    | tag -> Format.sprintf "%c%s" (Transaction.kind_tag_to_byte tag) (Rlp.encode (to_rlp receipt))
 end
 
 module Account = struct
   type t =
-    { nonce : Uint.t (* σ[a]_n *)
+    { nonce : U256.t (* σ[a]_n *)
     ; balance : U256.t (* σ[a]_b *)
     ; storage : U256.t U256.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
 
-  let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty; nonce = Uint.zero}
+  let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty; nonce = U256.zero}
+
+  (* YP (14) *)
+  let is_empty {balance; nonce; code; _} = balance = U256.zero && nonce = U256.zero && code = Bytes.empty
+
+  let to_rlp {nonce; balance; storage; code} =
+    let storage_root =
+      let mpt =
+        storage
+        |> U256.Map.to_seq
+        |> Seq.map (fun (k, v) ->
+            (* YP (8) *)
+            U256.(to_bytes_be (Crypto.keccak_256 (to_bytes_be k)), to_bytes_be v) )
+        |> Mpt.of_seq
+      in
+      mpt.root_hash
+    in
+    let code_hash = Crypto.keccak_256 code in
+    Rlp.List [U256.to_rlp nonce; U256.to_rlp balance; U256.to_rlp storage_root; U256.to_rlp code_hash]
 end
