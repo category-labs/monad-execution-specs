@@ -3,9 +3,9 @@
 open Numeric
 
 (** [keccak_256 bytes] computes the Keccak-256 digest of a byte array. *)
-let keccak_256 (input : Bytes.t) : U256.t =
-  let bytes = Digestif.KECCAK_256.(to_raw_string (digest_string input)) in
-  U256.of_bytes_be bytes
+let keccak_256 (input : Bytes.t) : Bytes.B32.t =
+  let bytes = Digestif.KECCAK_256.(to_raw_string (digest_string (input :> string))) in
+  Option.get (Bytes.B32.of_byte_string_opt bytes)
 
 (** The Keccak-256 encoding of the empty byte array. *)
 let keccak_256_empty = keccak_256 Bytes.empty
@@ -16,7 +16,7 @@ let secp256k1n = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD2
 
 let context = Libsecp256k1.External.Context.create ()
 
-let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (msg_hash : U256.t) : Bytes.t =
+let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (msg_hash : Bytes.B32.t) : Bytes.t =
   let is_square =
     U256.(
       one
@@ -24,18 +24,17 @@ let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (msg_hash : U256.t)
   in
   assert is_square ;
   Libsecp256k1.External.(
-    let r_bytes = U256.to_bytes_be r in
-    let s_bytes = U256.to_bytes_be s in
-    let v_bytes = U256.to_bytes_be v in
+    let r = U256.to_bytes_be r in
+    let s = U256.to_bytes_be s in
+    let v = U256.to_bytes_be v in
     let signature_i = function
-      | i when i < 32 -> r_bytes.[i]
-      | i when i < 64 -> s_bytes.[i - 32]
-      | _ -> v_bytes.[31]
+      | i when i < 32 -> Bytes.B32.(r.$(i))
+      | i when i < 64 -> Bytes.B32.(s.$(i - 32))
+      | _ -> Bytes.B32.(v.$(31))
     in
     let signature = Sign.read_recoverable_exn context (Bigstring.init Sign.recoverable_bytes signature_i) in
     let result_bigstring =
-      msg_hash
-      |> U256.to_bytes_be
+      (msg_hash :> string)
       |> Bigstring.of_string
       |> Sign.recover_exn context ~signature
       |> Key.to_bytes ~compress:false context

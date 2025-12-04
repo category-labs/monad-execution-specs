@@ -26,8 +26,8 @@ module WorldState = struct
           if Account.is_empty acc then None
           else
             (* YP (11) *)
-            let address_hash = Crypto.keccak_256 (Address.to_bytes_be addr) in
-            Some (U256.to_bytes_be address_hash, Rlp.encode (Account.to_rlp acc)) )
+            let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
+            Some (Bytes.B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
       |> Mpt.of_seq
     in
     mpt.root_hash
@@ -68,13 +68,6 @@ module BlockState = struct
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
   let finalize_current_block (block_state : t) : Block.t =
-    Format.eprintf "Finalizing block\n" ;
-    List.iter
-      (fun (tx, receipt) ->
-        Format.eprintf "Transaction: %s\n" (Yojson.Safe.pretty_to_string (Transaction.to_yojson tx)) ;
-        Format.eprintf "Receipt: %s\n" (Yojson.Safe.pretty_to_string (Receipt.to_yojson receipt)) )
-      block_state.transactions_processed ;
-
     (* YP (35) *)
     let state_root = WorldState.state_root block_state.world_state in
     let transactions_root =
@@ -109,10 +102,13 @@ module BlockState = struct
     let requests_hash =
       block_state.requests
       |> List.filter (fun req -> Bytes.length req > 1)
-      |> List.sort (fun r_a r_b -> Char.compare r_a.[0] r_b.[0])
-      |> Bytes.concat ""
+      |> List.sort (fun r_a r_b -> Char.compare Bytes.(r_a.$(0)) Bytes.(r_b.$(0)))
+      |> Bytes.concat Bytes.empty
       |> Crypto.keccak_256
     in
+
+    let gas_used = block_state.gas_used in
+    let blob_gas_used = U64.of_unbounded_exn block_state.blob_gas_used in
 
     let header =
       { block_state.current_block.header with
@@ -121,7 +117,9 @@ module BlockState = struct
       ; receipts_root
       ; logs_bloom
       ; withdrawals_root
-      ; requests_hash }
+      ; requests_hash
+      ; gas_used
+      ; blob_gas_used }
     in
     {block_state.current_block with header}
 end
@@ -129,10 +127,10 @@ end
 module TransactionState = struct
   module StorageKey = struct
     module Impl = struct
-      type t = Address.t * U256.t
+      type t = Address.t * Bytes.B32.t
       let compare (a1, w1) (a2, w2) =
         let c1 = Address.compare a1 a2 in
-        if c1 = 0 then U256.compare w1 w2 else c1
+        if c1 = 0 then Bytes.B32.compare w1 w2 else c1
     end
     include Impl
     module Set = Set.Make (Impl)
@@ -145,7 +143,7 @@ module TransactionState = struct
     ; world_state : WorldState.t
     ; current_block : Block.t
     ; current_transaction : Transaction.t
-    ; transient_storage : U256.t U256.Map.t Address.Map.t
+    ; transient_storage : Bytes.B32.t Bytes.B32.Map.t Address.Map.t
     ; accounts_created_in_current_transaction : Address.Set.t
     ; self_destruct : Address.Set.t  (** A_s *)
     ; logs : Log.t list  (** A_l *)
@@ -246,7 +244,7 @@ let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas
     ; delegated = Delegation.is_valid_delegation code
     ; input_data = data
     ; depth = 0l
-    ; create2_salt = U256.zero }
+    ; create2_salt = Bytes.B32.zero }
 
 module Host (Vm : sig
   val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
@@ -271,10 +269,10 @@ struct
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
   let get_storage addr key =
-    !(account addr |-- Account.storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
+    !(account addr |-- Account.storage |-- Bytes.B32.Map.at key |-- Option.get_or_default Bytes.B32.zero)
 
   let set_storage addr key v =
-    let$ () = account addr |-- storage |-- U256.Map.at key := Some v in
+    let$ () = account addr |-- storage |-- Bytes.B32.Map.at key := Some v in
     (* TODO: make this accurate. *)
     return Evmc.StorageStatus.Assigned
 
@@ -336,7 +334,7 @@ struct
         update_field accounts_created_in_current_transaction (fun addresses ->
             Address.Set.add create_address addresses )
       in
-      let$ () = account create_address |-- storage := U256.Map.empty in
+      let$ () = account create_address |-- storage := Bytes.B32.Map.empty in
       let$ () = account create_address |-- nonce := U256.one in
 
       (* Ether, if any, is transferred by process_call *)
@@ -347,7 +345,7 @@ struct
           let contract_length = Bytes.length contract_code in
           let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
           if
-            (contract_length = 0 && contract_code.[0] = '\xef')
+            (contract_length = 0 && Bytes.(contract_code.$(0)) = '\xef')
             || Uint.(contract_code_gas > of_int64 result.gas_left)
           then
             return
@@ -356,7 +354,8 @@ struct
               ; output_data = Bytes.empty
               ; status_code =
                   Evmc.Result.StatusCode.(
-                    if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
+                    if Bytes.(contract_code.$(0)) = '\xef' then Contract_validation_failure else Out_of_gas )
+              }
           else
             let$ () = account create_address |-- code := contract_code in
             return {result with create_address}
@@ -391,9 +390,9 @@ struct
   let get_block_hash i =
     (* This host is not backed by an actual block database, so we return the hash of i which is enough for
          testing *)
-    return (Crypto.keccak_256 U256.(to_bytes_be (of_uint64 i)))
+    return (Crypto.keccak_256 U256.(Repr.to_bytes (to_bytes_be (of_uint64 i))))
 
-  let emit_log address ~(data : Bytes.t) ~(topics : U256.t list) =
+  let emit_log address ~(data : Bytes.t) ~(topics : Bytes.B32.t list) =
     let log : Log.t = {address; topics; data} in
     update_field logs (fun logs -> log :: logs)
 
@@ -421,9 +420,9 @@ struct
   let transient_storage addr key =
     transient_storage
     |-- Address.Map.at addr
-    |-- Option.get_or_default U256.Map.empty
-    |-- U256.Map.at key
-    |-- Option.get_or_default U256.zero
+    |-- Option.get_or_default Bytes.B32.Map.empty
+    |-- Bytes.B32.Map.at key
+    |-- Option.get_or_default Bytes.B32.zero
 
   let get_transient_storage addr key = !(transient_storage addr key)
 
@@ -602,5 +601,10 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
 
   (* Compute roots and add the finalized block to the blockchain. *)
   let finalized_block = BlockState.finalize_current_block block_state in
-  if verify && block.header <> finalized_block.header then failwith "Block verification failed" ;
+  if verify && block.header <> finalized_block.header then (
+    Format.eprintf "Block verification failed\n" ;
+    Format.eprintf "Expected: %s\n" (Yojson.Safe.pretty_to_string (Block.Header.to_yojson block.header)) ;
+    Format.eprintf "Actual: %s\n"
+      (Yojson.Safe.pretty_to_string (Block.Header.to_yojson finalized_block.header)) ;
+    failwith "Block verification failed" ) ;
   {block_state.world_state with history = block :: world_state.history}

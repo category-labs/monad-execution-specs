@@ -2,12 +2,14 @@ open Numeric
 
 module Nibbles = struct
   include Bytes
-  let of_bytes (bs : Bytes.t) =
+  open Stdlib
+
+  let of_bytes (bs : t) =
     init
-      (2 * Bytes.length bs)
+      (2 * length bs)
       (fun i ->
-        let byte = Char.code bs.[i / 2] in
-        if i mod 2 = 0 then (* Upper nibble *)
+        let byte = Char.code bs.$(i / 2) in
+        if Stdlib.(i mod 2 = 0) then (* Upper nibble *)
           Char.unsafe_chr (Int.shift_right_logical byte 4)
         else (* Lower nibble *)
           Char.unsafe_chr (byte land 0xf) )
@@ -17,13 +19,13 @@ module Nibbles = struct
     init
       (length ns / 2)
       (fun i ->
-        let upper_nibble = Char.code ns.[i * 2] in
-        let lower_nibble = Char.code ns.[(i * 2) + 1] in
+        let upper_nibble = Char.code ns.$(i * 2) in
+        let lower_nibble = Char.code ns.$((i * 2) + 1) in
         Char.unsafe_chr Int.(shift_left upper_nibble 4 lor lower_nibble) )
 
   let prepend (nibble : Char.t) (ns : t) =
     assert (Char.code nibble < 16) ;
-    init (length ns + 1) (function 0 -> nibble | i -> ns.[i - 1])
+    init (length ns + 1) (function 0 -> nibble | i -> ns.$(i - 1))
 
   let odd_mask = 0x10
   let flag_mask = 0x20
@@ -37,25 +39,25 @@ module Nibbles = struct
 
   (** [hex_prefix_encode n flag] encodes a sequence of nibbles plus an extra flag into a sequence of bytes,
              following the definition of HP in YP (200) *)
-  let hex_prefix_encode (ns : t) (flag : bool) : Bytes.t =
+  let hex_prefix_encode (ns : t) (flag : bool) : t =
     let odd = length ns mod 2 = 1 in
     let header =
       (if odd then odd_mask else 0x00)
       lor (if flag then flag_mask else 0x00)
-      lor if odd then Char.code ns.[0] else 0x00
+      lor if odd then Char.code ns.$(0) else 0x00
     in
     let shift = if odd then 1 else 0 in
-    Bytes.init
+    init
       ((length ns / 2) + 1)
       (function
         | 0 -> Char.unsafe_chr header
         | i ->
-            let upper_nibble = Char.code ns.[((i - 1) * 2) + shift] in
-            let lower_nibble = Char.code ns.[((i - 1) * 2) + 1 + shift] in
+            let upper_nibble = Char.code ns.$(((i - 1) * 2) + shift) in
+            let lower_nibble = Char.code ns.$(((i - 1) * 2) + 1 + shift) in
             Char.unsafe_chr Int.(shift_left upper_nibble 4 lor lower_nibble) )
 
-  let hex_prefix_decode (bs : Bytes.t) : t * bool =
-    let header = Char.code bs.[0] in
+  let hex_prefix_decode (bs : t) : t * bool =
+    let header = Char.code bs.$(0) in
     let odd = header land odd_mask <> 0 in
     let flag = header land flag_mask <> 0 in
     assert (header land 0xc0 = 0) ;
@@ -63,9 +65,9 @@ module Nibbles = struct
     let shift = if odd then 1 else 0 in
     let ns =
       init
-        (((Bytes.length bs - 1) * 2) + shift)
+        (((length bs - 1) * 2) + shift)
         (fun i ->
-          let byte = Char.code bs.[(i + 2 - shift) / 2] in
+          let byte = Char.code bs.$((i + 2 - shift) / 2) in
           if (i + shift) mod 2 = 0 then (* Upper nibble *)
             Char.unsafe_chr (Int.shift_right_logical byte 4)
           else (* Lower nibble *)
@@ -82,14 +84,14 @@ module Trie = struct
   let rec insert (k : Nibbles.t) ?(depth = 0) (v : Rlp.t) = function
     | Branch (branches, _) when depth = Nibbles.length k -> Branch (branches, v)
     | Branch (branches, v') ->
-        let k_i = Char.code k.[depth] in
+        let k_i = Char.code Nibbles.(k.$(depth)) in
         let branches =
           Iarray.mapi (fun i b -> if i = k_i then insert k ~depth:(depth + 1) v b else b) branches
         in
         Branch (branches, v')
     | Empty when depth = Nibbles.length k -> Branch (Iarray.init branching_factor (fun _ -> Empty), v)
     | Empty ->
-        let k_i = Char.code k.[depth] in
+        let k_i = Char.code Nibbles.(k.$(depth)) in
         Branch
           ( Iarray.init branching_factor (fun i ->
                 if i = k_i then insert k ~depth:(depth + 1) v Empty else Empty )
@@ -103,7 +105,7 @@ module Trie = struct
     | Empty -> None
     | Branch (_branches, v) when depth = Nibbles.length k -> Some v
     | Branch (branches, _) ->
-        let k_i = Char.code k.[depth] in
+        let k_i = Char.code Nibbles.(k.$(depth)) in
         find k ~depth:(depth + 1) (Iarray.get branches k_i)
 end
 
@@ -148,7 +150,7 @@ module PatriciaTrie = struct
     | Empty -> None
     | Branch (_branches, v) when depth = Nibbles.length k -> Some v
     | Branch (branches, _) ->
-        let k_i = Char.code k.[depth] in
+        let k_i = Char.code Nibbles.(k.$(depth)) in
         find k ~depth:(depth + 1) (Iarray.get branches k_i)
     | Leaf {path; value} ->
         if depth + Nibbles.length path <> Nibbles.length k then None
@@ -162,7 +164,7 @@ module PatriciaTrie = struct
 end
 
 module Node = struct
-  type small_node_or_hash = Small of t | Hash of Bytes.t
+  type small_node_or_hash = Small of t | Hash of Bytes.B32.t
   and t =
     | Empty
     | Branch of small_node_or_hash Iarray.t * Rlp.t
@@ -183,10 +185,10 @@ module Node = struct
         let enc = to_rlp node in
         assert (Bytes.length (Rlp.encode enc) < 32) ;
         enc
-    | Hash h -> Rlp.Bytes h
+    | Hash h -> Rlp.Bytes (Bytes.B32.to_bytes h)
 
   let rec of_rlp = function
-    | Rlp.Bytes "" -> Empty
+    | Rlp.Bytes bs when bs = Bytes.empty -> Empty
     | Rlp.List [Bytes p; v] ->
         let ns, is_leaf = Nibbles.hex_prefix_decode p in
         if is_leaf then Leaf {path = ns; value = v}
@@ -213,21 +215,23 @@ module Node = struct
     | _ -> assert false
 
   and small_node_or_hash_of_rlp = function
-    | Rlp.Bytes "" -> Small Empty
-    | Rlp.Bytes bs -> Hash bs
+    | Rlp.Bytes bs when bs = Bytes.empty -> Small Empty
+    | Rlp.Bytes bs ->
+       assert (Bytes.length bs = 32);
+       Hash (Bytes.B32.of_bytes_exn bs)
     | rlp -> Small (of_rlp rlp)
 end
 
-type t = {inv_hashes : Node.t U256.Map.t; root_hash : U256.t}
+type t = {inv_hashes : Node.t Bytes.B32.Map.t; root_hash : Bytes.B32.t}
 
 module M = struct
   include Monad.State (struct
-    type t = Node.t U256.Map.t
+    type t = Node.t Bytes.B32.Map.t
   end)
 
-  let hash (node : Node.t) : U256.t t =
+  let hash (node : Node.t) : Bytes.B32.t t =
     let hash = Crypto.keccak_256 (Rlp.encode (Node.to_rlp node)) in
-    let$ () = update (U256.Map.add hash node) in
+    let$ () = update (Bytes.B32.Map.add hash node) in
     return hash
 
   let to_small_node_or_hash (node : Node.t) : Node.small_node_or_hash t =
@@ -235,8 +239,8 @@ module M = struct
     if Bytes.length encoded < 32 then return (Node.Small node)
     else
       let hash = Crypto.keccak_256 encoded in
-      let$ () = update (U256.Map.add hash node) in
-      return (Node.Hash (U256.to_bytes_be hash))
+      let$ () = update (Bytes.B32.Map.add hash node) in
+      return (Node.Hash hash)
 end
 
 (* Internal *)
@@ -247,8 +251,7 @@ let rec of_patricia trie =
   | Branch (branches, value) ->
       let$ branches =
         Iarray.to_seq branches
-        |> Seq.map of_patricia
-        |> Seq.mapM ~f:to_small_node_or_hash
+        |> Seq.mapM ~f:(fun branch -> of_patricia branch >>= to_small_node_or_hash)
         |> M.fmap Iarray.of_seq
       in
       return (Node.Branch (branches, value))
@@ -263,7 +266,7 @@ let of_patricia trie =
     M.(
       let$ root = of_patricia trie in
       hash root )
-      U256.Map.empty
+      Bytes.B32.Map.empty
   in
   {root_hash; inv_hashes}
 
@@ -277,19 +280,19 @@ let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
 
 (** {!of_seq_i seq} works as {!of_seq}, but it uses the position of every entry in the sequence as the key. *)
 let of_seq_i (entries : Bytes.t Seq.t) =
-  of_seq (Seq.mapi (fun i v -> (U64.(to_bytes_be (of_int i)), v)) entries)
+  of_seq (Seq.mapi (fun i v -> (U64.(Repr.to_bytes (to_bytes_be (of_int i))), v)) entries)
 
 let find (k : Nibbles.t) {inv_hashes; root_hash} =
   let get_node = function
     | Node.Small node -> node
-    | Node.Hash h -> U256.Map.find (U256.of_bytes_be h) inv_hashes
+    | Node.Hash h -> Bytes.B32.Map.find h inv_hashes
   in
   let rec loop depth node =
     match node with
     | Node.Empty -> None
     | Branch (_branches, v) when depth = Nibbles.length k -> Some v
     | Branch (branches, _) ->
-        let k_i = Char.code k.[depth] in
+        let k_i = Char.code Nibbles.(k.$(depth)) in
         loop (depth + 1) (get_node (Iarray.get branches k_i))
     | Leaf {path; value} ->
         if depth + Nibbles.length path <> Nibbles.length k then None
@@ -301,4 +304,4 @@ let find (k : Nibbles.t) {inv_hashes; root_hash} =
           loop (depth + Nibbles.length path_segment) (get_node subtree)
         else None
   in
-  loop 0 (U256.Map.find root_hash inv_hashes)
+  loop 0 (Bytes.B32.Map.find root_hash inv_hashes)
