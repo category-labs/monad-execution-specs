@@ -9,3 +9,9 @@
  (public_name execrun)
  (modes byte exe)
  (libraries monad_lib))
+
+(executable
+ (name monad_t8n)
+ (public_name monad-t8n)
+ (modes byte exe)
+ (libraries monad_lib))

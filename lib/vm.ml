@@ -40,7 +40,8 @@ end = struct
       Bytes.init size (fun byte_i ->
           U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' ) )
 
-  let read_word_at pos (mem : t) = U256.of_bytes_be (read_block_at pos U256.(~$32) mem)
+  let read_word_at pos (mem : t) =
+    read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_bytes_be
 
   let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
     let size = U256.of_int (Bytes.length bytes) in
@@ -50,12 +51,12 @@ end = struct
       active_bytes_overflow_check mem pos size ;
       let contents =
         Seq.take (Bytes.length bytes) (Seq.ints 0)
-        |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
+        |> Seq.map (fun i -> (U256.(pos + ~$i), Bytes.(bytes.$(i))))
         |> fun entries -> U256.Map.add_seq entries mem.contents
       in
       {mem with contents} )
 
-  let write_word_at pos w = write_block_at pos (U256.to_bytes_be w)
+  let write_word_at pos w = U256.to_bytes_be w |> U256.Repr.to_bytes |> write_block_at pos
 
   let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
 
@@ -153,7 +154,7 @@ module ExecutionEnvironment = struct
     ; header : ExecutionBlockHeader.t (* I_H *)
     ; depth : int (* I_e *)
     ; write_permission : bool (* I_w *)
-    ; blob_versioned_hashes : U256.t list (* EIP-4844 *)
+    ; blob_versioned_hashes : Bytes.B32.t list (* EIP-4844 *)
     ; blob_base_fee : U256.t (* EIP-7516 *) }
   [@@deriving lens {submodule = true; prefix = true}]
   include TLens
@@ -187,7 +188,7 @@ module Context = struct
     let rec loop i valid_destinations =
       if i >= Bytes.length code then valid_destinations
       else
-        match code.[i] with
+        match Bytes.(code.$(i)) with
         | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
         | '\x60' .. '\x7f' as opcode ->
             let push_bytes = Char.code opcode - 0x60 + 1 in
@@ -251,14 +252,13 @@ struct
 
       let get_storage addr key =
         host_trace (fun () ->
-            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
-              (U256.to_short_hex_string key) ) ;
+            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr) (Bytes.B32.to_short_hex_string key) ) ;
         Base.get_storage addr key
 
       let set_storage addr key v =
         host_trace (fun () ->
-            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
-              (U256.to_short_hex_string key) (U256.to_short_hex_string v) ) ;
+            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr) (Bytes.B32.to_short_hex_string key)
+              (Bytes.B32.to_short_hex_string v) ) ;
         Base.set_storage addr key v
 
       let get_balance addr =
@@ -271,8 +271,7 @@ struct
 
       let access_storage addr key =
         host_trace (fun () ->
-            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
-              (U256.to_short_hex_string key) ) ;
+            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr) (Bytes.B32.to_short_hex_string key) ) ;
         Base.access_storage addr key
 
       let get_code_size addr =
@@ -284,8 +283,7 @@ struct
         Base.get_code_hash addr
 
       let copy_code addr ~offset ~size =
-        host_trace (fun () ->
-            Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
+        host_trace (fun () -> Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size) ;
         Base.copy_code addr ~offset ~size
 
       let get_block_hash id =
@@ -302,29 +300,28 @@ struct
 
       let selfdestruct ~address ~beneficiary =
         host_trace (fun () ->
-            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
-              (Address.to_short_hex_string address)
+            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s" (Address.to_short_hex_string address)
               (Address.to_short_hex_string beneficiary) ) ;
         Base.selfdestruct ~address ~beneficiary
 
       let emit_log addr ~data ~topics =
         host_trace (fun () ->
-            Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr) (Bytes.to_hex_string data)
+            Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr) (Bytes.to_short_hex_string data)
               (List.fold_left
-                 (fun acc topic -> Format.sprintf "%s, %s" acc (U256.to_short_hex_string topic))
+                 (fun acc topic -> Format.sprintf "%s, %s" acc (Bytes.B32.to_short_hex_string topic))
                  "" topics ) ) ;
         Base.emit_log addr ~data ~topics
 
       let get_transient_storage addr key =
         host_trace (fun () ->
             Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
-              (U256.to_short_hex_string key) ) ;
+              (Bytes.B32.to_short_hex_string key) ) ;
         Base.get_transient_storage addr key
 
       let set_transient_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
-              (U256.to_short_hex_string key) (U256.to_short_hex_string v) ) ;
+              (Bytes.B32.to_short_hex_string key) (Bytes.B32.to_short_hex_string v) ) ;
         Base.set_transient_storage addr key v
     end
   end
@@ -771,7 +768,7 @@ struct
 
     (* Operation *)
     let$ bytes = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
-    let$ () = push (Crypto.keccak_256 bytes) in
+    let$ () = push (U256.of_bytes_be (Crypto.keccak_256 bytes)) in
 
     (* PC *)
     increase_pc_and_continue
@@ -824,7 +821,7 @@ struct
       push
         ( match U256.to_int_opt i with
         | None -> U256.zero (* Index exceeds max theoretical data size *)
-        | Some i -> U256.of_bytes_be (Bytes.sub_with_zero_padding data i 32) )
+        | Some i -> U256.of_bytes_be (Bytes.B32.sub_with_zero_padding data i ()) )
     in
 
     (* PC *)
@@ -919,7 +916,7 @@ struct
 
     (* Operation *)
     let$ hash = HostAPI.get_code_hash address in
-    let$ () = push hash in
+    let$ () = push (U256.of_bytes_be hash) in
 
     (* PC *)
     increase_pc_and_continue
@@ -968,7 +965,7 @@ struct
     let$ current_block_num = U256.to_unbounded <$> !(execution_environment |-- header |-- number) in
     let$ hash =
       if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then return U256.zero
-      else HostAPI.get_block_hash (Uint.to_int64 block_num)
+      else U256.of_bytes_be <$> HostAPI.get_block_hash (Uint.to_int64 block_num)
     in
     let$ () = push hash in
 
@@ -1021,7 +1018,7 @@ struct
     let hash =
       match U256.to_int_opt index with
       | None -> U256.zero
-      | Some i -> Option.value ~default:U256.zero (List.nth_opt hashes i)
+      | Some i -> ( match List.nth_opt hashes i with None -> U256.zero | Some h -> U256.of_bytes_be h )
     in
     let$ () = push hash in
 
@@ -1062,7 +1059,9 @@ struct
     (* Operation *)
     let$ here = U256.to_int <$> !(machine_state |-- pc) in
     let$ code = !(execution_environment |-- bytecode) in
-    let$ () = push (U256.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)) in
+    let$ () =
+      push (U256.of_unbounded_exn (Uint.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)))
+    in
 
     (* PC *)
     update_pc_and_continue (fun pc -> U256.(pc + one + ~$i))
@@ -1166,11 +1165,11 @@ struct
 
     (* Gas *)
     let$ self_addr = self in
-    let$ access = HostAPI.access_storage self_addr key in
+    let$ access = HostAPI.access_storage self_addr (U256.to_bytes_be key) in
     let$ () = spend Gas.(match access with `Cold -> cold_sload_cost | `Warm -> warm_access_cost) in
 
     (* Operation *)
-    let$ value = HostAPI.get_storage self_addr key in
+    let$ value = U256.of_bytes_be <$> HostAPI.get_storage self_addr (U256.to_bytes_be key) in
     let$ () = push value in
 
     (* PC *)
@@ -1191,9 +1190,9 @@ struct
        costs. *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ storage_status = HostAPI.set_storage self_addr key value' in
+    let$ storage_status = HostAPI.set_storage self_addr (U256.to_bytes_be key) (U256.to_bytes_be value') in
 
-    let$ access = HostAPI.access_storage self_addr key in
+    let$ access = HostAPI.access_storage self_addr (U256.to_bytes_be key) in
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
       match storage_status with
@@ -1287,7 +1286,7 @@ struct
 
     (* Operation *)
     let$ self_addr = self in
-    let$ value = HostAPI.get_transient_storage self_addr key in
+    let$ value = U256.of_bytes_be <$> HostAPI.get_transient_storage self_addr (U256.to_bytes_be key) in
     let$ () = push value in
 
     (* PC *)
@@ -1304,7 +1303,7 @@ struct
     (* Operation *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ () = HostAPI.set_transient_storage self_addr key value in
+    let$ () = HostAPI.set_transient_storage self_addr (U256.to_bytes_be key) (U256.to_bytes_be value) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1333,7 +1332,9 @@ struct
     let$ start = pop in
     let$ size_bytes = pop in
 
-    let$ topics = List.mapM (List.of_seq Seq.(take n_topics (ints 0))) ~f:(fun _ -> pop) in
+    let$ topics : Bytes.B32.t list =
+      List.of_seq <$> (Seq.(take n_topics (ints 0)) |> Seq.mapM ~f:(fun _ -> U256.to_bytes_be <$> pop))
+    in
 
     (* Gas *)
     let$ memory_extension_gas = extend_memory_to ~start ~size_bytes in
@@ -1399,7 +1400,7 @@ struct
             ; sender
             ; input_data
             ; value
-            ; create2_salt = U256.zero
+            ; create2_salt = Bytes.B32.zero
             ; code_address
             ; code = Bytes.empty } )
       in
@@ -1420,7 +1421,7 @@ struct
 
   let generic_create_impl
       ~(kind : Evmc.Message.CallKind.t)
-      ~(create2_salt : U256.t)
+      ~(create2_salt : Bytes.B32.t)
       ~(endowment : U256.t)
       ~(input_start : U256.t)
       ~(input_size_bytes : U256.t) =
@@ -1482,7 +1483,7 @@ struct
 
     (* Operation *)
     let$ () =
-      generic_create_impl ~create2_salt:U256.zero ~kind:Evmc.Message.CallKind.Create ~endowment ~input_start
+      generic_create_impl ~create2_salt:Bytes.B32.zero ~kind:Evmc.Message.CallKind.Create ~endowment ~input_start
         ~input_size_bytes
     in
 
@@ -1664,7 +1665,7 @@ struct
     let$ endowment = pop in
     let$ input_start = pop in
     let$ input_size_bytes = pop in
-    let$ create2_salt = pop in
+    let$ create2_salt = U256.to_bytes_be <$> pop in
 
     (* Gas *)
     let$ memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size_bytes in
@@ -1886,7 +1887,7 @@ struct
     let opcode =
       (* YP (157) *)
       match U256.to_int_opt pc with
-      | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
+      | Some pc when pc < Bytes.length code -> Opcode.of_byte Bytes.(code.$(pc))
       | _ -> Opcode.Stop
     in
     trace (fun () ->

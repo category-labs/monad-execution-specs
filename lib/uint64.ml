@@ -8,8 +8,6 @@ let ( / ) = Stdlib.Int64.unsigned_div
 
 let ( ~$ ) = Stdlib.Int64.of_int
 
-let compare = Stdlib.Int64.unsigned_compare
-
 include Comparable.Make (struct
   type t = Stdlib.Int64.t
   let compare = Stdlib.Int64.unsigned_compare

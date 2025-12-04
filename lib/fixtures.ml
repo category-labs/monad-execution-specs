@@ -19,7 +19,8 @@ let object_as_alist_to_yojson value_to_yojson (alist : 'v object_as_alist) : Yoj
 
 (* Safe (non-throwing) conversions from hex strings to bytes. *)
 let bytes_of_hex_string str = try Ok (Bytes.of_hex_string str) with _ -> Error "Fixtures.hex_or_string"
-let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
+let hex_or_string str =
+  if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok (Bytes.of_byte_string str)
 
 module StateTest = struct end
 module BlockchainTest = struct
@@ -80,7 +81,7 @@ module TrieTest = struct
       let read = if hex_encoded then bytes_of_hex_string else hex_or_string in
       let of_kv (k, v) : (entry, string) result =
         let$ k = read k in
-        let key = if hash_keys then U256.to_bytes_be (Crypto.keccak_256 k) else k in
+        let key = if hash_keys then Bytes.B32.to_bytes (Crypto.keccak_256 k) else k in
         let$ value =
           match v with
           | `String str -> hex_or_string str

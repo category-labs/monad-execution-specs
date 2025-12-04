@@ -1,27 +1,34 @@
-(*
 (** Immutable fixed-width and unbounded byte arrays, as opposed to the mutable [Stdlib.Bytes.t], and
     associated utilities. *)
 
-module Impl (Byte_width : Traits.Byte_width.SIG) : sig
+module type STRING_LIKE = sig
   type t = private string
-
+  val byte_width : int option
   val of_byte_string_opt : string -> t option
-end = struct
-  type t = String.t
-
-  let of_byte_string_opt : string -> t option =
-    match Byte_width.byte_width with
-    | None -> fun str -> Some str
-    | Some n -> fun str -> if String.length str = n then Some str else None
+  val type_name : string
 end
 
-(* Pre-declare variable-length byte sequences so we can use for e.g. starts_with and to_unbounded below *)
-type byte_string = Impl(Traits.Byte_width.Unbounded).t
+module Impl (Byte_width : Traits.Byte_width.SIG) : sig
+  type t = Byte_width.repr
+  val byte_width : int option
+end = struct
+  type t = string
 
-module Make (Byte_width : Traits.Byte_width.SIG) = struct
   let byte_width = Byte_width.byte_width
 
-  include Impl (Byte_width)
+  let () = match byte_width with None -> () | Some w -> assert (w > 0)
+
+  let of_byte_string_opt =
+    match byte_width with
+    | None -> fun (bs : string) -> Some (bs :> t)
+    | Some n -> fun (bs : string) -> if String.length bs <> n then None else Some (bs :> t)
+
+  let type_name =
+    match byte_width with None -> "Bytes.t" | Some byte_width -> Format.sprintf "Bytes.B%d.t" byte_width
+end
+
+module Make (Base : STRING_LIKE) = struct
+  include Base
 
   let of_byte_string_exn s = Option.get (of_byte_string_opt s)
 
@@ -30,18 +37,14 @@ module Make (Byte_width : Traits.Byte_width.SIG) = struct
   let fold_left f acc (bs : t) = String.fold_left f acc (bs :> string)
   let fold_right f (bs : t) acc = String.fold_right f (bs :> string) acc
 
-  let starts_with ~(prefix : byte_string) (bs : t) =
+  let starts_with ~(prefix : Variable.t) (bs : t) =
     String.starts_with ~prefix:(prefix :> string) (bs :> string)
 
   let ( .$() ) (bs : t) i = (bs :> string).[i]
 
-  let reverse =
-    match byte_width with
-    | None -> (
-        fun (bs : t) : t ->
-          let n = length bs in
-          of_byte_string_exn (String.init n (fun i -> bs.$(n - i - 1))) )
-    | Some n -> ( fun (bs : t) : t -> of_byte_string_exn (String.init n (fun i -> bs.$(n - i - 1))) )
+  let reverse (bs : t) =
+    let n = length bs in
+    of_byte_string_exn (String.init n (fun i -> bs.$(n - i - 1)))
 
   (** Print [bytes] as a hexadecimal string, without a '0x' prefix. *)
   let to_hex_string (bytes : t) =
@@ -77,27 +80,19 @@ module Make (Byte_width : Traits.Byte_width.SIG) = struct
       (* TODO: this is very inefficient. It can be replaced with a lookup table. *)
       Char.chr (int_of_string (Printf.sprintf "0x%c%c" c1 c0))
     in
-    match byte_width with
-    | None -> init len byte_i
-    | Some n ->
-        assert (n = len) ;
-        init n byte_i
+    init len byte_i
 
   (*
   (** [sub_with_zero_padding bytes i sz] returns a [sz]-length byte array formed by zero-padding
       the array [bytes[i, min(len(bytes), i+sz))]] to [length sz]. *)
-  let sub_with_zero_padding (bs : byte_string) (pos : int) (len : Byte_width.length_type_for_init) : t =
+  let sub_with_zero_padding (bs : Variable.t) (pos : int) (len : Byte_width.length_type_for_init) : t =
    fun bs pos len ->
     let str = (bs :> string) in
     let byte_i j = if pos + j >= String.length str then '\x00' else str.[pos + j] in
     init len byte_i
    *)
 
-  let of_bytes_opt (bs : byte_string) : t option = of_byte_string_opt (bs :> string)
-  let of_bytes_exn (bs : byte_string) : t = Option.get (of_bytes_opt bs)
-  let to_bytes (bs : t) : byte_string =
-    let module U = Impl (Traits.Byte_width.Unbounded) in
-    Option.get (U.of_byte_string_opt (bs :> string))
+  let to_byte_string (bs : t) : Variable.t = (bs :> Variable.t)
 
   type zero_and_nonzero_counts = {zero_bytes : int; nonzero_bytes : int}
   let count_zero_and_nonzero_bytes (bs : t) =
@@ -113,9 +108,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) = struct
   end)
 
   let of_yojson =
-    let type_name =
-      match byte_width with Unbounded -> "Bytes.t" | Bounded n -> Format.sprintf "Bytes.B%d.t" n
-    in
+    let type_name = Base.type_name in
     fun (json : Yojson.Safe.t) : (t, string) result ->
       match json with
       | `String str -> ( try Ok (of_hex_string str) with _ -> Error type_name )
@@ -155,7 +148,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) = struct
   end
 end
 
-include Make (Traits.Byte_width.Unbounded)
+include Make (Impl(Traits.Byte_width.Unbounded))
 
 (* Extra operations for unbounded byte arrays. *)
 let of_byte_string str = Option.get (of_byte_string_opt str)
@@ -173,16 +166,26 @@ let sub (bytes : t) start len = of_byte_string (String.sub (bytes :> string) sta
 
 let of_seq seq = of_byte_string (String.of_seq seq)
 
-module B32 = struct
-  include Make (Traits.Byte_width.Bytes32)
-  let zero = make () '\x00'
-  let byte_width = 20
+module Make_fixed (Byte_width : sig
+  val byte_width : int
+end) =
+struct
+  module Base = Fixed (Byte_width)
+  include Base
+  include Byte_width
+
+  let init byte_i = init byte_width byte_i
+  let make byte = make byte_width byte
+
+  let zero = make '\x00'
 end
-module B20 = struct
-  include Make (Traits.Byte_width.Bytes20)
-  let zero = make () '\x00'
+
+module B32 = Make_fixed (struct
   let byte_width = 32
-end
+end)
+module B20 = Make_fixed (struct
+  let byte_width = 20
+end)
 
 (*
 include String
@@ -220,7 +223,5 @@ let of_yojson (json : Yojson.Safe.t) : (t, string) result =
   | _ -> Error "Expected string"
 let of_yojson_exn (json : Yojson.Safe.t) : t = Result.get_ok (of_yojson json)
 let to_yojson (bs : t) : Yojson.Safe.t = `String (Format.sprintf "0x%s" (to_hex_string bs))
-
- *)
 
  *)

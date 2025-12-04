@@ -79,7 +79,7 @@ module Message = struct
     ; sender : Address.t
     ; input_data : Bytes.t
     ; value : U256.t
-    ; create2_salt : U256.t
+    ; create2_salt : Bytes.B32.t
     ; code_address : Address.t
     ; code : Bytes.t }
 end
@@ -102,7 +102,7 @@ module TxContext = struct
     ; chain_id : U256.t
     ; block_base_fee : U256.t
     ; blob_base_fee : U256.t
-    ; blob_hashes : U256.t list
+    ; blob_hashes : Bytes.B32.t list
     ; initcodes : TxInitcode.t list }
 end
 
@@ -137,13 +137,13 @@ module Host = struct
     include Monad.SIG
     val account_exists : Address.t -> bool t
 
-    val get_storage : Address.t -> U256.t -> U256.t t
-    val set_storage : Address.t -> U256.t -> U256.t -> StorageStatus.t t
+    val get_storage : Address.t -> Bytes.B32.t -> Bytes.B32.t t
+    val set_storage : Address.t -> Bytes.B32.t -> Bytes.B32.t -> StorageStatus.t t
 
     val get_balance : Address.t -> U256.t t
 
     val get_code_size : Address.t -> Uint64.t t
-    val get_code_hash : Address.t -> U256.t t
+    val get_code_hash : Address.t -> Bytes.B32.t t
     val copy_code : Address.t -> offset:int -> size:int -> Bytes.t t
 
     val selfdestruct : address:Address.t -> beneficiary:Address.t -> bool t
@@ -152,15 +152,15 @@ module Host = struct
 
     val get_tx_context : TxContext.t t
 
-    val get_block_hash : Uint64.t -> U256.t t
+    val get_block_hash : Uint64.t -> Bytes.B32.t t
 
-    val emit_log : Address.t -> data:Bytes.t -> topics:U256.t list -> unit t
+    val emit_log : Address.t -> data:Bytes.t -> topics:Bytes.B32.t list -> unit t
 
     val access_account : Address.t -> [`Warm | `Cold] t
-    val access_storage : Address.t -> U256.t -> [`Warm | `Cold] t
+    val access_storage : Address.t -> Bytes.B32.t -> [`Warm | `Cold] t
 
-    val get_transient_storage : Address.t -> U256.t -> U256.t t
-    val set_transient_storage : Address.t -> U256.t -> U256.t -> unit t
+    val get_transient_storage : Address.t -> Bytes.B32.t -> Bytes.B32.t t
+    val set_transient_storage : Address.t -> Bytes.B32.t -> Bytes.B32.t -> unit t
   end
 
   (* Lift a host monad through a transformer stack *)
@@ -227,27 +227,27 @@ module DummyHost = struct
   open Lens.Infix
 
   module Account = struct
-    type t = {balance : U256.t; storage : U256.t U256.Map.t; code : Bytes.t; nonce : Uint.t}
+    type t = {balance : U256.t; storage : Bytes.B32.t Bytes.B32.Map.t; code : Bytes.t; nonce : Uint.t}
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
-    let empty = {balance = U256.zero; storage = U256.Map.empty; code = Bytes.empty; nonce = Uint.zero}
+    let empty = {balance = U256.zero; storage = Bytes.B32.Map.empty; code = Bytes.empty; nonce = Uint.zero}
   end
   open Account
 
   module StorageKey = struct
     module Impl = struct
-      type t = Address.t * U256.t
+      type t = Address.t * Bytes.B32.t
       let compare (a1, w1) (a2, w2) =
         let c1 = Address.compare a1 a2 in
-        if c1 = 0 then U256.compare w1 w2 else c1
+        if c1 = 0 then Bytes.B32.compare w1 w2 else c1
     end
     include Impl
     module Set = Set.Make (Impl)
   end
 
   module Log = struct
-    type t = {address : Address.t; topics : U256.t list; data : Bytes.t}
+    type t = {address : Address.t; topics : Bytes.B32.t list; data : Bytes.t}
     [@@deriving lens {submodule = true; prefix = true}]
 
     include TLens
@@ -280,7 +280,7 @@ module DummyHost = struct
     type t =
       { accounts : Account.t Address.Map.t
       ; substate : AccruedSubstate.t
-      ; transient_storage : U256.t U256.Map.t
+      ; transient_storage : Bytes.B32.t Bytes.B32.Map.t
       ; accounts_created_in_current_transaction : Address.Set.t (* Needed for EIP-6780 *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
@@ -288,7 +288,7 @@ module DummyHost = struct
     let empty =
       { accounts = Address.Map.empty
       ; substate = AccruedSubstate.empty
-      ; transient_storage = U256.Map.empty
+      ; transient_storage = Bytes.B32.Map.empty
       ; accounts_created_in_current_transaction = Address.Set.empty }
   end
   open State
@@ -325,17 +325,18 @@ module DummyHost = struct
   let address_for ~sender ~create2_salt ~code =
     let$ nonce = !(account sender |-- nonce) in
     return
-      (Address.of_u256_truncating
+      (Address.of_bytes32_truncating
          (Crypto.keccak_256
             ( match create2_salt with
             | None ->
                 (* TODO: correct this once RLP is in place *)
-                Address.to_bytes_be sender ^ Uint.to_bytes_be nonce
+                Bytes.(Address.(to_bytes sender) ^ Uint.(to_bytes_be nonce))
             | Some salt ->
-                Bytes.make 1 '\xff'
-                ^ Address.to_bytes_be sender
-                ^ U256.to_bytes_be salt
-                ^ U256.to_bytes_be (Crypto.keccak_256 code) ) ) )
+                Bytes.(
+                  of_char '\xff'
+                  ^ Address.to_bytes sender
+                  ^ Bytes.B32.to_bytes salt
+                  ^ Bytes.B32.to_bytes (Crypto.keccak_256 code) ) ) ) )
 
   (** EVMC host interface.
     Note this is parameterized over the VM implementation. In practice, this means the EVMC host and the
@@ -346,10 +347,10 @@ module DummyHost = struct
     let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
 
     let get_storage addr key =
-      !(account addr |-- storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
+      !(account addr |-- storage |-- Bytes.B32.Map.at key |-- Option.get_or_default Bytes.B32.zero)
 
     let set_storage addr key v =
-      let$ () = account addr |-- storage |-- U256.Map.at key := Some v in
+      let$ () = account addr |-- storage |-- Bytes.B32.Map.at key := Some v in
       (* TODO: make this accurate. *)
       return StorageStatus.Assigned
 
@@ -406,7 +407,7 @@ module DummyHost = struct
           update_field accounts_created_in_current_transaction (fun addresses ->
               Address.Set.add create_address addresses )
         in
-        let$ () = account create_address |-- storage := U256.Map.empty in
+        let$ () = account create_address |-- storage := Bytes.B32.Map.empty in
         let$ () = account create_address |-- nonce := Uint.one in
 
         (* Ether, if any, is transferred by process_call *)
@@ -417,7 +418,7 @@ module DummyHost = struct
             let contract_length = Bytes.length contract_code in
             let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
             if
-              (contract_length = 0 && contract_code.[0] = '\xef')
+              (contract_length = 0 && Bytes.(contract_code.$(0)) = '\xef')
               || Uint.(contract_code_gas > of_int64 result.gas_left)
             then
               return
@@ -426,7 +427,8 @@ module DummyHost = struct
                 ; output_data = Bytes.empty
                 ; status_code =
                     Result.StatusCode.(
-                      if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
+                      if Bytes.(contract_code.$(0)) = '\xef' then Contract_validation_failure else Out_of_gas )
+                }
             else
               let$ () = account create_address |-- code := contract_code in
               return {result with create_address}
@@ -461,9 +463,9 @@ module DummyHost = struct
     let get_block_hash i =
       (* This host is not backed by an actual block database, so we return the hash of i which is enough for
          testing *)
-      return (Crypto.keccak_256 U256.(to_bytes_be (of_uint64 i)))
+      return (Crypto.keccak_256 U256.(Repr.to_bytes (to_bytes_be (of_uint64 i))))
 
-    let emit_log address ~(data : Bytes.t) ~(topics : U256.t list) =
+    let emit_log address ~(data : Bytes.t) ~(topics : Bytes.B32.t list) =
       let log : Log.t = {address; topics; data} in
       update_field (substate |-- logs) (fun logs -> log :: logs)
 
@@ -482,8 +484,8 @@ module DummyHost = struct
         return `Cold
 
     let get_transient_storage _addr key =
-      !(transient_storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
+      !(transient_storage |-- Bytes.B32.Map.at key |-- Option.get_or_default Bytes.B32.zero)
 
-    let set_transient_storage _addr key value = transient_storage |-- U256.Map.at key := Some value
+    let set_transient_storage _addr key value = transient_storage |-- Bytes.B32.Map.at key := Some value
   end
 end

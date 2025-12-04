@@ -3,8 +3,8 @@
 module Address = Chain.Ethereum.Address
 open Numeric
 
-let set_code_tx_magic : Bytes.t = "\x05"
-let eoa_delegation_prefix : Bytes.t = "\xef\x01\x00"
+let set_code_tx_magic = Bytes.(~@"\x05")
+let eoa_delegation_prefix : Bytes.t = Bytes.(~@"\xef\x01\x00")
 let eoa_delegated_code_length = Bytes.length eoa_delegation_prefix + Address.byte_width
 let () = assert (eoa_delegated_code_length = 23)
 
@@ -20,5 +20,5 @@ let is_valid_delegation (code : Bytes.t) : bool =
     where the delegated code is hosted, otherwise it returns [None]. *)
 let get_delegated_address (code : Bytes.t) : Address.t option =
   if is_valid_delegation code then
-    Some (Address.of_bytes_be (Bytes.sub code (Bytes.length eoa_delegation_prefix) Address.byte_width))
+    Some (Address.of_bytes_exn (Bytes.sub code (Bytes.length eoa_delegation_prefix) Address.byte_width))
   else None

@@ -9,19 +9,12 @@
 exception Domain_error of Z.t
 exception Invalid_operation
 
-module type IS_BOUNDED = sig
-  val bit_width : int option
-end
-module type IS_SIGNED = sig
-  val v : bool
-end
-
-module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
+module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness.SIG) = struct
   module Impl : sig
     type t
 
-    val bit_width : int option
     val byte_width : int option
+    val bit_width : int option
 
     val signed : bool
 
@@ -39,12 +32,14 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
   end = struct
     type t = Z.t
 
-    let () = ignore (Option.iter (fun b -> assert (b > 0 && b mod 8 = 0)) Bounded.bit_width)
+    let byte_width, bit_width =
+      match Byte_width.byte_width with
+      | None -> (None, None)
+      | Some n ->
+          assert (n > 0) ;
+          (Some n, Some (8 * n))
 
-    let bit_width = Bounded.bit_width
-    let byte_width = Option.map (fun b -> b / 8) Bounded.bit_width
-
-    let signed = Signed.v
+    let signed = Signedness.signed
 
     let max_t =
       match (bit_width, signed) with
@@ -83,11 +78,12 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
   let zero = of_z_exn Z.zero
   let one = of_z_exn Z.one
 
-  let of_bytes_be : Bytes.t -> t =
+  module Repr = Bytes.Make (Byte_width)
+  let of_bytes_be : Repr.t -> t =
     match (bit_width, signed) with
     | Some bits, true ->
         fun bs ->
-          let x_abs = Z.of_bits (Bytes.reverse bs) in
+          let x_abs = Z.of_bits (Repr.reverse bs :> string) in
           let negative = Z.testbit x_abs (bits - 1) in
           if negative then of_z_exn Z.(zero - x_abs) else of_z_exn x_abs
     | None, true ->
@@ -95,28 +91,28 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
         fun _bs -> raise Invalid_operation
     | _, false ->
         (* Do not truncate silently *)
-        fun bs -> of_z_exn (Z.of_bits (Bytes.reverse bs))
+        fun bs -> of_z_exn (Z.of_bits (Repr.reverse bs :> string))
 
-  let to_bytes_be : t -> Bytes.t =
-    match byte_width with
-    | None -> fun x -> Bytes.reverse (Z.to_bits (to_z x))
-    | Some byte_width ->
+  let to_bytes_be : t -> Repr.t =
+    match Repr.byte_width with
+    | Unbounded -> fun x -> Repr.reverse (Repr.of_byte_string_exn (Z.to_bits (to_z x)))
+    | Bounded byte_width ->
         fun x ->
-          let z_bytes = Z.to_bits (to_z x) in
+          let z_bytes = Bytes.of_byte_string (Z.to_bits (to_z x)) in
           let z_n_bytes = Bytes.length z_bytes in
-          Bytes.init byte_width (fun i ->
+          Repr.init () (fun i ->
               (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
                  time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
                  code below handles truncating, reversing and optionally zero-padding *)
               let le_i = byte_width - i - 1 in
-              if le_i >= z_n_bytes then '\x00' else z_bytes.[le_i] )
+              if le_i >= z_n_bytes then '\x00' else Bytes.(z_bytes.$(le_i)) )
 
-  let to_bytes_le : t -> Bytes.t = fun x -> Bytes.reverse (to_bytes_be x)
+  let to_bytes_le : t -> Repr.t = fun x -> Repr.reverse (to_bytes_be x)
 
   (** [byte ~index-le x] extracts the [i]-th byte from the Little-endian representation of [x]. *)
   let byte ~index_le x =
-    let le_bytes = Z.to_bits (to_z x) in
-    if index_le >= Bytes.length le_bytes then '\x00' else le_bytes.[index_le]
+    let le_bytes = Bytes.of_byte_string (Z.to_bits (to_z x)) in
+    if index_le >= Bytes.length le_bytes then '\x00' else Bytes.(le_bytes.$(index_le))
 
   let significant_bytes x = (Z.numbits (to_z x) + 7) / 8
 
@@ -156,12 +152,12 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
   let to_string x = Z.to_string (to_z x)
   let to_hex_string x =
     let sign = if x < zero then "-" else "" in
-    Format.sprintf "%s0x%s" sign (Bytes.to_hex_string (to_bytes_be x))
+    Format.sprintf "%s0x%s" sign (Repr.to_hex_string (to_bytes_be x))
 
   let to_short_hex_string x =
     let sign = if x < zero then "-" else "" in
     to_bytes_be x
-    |> Bytes.to_seq
+    |> Repr.to_seq
     |> Seq.drop_while Stdlib.(( = ) '\x00')
     |> Bytes.of_seq
     |> (fun b ->
@@ -182,7 +178,7 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
     | `Intlit lit -> ( try Ok (of_string lit) with _ -> parse_error lit )
     | _ -> Error "Expected int or string"
   let of_yojson_exn (x : Yojson.Safe.t) = Result.get_ok (of_yojson x)
-  let to_yojson (x : t) : Yojson.Safe.t = `String (to_hex_string x)
+  let to_yojson (x : t) : Yojson.Safe.t = `String (to_short_hex_string x)
 
   (* JSON conversions for t-indexed maps. *)
   module Map : sig
@@ -257,10 +253,9 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
         loop ~$1 x y
 
   (* Not constant-time. *)
-  let exp_mod ~(modulo:t) (x:t) (y:t) =
-    of_z_after_op (Z.powm (to_z x) (to_z y) (to_z modulo))
+  let exp_mod ~(modulo : t) (x : t) (y : t) = of_z_after_op (Z.powm (to_z x) (to_z y) (to_z modulo))
 
-  (* YP 331 *)
+  (* YP (331) *)
   let minus_1_64th (x : t) : t = x - (x / ~$64)
 
   (** [bytes_to_whole_words x] computes {m ceil(x / 32)}. *)
@@ -268,61 +263,36 @@ module Make (Bounded : IS_BOUNDED) (Signed : IS_SIGNED) = struct
     let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
     of_z_exn q + if Z.(equal r zero) then zero else one
 
+  (* TODO: have a different type to represent fixed-with byte arrays. *)
   let to_rlp (x : t) : Rlp.t =
     let x_bytes = to_bytes_be x in
     let sig_bytes = significant_bytes x in
-    let num_bytes = Bytes.length x_bytes in
+    let num_bytes = Repr.length x_bytes in
     let pos = Stdlib.(num_bytes - sig_bytes) in
-    Rlp.Bytes (Bytes.sub x_bytes pos sig_bytes)
-  let of_rlp_exn (x : Rlp.t) = match x with Bytes bs -> of_bytes_be bs | List _ -> assert false
+    Rlp.Bytes (Bytes.sub (Repr.to_bytes x_bytes) pos sig_bytes)
+  let to_rlp_fixed (x : t) : Rlp.t = Rlp.Bytes (Repr.to_bytes (to_bytes_be x))
+  let of_rlp_exn (x : Rlp.t) =
+    match x with Bytes bs -> of_bytes_be (Repr.of_bytes_exn bs) | List _ -> assert false
 end
 
-module Size = struct
-  module Bits256 = struct
-    let bit_width = Some 256
-  end
-  module Bits160 = struct
-    let bit_width = Some 160
-  end
-  module Bits64 = struct
-    let bit_width = Some 64
-  end
-  module Unbounded = struct
-    let bit_width = None
-  end
-end
-
-module Signedness = struct
-  module Signed : IS_SIGNED = struct
-    let v = true
-  end
-  module Unsigned : IS_SIGNED = struct
-    let v = false
-  end
-end
-
-module IntegerBase = Make (Size.Unbounded) (Signedness.Signed)
-module UintBase = Make (Size.Unbounded) (Signedness.Unsigned)
-
+module UintBase = Make (Traits.Byte_width.Unbounded) (Traits.Signedness.Unsigned)
+module IntegerBase = Make (Traits.Byte_width.Unbounded) (Traits.Signedness.Signed)
 module Uint = struct
   include UintBase
 
   let as_signed (x : t) : IntegerBase.t = IntegerBase.of_z_exn (to_z x)
 end
 module Integer = struct
-  include IntegerBase
+  include Make (Traits.Byte_width.Unbounded) (Traits.Signedness.Signed)
 
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
 end
 
 (** Helper functor to create pairs of signed and unsigned types for a given bit width, together with conversion
     functions via two's complement. *)
-module TwosComplement (B : IS_BOUNDED) = struct
-  module SI = Make (B) (Signedness.Signed)
-  module UI = Make (B) (Signedness.Unsigned)
-
+module TwosComplement (B : Traits.Byte_width.SIG) = struct
   module S = struct
-    include SI
+    include Make (B) (Traits.Signedness.Signed)
     let bit_width = Option.get bit_width
     let byte_width = Option.get byte_width
     let max_t = Option.get max_t
@@ -331,7 +301,7 @@ module TwosComplement (B : IS_BOUNDED) = struct
   end
 
   module U = struct
-    include UI
+    include Make (B) (Traits.Signedness.Unsigned)
     let bit_width = Option.get bit_width
     let byte_width = Option.get byte_width
     let max_t = Option.get max_t
@@ -372,7 +342,7 @@ module TwosComplement (B : IS_BOUNDED) = struct
   end
 end
 
-module Bits256 = TwosComplement (Size.Bits256)
+module Bits256 = TwosComplement (Traits.Byte_width.Bytes32)
 
 (** Unsigned 256-bit integers. {!U256.t} is used to represent Ethereum 256-bit words. *)
 module U256 = Bits256.Unsigned
@@ -381,16 +351,7 @@ module U256 = Bits256.Unsigned
 module I256 = Bits256.Signed
 
 (** Signed and unsigned 64-bit integers. More operations than the versions in stdlib. *)
-module Bits64 = TwosComplement (Size.Bits64)
+module Bits64 = TwosComplement (Traits.Byte_width.Bytes8)
 
 module U64 = Bits64.Unsigned
 module I64 = Bits64.Signed
-
-module Bits160 = TwosComplement (Size.Bits160)
-
-(** Unsigned 160-bit integers. {!U160.t} is used to represent 160-bit Ethereum addresses. *)
-module U160 = struct
-  include Bits160.Unsigned
-  let to_u256 (x : t) : U256.t = U256.of_z_exn (to_z x)
-  let of_u256_truncating (x : U256.t) = of_z_truncating (U256.to_z x)
-end

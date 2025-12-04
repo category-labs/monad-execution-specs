@@ -5,6 +5,7 @@ module Make (T : sig
   val compare : t -> t -> int
 end) =
 struct
+  include T
   let comparison_op (int_cmp : int -> int -> bool) (x : T.t) (y : T.t) = int_cmp (T.compare x y) 0
   let ( < ) = comparison_op Stdlib.( < )
   let ( <= ) = comparison_op Stdlib.( <= )
