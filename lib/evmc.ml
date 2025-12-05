@@ -463,7 +463,7 @@ module DummyHost = struct
     let get_block_hash i =
       (* This host is not backed by an actual block database, so we return the hash of i which is enough for
          testing *)
-      return (Crypto.keccak_256 U256.(Repr.to_bytes (to_repr (of_uint64 i))))
+      return (Crypto.keccak_256 U256.(to_repr_bytes (of_uint64 i)))
 
     let emit_log address ~(data : Bytes.t) ~(topics : B32.t list) =
       let log : Log.t = {address; topics; data} in
