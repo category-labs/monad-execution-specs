@@ -1,6 +1,7 @@
 open Monad_lib
-open Chain.Ethereum
+open Monad_lib.Chain.Ethereum
 open Monad_lib.Numeric
+open Monad_lib.Byte_string
 
 module Revision = struct
   let rev = Chain.Monad.Revision.Four
@@ -23,8 +24,8 @@ module QCheck2 = struct
   include QCheck2
   module Print = struct
     include Print
-    let u256 x = Format.sprintf "%s (%s)" (U256.to_string x) (U256.to_short_hex_string x)
-    let i256 x = Format.sprintf "%s (%s)" (I256.to_string x) (I256.to_short_hex_string x)
+    let u256 x = Format.sprintf "%s (%s)" (U256.to_string x) (U256.to_hex_string x)
+    let i256 x = Format.sprintf "%s (%s)" (I256.to_string x) (I256.to_hex_string x)
     let z : Z.t t =
      fun x ->
       (if Z.(x < zero) then Format.sprintf "%s (-%s)" (Z.to_string x) else Format.sprintf "%s")
@@ -49,7 +50,7 @@ module QCheck2 = struct
             return (to_string bytes) ) )
         else string_size ~gen:uint8 (int_bound 32)
       in
-      return (U256.of_bytes_be bytes_be)
+      return U256.(of_repr (Repr.of_bytes_exn bytes_be))
 
     let i256 : I256.t t =
       let* num = u256 in
@@ -84,9 +85,16 @@ let check_prop ~name ?print ?(count = 10000) generator property =
 let u256 =
   ( module struct
     include U256
-    let pp = Fmt.of_to_string U256.to_short_hex_string
+    let pp = Fmt.of_to_string U256.to_hex_string
   end : Alcotest.TESTABLE
     with type t = U256.t )
+
+let b32 =
+  ( module struct
+    include B32
+    let pp = Fmt.of_to_string B32.to_hex_string
+  end : Alcotest.TESTABLE
+    with type t = B32.t )
 
 let rlp =
   ( module struct
@@ -177,7 +185,7 @@ let bytecode_to_call_message code =
       ; sender = Address.zero
       ; input_data = Bytes.empty
       ; value = U256.of_int 1000
-      ; create2_salt = U256.zero
+      ; create2_salt = B32.zeros
       ; code_address = Address.zero
       ; code } )
 
@@ -203,8 +211,8 @@ let test_bytecode_pure bc ~input_stack ~output_stack =
        ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =
-  let inputs = List.map U256.to_short_hex_string inputs |> String.concat ", " in
-  Format.sprintf "%s(%s) -> %s" (Opcode.to_string opcode) inputs (U256.to_short_hex_string output)
+  let inputs = List.map U256.to_hex_string inputs |> String.concat ", " in
+  Format.sprintf "%s(%s) -> %s" (Opcode.to_string opcode) inputs (U256.to_hex_string output)
 
 let test_case_opcode_1 opcode x_0 y =
   let test_name = opcode_test_name opcode [x_0] y in

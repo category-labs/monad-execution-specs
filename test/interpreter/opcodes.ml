@@ -1,6 +1,7 @@
 open Monad_lib
 open Monad_lib.Opcode
 open Monad_lib.Numeric
+open Monad_lib.Byte_string
 
 open Test_utils
 open Test_utils.Utils
@@ -32,7 +33,7 @@ let test_cases_keccak test_cases =
   ( "Keccak"
   , ListLabels.map test_cases ~f:(fun (input, output) ->
         test_case
-          (Format.sprintf "Keccak(%s) -> %s" (Bytes.to_hex_string input) (U256.to_short_hex_string output))
+          (Format.sprintf "Keccak(%s) -> %s" (Bytes.to_hex_string input) (U256.to_hex_string output))
           `Quick
           (fun () -> test_keccak input output) ) )
 

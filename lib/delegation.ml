@@ -2,9 +2,10 @@
 
 module Address = Chain.Ethereum.Address
 open Numeric
+open Byte_string
 
-let set_code_tx_magic = Bytes.(~@"\x05")
-let eoa_delegation_prefix : Bytes.t = Bytes.(~@"\xef\x01\x00")
+let set_code_tx_magic = "\x05"
+let eoa_delegation_prefix : Bytes.t = "\xef\x01\x00"
 let eoa_delegated_code_length = Bytes.length eoa_delegation_prefix + Address.byte_width
 let () = assert (eoa_delegated_code_length = 23)
 

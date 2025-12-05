@@ -1,6 +1,7 @@
 open Monad_lib
 open Chain.Ethereum
-open Monad_lib.Numeric
+open Numeric
+open Byte_string
 
 let tests_kind = ref None
 let set_tests_kind kind = Arg.String (fun filename -> tests_kind := Some (kind, filename))
@@ -40,23 +41,23 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
         (U256.to_string expected.nonce) ;
     if actual.storage <> expected.storage then (
       Format.eprintf "\tStorage differs\n" ;
-      let actual_keys = U256.Map.keys actual.storage in
-      let expected_keys = U256.Map.keys expected.storage in
-      U256.Set.(
+      let actual_keys = B32.Map.keys actual.storage in
+      let expected_keys = B32.Map.keys expected.storage in
+      B32.Set.(
         iter
           (fun key ->
-            let key_s = U256.to_short_hex_string key in
-            let v_actual = U256.Map.find_opt key actual.storage in
-            let v_expected = U256.Map.find_opt key expected.storage in
+            let key_s = B32.to_short_hex_string key in
+            let v_actual = B32.Map.find_opt key actual.storage in
+            let v_expected = B32.Map.find_opt key expected.storage in
             match (v_actual, v_expected) with
-            | Some v_actual, Some v_expected when U256.(v_actual <> v_expected) ->
-                Format.eprintf "\t\tactual(%s): %s\n" key_s (U256.to_hex_string v_actual) ;
-                Format.eprintf "\t\texpected(%s): %s\n" key_s (U256.to_hex_string v_expected)
+            | Some v_actual, Some v_expected when B32.(v_actual <> v_expected) ->
+                Format.eprintf "\t\tactual(%s): %s\n" key_s (B32.to_short_hex_string v_actual) ;
+                Format.eprintf "\t\texpected(%s): %s\n" key_s (B32.to_short_hex_string v_expected)
             | None, Some v_expected ->
                 Format.eprintf "\t\tactual(%s): <EMPTY>\n" key_s ;
-                Format.eprintf "\t\texpected(%s): %s\n" key_s (U256.to_hex_string v_expected)
+                Format.eprintf "\t\texpected(%s): %s\n" key_s (B32.to_short_hex_string v_expected)
             | Some v_actual, None ->
-                Format.eprintf "\t\tactual(%s): %s\n" key_s (U256.to_hex_string v_actual) ;
+                Format.eprintf "\t\tactual(%s): %s\n" key_s (B32.to_short_hex_string v_actual) ;
                 Format.eprintf "\t\texpected(%s): <EMPTY>\n" key_s
             | _, _ -> () )
           (union actual_keys expected_keys) ) ) ;

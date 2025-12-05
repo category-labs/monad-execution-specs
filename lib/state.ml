@@ -1,4 +1,5 @@
 open Numeric
+open Byte_string
 open Chain.Ethereum
 open Lens.Infix
 
@@ -27,7 +28,7 @@ module WorldState = struct
           else
             (* YP (11) *)
             let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
-            Some (Bytes.B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
+            Some (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
       |> Mpt.of_seq
     in
     mpt.root_hash
@@ -102,13 +103,13 @@ module BlockState = struct
     let requests_hash =
       block_state.requests
       |> List.filter (fun req -> Bytes.length req > 1)
-      |> List.sort (fun r_a r_b -> Char.compare Bytes.(r_a.$(0)) Bytes.(r_b.$(0)))
+      |> List.sort (fun r_a r_b -> Char.compare r_a.[0] r_b.[0])
       |> Bytes.concat Bytes.empty
       |> Crypto.keccak_256
     in
 
     let gas_used = block_state.gas_used in
-    let blob_gas_used = U64.of_unbounded_exn block_state.blob_gas_used in
+    let blob_gas_used = U64.of_uint_exn block_state.blob_gas_used in
 
     let header =
       { block_state.current_block.header with
@@ -127,10 +128,10 @@ end
 module TransactionState = struct
   module StorageKey = struct
     module Impl = struct
-      type t = Address.t * Bytes.B32.t
+      type t = Address.t * B32.t
       let compare (a1, w1) (a2, w2) =
         let c1 = Address.compare a1 a2 in
-        if c1 = 0 then Bytes.B32.compare w1 w2 else c1
+        if c1 = 0 then B32.compare w1 w2 else c1
     end
     include Impl
     module Set = Set.Make (Impl)
@@ -143,7 +144,7 @@ module TransactionState = struct
     ; world_state : WorldState.t
     ; current_block : Block.t
     ; current_transaction : Transaction.t
-    ; transient_storage : Bytes.B32.t Bytes.B32.Map.t Address.Map.t
+    ; transient_storage : B32.t B32.Map.t Address.Map.t
     ; accounts_created_in_current_transaction : Address.Set.t
     ; self_destruct : Address.Set.t  (** A_s *)
     ; logs : Log.t list  (** A_l *)
@@ -244,7 +245,7 @@ let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas
     ; delegated = Delegation.is_valid_delegation code
     ; input_data = data
     ; depth = 0l
-    ; create2_salt = Bytes.B32.zero }
+    ; create2_salt = B32.zeros }
 
 module Host (Vm : sig
   val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
@@ -269,10 +270,10 @@ struct
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
   let get_storage addr key =
-    !(account addr |-- Account.storage |-- Bytes.B32.Map.at key |-- Option.get_or_default Bytes.B32.zero)
+    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
 
   let set_storage addr key v =
-    let$ () = account addr |-- storage |-- Bytes.B32.Map.at key := Some v in
+    let$ () = account addr |-- storage |-- B32.Map.at key := Some v in
     (* TODO: make this accurate. *)
     return Evmc.StorageStatus.Assigned
 
@@ -334,7 +335,7 @@ struct
         update_field accounts_created_in_current_transaction (fun addresses ->
             Address.Set.add create_address addresses )
       in
-      let$ () = account create_address |-- storage := Bytes.B32.Map.empty in
+      let$ () = account create_address |-- storage := B32.Map.empty in
       let$ () = account create_address |-- nonce := U256.one in
 
       (* Ether, if any, is transferred by process_call *)
@@ -345,7 +346,7 @@ struct
           let contract_length = Bytes.length contract_code in
           let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
           if
-            (contract_length = 0 && Bytes.(contract_code.$(0)) = '\xef')
+            (contract_length = 0 && contract_code.[0] = '\xef')
             || Uint.(contract_code_gas > of_int64 result.gas_left)
           then
             return
@@ -354,7 +355,7 @@ struct
               ; output_data = Bytes.empty
               ; status_code =
                   Evmc.Result.StatusCode.(
-                    if Bytes.(contract_code.$(0)) = '\xef' then Contract_validation_failure else Out_of_gas )
+                    if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas )
               }
           else
             let$ () = account create_address |-- code := contract_code in
@@ -390,9 +391,9 @@ struct
   let get_block_hash i =
     (* This host is not backed by an actual block database, so we return the hash of i which is enough for
          testing *)
-    return (Crypto.keccak_256 U256.(Repr.to_bytes (to_bytes_be (of_uint64 i))))
+    return (Crypto.keccak_256 U256.(Repr.to_bytes (to_repr (of_uint64 i))))
 
-  let emit_log address ~(data : Bytes.t) ~(topics : Bytes.B32.t list) =
+  let emit_log address ~(data : Bytes.t) ~(topics : B32.t list) =
     let log : Log.t = {address; topics; data} in
     update_field logs (fun logs -> log :: logs)
 
@@ -420,9 +421,9 @@ struct
   let transient_storage addr key =
     transient_storage
     |-- Address.Map.at addr
-    |-- Option.get_or_default Bytes.B32.Map.empty
-    |-- Bytes.B32.Map.at key
-    |-- Option.get_or_default Bytes.B32.zero
+    |-- Option.get_or_default B32.Map.empty
+    |-- B32.Map.at key
+    |-- Option.get_or_default B32.zeros
 
   let get_transient_storage addr key = !(transient_storage addr key)
 
@@ -475,8 +476,8 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
         let max_gas_fee = Gas.(Transaction.gas_limit tx * max_fee_per_gas) in
         match tx with
         | Blob {max_fee_per_blob_gas; blob_versioned_hashes; _} ->
-            let max_fee_per_blob_gas = U256.to_unbounded max_fee_per_blob_gas in
-            let blob_gas_price = Gas.block_blob_gas_price (U64.to_unbounded header.excess_blob_gas) in
+            let max_fee_per_blob_gas = U256.to_uint max_fee_per_blob_gas in
+            let blob_gas_price = Gas.block_blob_gas_price (U64.to_uint header.excess_blob_gas) in
             if Gas.(max_fee_per_blob_gas < blob_gas_price) then failwith "Invalid transaction" ;
             let total_blob_gas = Gas.(gas_per_blob * ~$(List.length blob_versioned_hashes)) in
             let max_blob_gas_fee = Gas.(total_blob_gas * max_fee_per_blob_gas) in
@@ -491,7 +492,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   let sender = Transaction.sender block_state.world_state.chain_id tx in
   let sender_account = block_state.world_state |. WorldState.account sender in
   if U256.(sender_account.nonce <> tx_nonce) then failwith "Invalid transaction 1" ;
-  if Uint.(U256.to_unbounded sender_account.balance < max_gas_fee + U256.to_unbounded tx_value) then (
+  if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then (
     Format.eprintf "Account %s (%s) cannot afford to pay %s gas fees + %s tx_value\n"
       (Address.to_hex_string sender)
       (U256.to_string sender_account.balance)
@@ -502,8 +503,8 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   let effective_gas_fee = Gas.(tx_gas_limit * effective_gas_price) in
   let total_fee = Gas.(effective_gas_fee + blob_gas_fee) in
-  if total_fee > U256.to_unbounded sender_account.balance then failwith "Invalid transaction 4" ;
-  let total_fee = U256.of_unbounded_exn total_fee in
+  if total_fee > U256.to_uint sender_account.balance then failwith "Invalid transaction 4" ;
+  let total_fee = U256.of_uint_exn total_fee in
 
   (* pay gas and blob fees, increase nonce *)
   let block_state =
@@ -534,14 +535,14 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   (* Refund gas to sender. *)
   let block_state =
     let tx_gas_left = Gas.(tx_gas_limit - tx_gas_used_after_refund) in
-    let gas_refund_amount = U256.of_unbounded_exn Gas.(tx_gas_left * effective_gas_price) in
+    let gas_refund_amount = U256.of_uint_exn Gas.(tx_gas_left * effective_gas_price) in
     block_state.^(account sender |-- Account.balance) <-
       U256.(block_state.^(account sender |-- Account.balance) + gas_refund_amount)
   in
 
   (* Transfer miner fees. *)
   let priority_fee_per_gas = Gas.(effective_gas_price - base_fee_per_gas) in
-  let transaction_fee = U256.of_unbounded_exn Gas.(tx_gas_used_after_refund * priority_fee_per_gas) in
+  let transaction_fee = U256.of_uint_exn Gas.(tx_gas_used_after_refund * priority_fee_per_gas) in
   let block_state = transfer_money_and_delete_if_empty block_state transaction_fee header.beneficiary in
 
   (* Destroy deleted accounts. *)

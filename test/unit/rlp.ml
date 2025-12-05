@@ -1,4 +1,6 @@
 open Monad_lib
+open Monad_lib.Byte_string
+
 open Test_utils.Utils
 open QCheck2
 

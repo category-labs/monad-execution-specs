@@ -6,15 +6,14 @@
     parameter result in interchangeable numeric types.
  *)
 
+open Byte_string
+
 exception Domain_error of Z.t
 exception Invalid_operation
 
 module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness.SIG) = struct
   module Impl : sig
     type t
-
-    val byte_width : int option
-    val bit_width : int option
 
     val signed : bool
 
@@ -23,7 +22,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
 
     val in_range : Z.t -> bool
 
-    val of_z_exn : Z.t -> t
+    val of_z_opt : Z.t -> t option
     val of_z_truncating : (Z.t -> t) option
 
     val to_z : t -> Z.t
@@ -32,14 +31,9 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   end = struct
     type t = Z.t
 
-    let byte_width, bit_width =
-      match Byte_width.byte_width with
-      | None -> (None, None)
-      | Some n ->
-          assert (n > 0) ;
-          (Some n, Some (8 * n))
+    let signed = match Signedness.signedness with `Signed -> true | `Unsigned -> false
 
-    let signed = Signedness.signed
+    let bit_width = match Byte_width.byte_width with `Fixed n -> Some (8 * n) | `Variable -> None
 
     let max_t =
       match (bit_width, signed) with
@@ -58,9 +52,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
       let small_enough = match max_t with None -> fun _x -> true | Some max_t -> fun x -> Z.(leq x max_t) in
       fun x -> big_enough x && small_enough x
 
-    let of_z_exn (x : Z.t) =
-      if not (in_range x) then raise (Domain_error x) ;
-      x
+    let of_z_opt (x : Z.t) = if not (in_range x) then None else Some x
 
     let of_z_truncating =
       match (bit_width, signed) with
@@ -75,44 +67,15 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
 
   include Impl
 
+  let of_z_exn (x : Z.t) = match of_z_opt x with None -> raise (Domain_error x) | Some x -> x
+
   let zero = of_z_exn Z.zero
   let one = of_z_exn Z.one
 
-  module Repr = Bytes.Make (Byte_width)
-  let of_bytes_be : Repr.t -> t =
-    match (bit_width, signed) with
-    | Some bits, true ->
-        fun bs ->
-          let x_abs = Z.of_bits (Repr.reverse bs :> string) in
-          let negative = Z.testbit x_abs (bits - 1) in
-          if negative then of_z_exn Z.(zero - x_abs) else of_z_exn x_abs
-    | None, true ->
-        (* Cannot recover sign *)
-        fun _bs -> raise Invalid_operation
-    | _, false ->
-        (* Do not truncate silently *)
-        fun bs -> of_z_exn (Z.of_bits (Repr.reverse bs :> string))
-
-  let to_bytes_be : t -> Repr.t =
-    match Repr.byte_width with
-    | Unbounded -> fun x -> Repr.reverse (Repr.of_byte_string_exn (Z.to_bits (to_z x)))
-    | Bounded byte_width ->
-        fun x ->
-          let z_bytes = Bytes.of_byte_string (Z.to_bits (to_z x)) in
-          let z_n_bytes = Bytes.length z_bytes in
-          Repr.init () (fun i ->
-              (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
-                 time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
-                 code below handles truncating, reversing and optionally zero-padding *)
-              let le_i = byte_width - i - 1 in
-              if le_i >= z_n_bytes then '\x00' else Bytes.(z_bytes.$(le_i)) )
-
-  let to_bytes_le : t -> Repr.t = fun x -> Repr.reverse (to_bytes_be x)
-
   (** [byte ~index-le x] extracts the [i]-th byte from the Little-endian representation of [x]. *)
   let byte ~index_le x =
-    let le_bytes = Bytes.of_byte_string (Z.to_bits (to_z x)) in
-    if index_le >= Bytes.length le_bytes then '\x00' else Bytes.(le_bytes.$(index_le))
+    let le_bytes = Z.to_bits (to_z x) in
+    if index_le >= String.length le_bytes then '\x00' else le_bytes.[index_le]
 
   let significant_bytes x = (Z.numbits (to_z x) + 7) / 8
 
@@ -132,14 +95,13 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   let to_uint64 x = Z.to_int64_unsigned (to_z x)
   let to_int64 x = Z.to_int64 (to_z x)
 
-  (* Will be signed or unsigned depending on the signedness of the module *)
-  let compare (x : t) (y : t) = Z.compare (to_z x) (to_z y)
-  let equal x y = Z.equal (to_z x) (to_z y)
   let hash x = Z.hash (to_z x)
 
   include Comparable.Make (struct
     type t = Impl.t
-    let compare = compare
+
+    (* Will be signed or unsigned depending on the signedness of the module *)
+    let compare (x : t) (y : t) = Z.compare (to_z x) (to_z y)
   end)
 
   let is_zero x = x = zero
@@ -150,21 +112,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   end)
 
   let to_string x = Z.to_string (to_z x)
-  let to_hex_string x =
-    let sign = if x < zero then "-" else "" in
-    Format.sprintf "%s0x%s" sign (Repr.to_hex_string (to_bytes_be x))
-
-  let to_short_hex_string x =
-    let sign = if x < zero then "-" else "" in
-    to_bytes_be x
-    |> Repr.to_seq
-    |> Seq.drop_while Stdlib.(( = ) '\x00')
-    |> Bytes.of_seq
-    |> (fun b ->
-    let len = Bytes.length b in
-    if Stdlib.(len = 0) then Bytes.make 1 '\x00' else b )
-    |> Bytes.to_hex_string
-    |> Format.sprintf "%s0x%s" sign
+  let to_hex_string x = Z.format "%#x" (to_z x)
 
   let of_string s = of_z_exn (Z.of_string s)
   let ( ~@ ) = of_string
@@ -178,7 +126,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
     | `Intlit lit -> ( try Ok (of_string lit) with _ -> parse_error lit )
     | _ -> Error "Expected int or string"
   let of_yojson_exn (x : Yojson.Safe.t) = Result.get_ok (of_yojson x)
-  let to_yojson (x : t) : Yojson.Safe.t = `String (to_short_hex_string x)
+  let to_yojson (x : t) : Yojson.Safe.t = `String (to_hex_string x)
 
   (* JSON conversions for t-indexed maps. *)
   module Map : sig
@@ -263,82 +211,173 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
     let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
     of_z_exn q + if Z.(equal r zero) then zero else one
 
-  (* TODO: have a different type to represent fixed-with byte arrays. *)
+  (*
+  (* Conversions to and from variable-length byte-strings. *)
+  let of_bytes_be : Bytes.t -> t =
+    match (bit_width, signed) with
+    | Some bits, true ->
+        fun bs ->
+          let x_abs = Z.of_bits (Byte_string.reverse bs) in
+          let negative = Z.testbit x_abs Stdlib.(bits - 1) in
+          if negative then of_z_exn Z.(zero - x_abs) else of_z_exn x_abs
+    | None, true ->
+        (* Cannot recover sign *)
+        fun _bs -> raise Invalid_operation
+    | _, false ->
+        (* This should never fail, as Repr.t has the exact byte width of t. *)
+        fun bs -> of_z_exn (Z.of_bits (Byte_string.reverse bs :> string))
+  let to_bytes_be : t -> Repr.t =
+    match byte_width with
+    | None ->
+        fun x ->
+          (* Option.get never fails here as the representation is unbounded. *)
+          Repr.reverse (Option.get (Repr.of_string (Z.to_bits (to_z x))))
+    | Some byte_width ->
+        fun x ->
+          let z_bytes = Z.to_bits (to_z x) in
+          let z_n_bytes = String.length z_bytes in
+          String.init byte_width (fun i ->
+              (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
+                 time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
+                 code below handles truncating, reversing and optionally zero-padding *)
+              let le_i = Stdlib.(byte_width - i - 1) in
+              if Stdlib.(le_i >= z_n_bytes) then '\x00' else z_bytes.[le_i] )
+          |> Repr.of_string
+             (* Option.get never fails here as it's converting from a string of exactly byte_width bytes. *)
+          |> Option.get
+
+  let to_bytes_le : t -> Repr.t = fun x -> Repr.reverse (to_bytes_be x)
+
   let to_rlp (x : t) : Rlp.t =
-    let x_bytes = to_bytes_be x in
+    let x_bytes_le = Byte_string.of_string (Z.to_bits (to_z x)) in
     let sig_bytes = significant_bytes x in
-    let num_bytes = Repr.length x_bytes in
-    let pos = Stdlib.(num_bytes - sig_bytes) in
-    Rlp.Bytes (Bytes.sub (Repr.to_bytes x_bytes) pos sig_bytes)
-  let to_rlp_fixed (x : t) : Rlp.t = Rlp.Bytes (Repr.to_bytes (to_bytes_be x))
-  let of_rlp_exn (x : Rlp.t) =
-    match x with Bytes bs -> of_bytes_be (Repr.of_bytes_exn bs) | List _ -> assert false
+    (* Reverse the first sig_bytes of x. Note that Z.to_bits returns little-endian bits. *)
+    let x_sig_bytes_be = Byte_string.(init sig_bytes (fun i -> x_bytes_le.$(Stdlib.(sig_bytes - 1 - i)))) in
+    Rlp.Bytes x_sig_bytes_be
+   *)
 end
 
-module UintBase = Make (Traits.Byte_width.Unbounded) (Traits.Signedness.Unsigned)
-module IntegerBase = Make (Traits.Byte_width.Unbounded) (Traits.Signedness.Signed)
+module UintBase = Make (Traits.Byte_width.Variable) (Traits.Signedness.Unsigned)
+module IntegerBase = Make (Traits.Byte_width.Variable) (Traits.Signedness.Signed)
 module Uint = struct
   include UintBase
 
   let as_signed (x : t) : IntegerBase.t = IntegerBase.of_z_exn (to_z x)
+
+  let of_bytes_be (bs : Bytes.t) =
+    (* This will never throw, as Z.of_bits always returns a positive integer. *)
+    of_z_exn (Z.of_bits (Bytes.reverse bs))
+  let to_bytes_be (x : t) =
+    let bytes_le = Z.to_bits (to_z x) in
+    let sig_bytes = significant_bytes x in
+    (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
+       time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
+       code below handles truncating and reversing. *)
+    let byte_i i = bytes_le.[Stdlib.(sig_bytes - i - 1)] in
+    Bytes.init sig_bytes byte_i
+
+  let of_rlp (rlp : Rlp.t) : t option = match rlp with Bytes bs -> Some (of_bytes_be bs) | List _ -> None
+  let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
 end
 module Integer = struct
-  include Make (Traits.Byte_width.Unbounded) (Traits.Signedness.Signed)
+  include Make (Traits.Byte_width.Variable) (Traits.Signedness.Signed)
 
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
 end
 
 (** Helper functor to create pairs of signed and unsigned types for a given bit width, together with conversion
     functions via two's complement. *)
-module TwosComplement (B : Traits.Byte_width.SIG) = struct
-  module S = struct
-    include Make (B) (Traits.Signedness.Signed)
-    let bit_width = Option.get bit_width
-    let byte_width = Option.get byte_width
-    let max_t = Option.get max_t
-    let min_t = Option.get min_t
-    let of_z_truncating = Option.get of_z_truncating
-  end
+module TwosComplement (B : sig
+  val byte_width : [> `Fixed of int]
+end) =
+struct
+  module S = Make (B) (Traits.Signedness.Signed)
+  module U = Make (B) (Traits.Signedness.Unsigned)
+  let max_unsigned = U.(Option.get max_t)
+  let min_unsigned = U.(Option.get min_t)
+  let max_signed = S.(Option.get max_t)
+  let min_signed = S.(Option.get min_t)
+  let bit_width, byte_width =
+    match B.byte_width with
+    | `Fixed n ->
+        assert (n > 0) ;
+        (n * 8, n)
 
-  module U = struct
-    include Make (B) (Traits.Signedness.Unsigned)
-    let bit_width = Option.get bit_width
-    let byte_width = Option.get byte_width
-    let max_t = Option.get max_t
-    let min_t = Option.get min_t
-    let of_z_truncating = Option.get of_z_truncating
-  end
-
-  let max_unsigned = U.(to_z max_t)
-  let max_signed = S.(to_z max_t)
   module Signed = struct
     include S
+    module Repr = Byte_string.Fixed (B)
+    let bit_width, byte_width = (bit_width, byte_width)
+    let max_t, min_t = (max_signed, min_signed)
+    let of_z_truncating = Option.get of_z_truncating
+
+    let of_repr (bs : Repr.t) : t =
+      (* This should never throw, as Repr.t is guaranteed to have the same byte-width as t. *)
+      let x_abs = Z.of_bits (Repr.reverse bs :> string) in
+      let negative = Z.testbit x_abs Stdlib.(bit_width - 1) in
+      if negative then of_z_exn Z.(zero - x_abs) else of_z_exn x_abs
+
+    let to_repr (x : t) : Repr.t =
+      let z_bytes = Z.to_bits (to_z x) in
+      let z_n_bytes = String.length z_bytes in
+      Repr.init (fun i ->
+          (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
+                 time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
+                 code below handles truncating, reversing and optionally zero-padding *)
+          let le_i = Stdlib.(byte_width - i - 1) in
+          if Stdlib.(le_i >= z_n_bytes) then '\x00' else z_bytes.[le_i] )
 
     (** [as_unsigned x] reinterprets the binary representation of [x] (in two's complement) as an unsigned
         integer of the same bit-width. *)
     let as_unsigned (x : t) : U.t =
       let x = to_z x in
-      U.of_z_exn Z.(if geq x zero then x else max_unsigned + x + one)
+      U.of_z_exn Z.(if geq x zero then x else U.to_z max_unsigned + x + one)
   end
+
   module Unsigned = struct
     include U
+    module Repr = Byte_string.Fixed (B)
+    let bit_width, byte_width = (bit_width, byte_width)
+    let max_t, min_t = (max_unsigned, min_unsigned)
+    let of_z_truncating = Option.get of_z_truncating
+
+    let of_repr (bs : Repr.t) : t =
+      (* This should never throw, as Repr.t is guaranteed to have the same byte-width as t. *)
+      of_z_exn (Z.of_bits (Byte_string.Bytes.reverse (bs :> string)))
+
+    let to_repr (x : t) : Repr.t =
+      let z_bytes = Z.to_bits (to_z x) in
+      let z_n_bytes = String.length z_bytes in
+      Repr.init (fun i ->
+          (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
+                 time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
+                 code below handles truncating, reversing and optionally zero-padding *)
+          let le_i = Stdlib.(byte_width - i - 1) in
+          if Stdlib.(le_i >= z_n_bytes) then '\x00' else z_bytes.[le_i] )
+    let to_repr_bytes (x : t) : Bytes.t = Repr.to_bytes (to_repr x)
 
     (** [as_signed x] reinterprets the binary representation of [x] as a two's complement signed integer
         of the same bit-width. *)
     let as_signed (x : t) : Signed.t =
       let x = to_z x in
-      Signed.of_z_exn Z.(if leq x max_signed then x else x - max_unsigned - one)
+      Signed.of_z_exn Z.(if leq x (S.to_z max_signed) then x else x - U.to_z max_unsigned - one)
 
     (** [sign_extend i x] fills the bytes after [i] with the most significant bit of the [i]th bit of x. *)
     let sign_extend byte_i (x : t) : Signed.t =
       let bit_i = Stdlib.(7 + (8 * byte_i)) in
       Signed.of_z_exn (Z.signed_extract (to_z x) 0 Stdlib.(1 + bit_i))
 
-    let to_unbounded (x : t) : Uint.t = Uint.of_z_exn (to_z x)
-    let of_unbounded_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
-    let of_unbounded_truncating (x : Uint.t) : t = of_z_truncating (Uint.to_z x)
+    let to_uint (x : t) : Uint.t = Uint.of_z_exn (to_z x)
+    let of_uint_opt (x : Uint.t) = of_z_opt (Uint.to_z x)
+    let of_uint_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
+    let of_uint_truncating (x : Uint.t) : t = of_z_truncating (Uint.to_z x)
 
     let of_signed_int (x : int) = Signed.(as_unsigned ~$x)
+
+    let to_rlp (x : t) = Uint.to_rlp (to_uint x)
+    let of_rlp (rlp : Rlp.t) =
+      Option.(
+        let$ uint = Uint.of_rlp rlp in
+        of_uint_opt uint )
   end
 end
 

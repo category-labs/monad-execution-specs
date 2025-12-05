@@ -48,7 +48,7 @@ let round_trip_hp_ok (nibbles, flag) =
 let test_case_of_fixture (name, fixture) =
   let open Fixtures.TrieTest in
   let root' = (Mpt.of_seq (List.to_seq fixture.entries)).root_hash in
-  Alcotest.(test_case name `Quick (fun () -> check' u256 ~msg:"Root" ~expected:fixture.root ~actual:root'))
+  Alcotest.(test_case name `Quick (fun () -> check' b32 ~msg:"Root" ~expected:fixture.root ~actual:root'))
 
 let test_fixture_file ?(hash_keys = false) file =
   (* TODO: do something disciplined about paths *)

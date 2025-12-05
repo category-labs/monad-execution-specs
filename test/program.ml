@@ -3,6 +3,7 @@
 open Monad_lib
 open Monad_lib.Opcode
 open Monad_lib.Numeric
+open Monad_lib.Byte_string
 
 let to_bytecode (opcodes : Opcode.t list) : Bytes.t =
   List.to_seq opcodes |> Seq.map Opcode.to_byte |> Bytes.of_seq
@@ -10,7 +11,7 @@ let to_bytecode (opcodes : Opcode.t list) : Bytes.t =
 let push (w : U256.t) =
   let significant_bytes = U256.significant_bytes w in
   Opcode.to_bytes (Push significant_bytes)
-  ^ Bytes.sub (U256.to_bytes_be w) (32 - significant_bytes) significant_bytes
+  ^ Bytes.sub (U256.to_repr_bytes w) (32 - significant_bytes) significant_bytes
 
 type stack_value = Lit of U256.t | Pop
 

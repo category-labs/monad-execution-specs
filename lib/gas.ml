@@ -2,6 +2,7 @@
     unsigned integers [Uint.t]. *)
 
 open Numeric
+open Byte_string
 open Chain.Ethereum
 
 (* Bring Uint into scope so the operators are all available to users *)
