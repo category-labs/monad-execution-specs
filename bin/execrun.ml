@@ -112,7 +112,7 @@ let test_case_to_yojson fixture =
     let blocks =
       to_list fixture_json.$("blocks")
       |> List.map (fun b ->
-          let block = match (Block.of_yojson b) with | Ok b -> b | Error err -> failwith err in
+          let block = match Block.of_yojson b with Ok b -> b | Error err -> failwith err in
           let rlp = Rlp.encode (Block.to_rlp block) in
           b.$("rlp") <- Bytes.to_yojson rlp )
       |> fun bs -> `List bs

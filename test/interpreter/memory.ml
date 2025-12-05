@@ -49,8 +49,7 @@ let () =
           in
           test_case
             (Format.sprintf "Mload(%s); Mload(%s); Mload(%s)" (U256.to_hex_string write_key)
-               (U256.to_hex_string read_key_before)
-               (U256.to_hex_string read_key_after) )
+               (U256.to_hex_string read_key_before) (U256.to_hex_string read_key_after) )
             `Quick
             (fun () ->
               test_bytecode_pure ~input_stack:[]

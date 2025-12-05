@@ -5,26 +5,26 @@ module Byte_width = struct
 
   (* 2048 bits, used for Bloom filters *)
   module Bytes256 = struct
-    let byte_width : [>`Fixed of int] = `Fixed 256
+    let byte_width : [> `Fixed of int] = `Fixed 256
   end
 
   (* 256 bits *)
   module Bytes32 = struct
-    let byte_width : [>`Fixed of int] = `Fixed 32
+    let byte_width : [> `Fixed of int] = `Fixed 32
   end
 
   (* 160 bits *)
   module Bytes20 = struct
-    let byte_width : [>`Fixed of int] = `Fixed 20
+    let byte_width : [> `Fixed of int] = `Fixed 20
   end
 
   (* 64 bits *)
   module Bytes8 = struct
-    let byte_width : [>`Fixed of int] = `Fixed 8
+    let byte_width : [> `Fixed of int] = `Fixed 8
   end
 
   module Variable = struct
-    let byte_width : [>`Variable] = `Variable
+    let byte_width : [> `Variable] = `Variable
   end
 end
 
