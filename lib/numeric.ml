@@ -326,6 +326,9 @@ struct
     let of_uint_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
     let of_uint_truncating (x : Uint.t) : t = of_z_truncating (Uint.to_z x)
 
+    let of_bytes_be_exn (bs : Bytes.t) = of_uint_exn (Uint.of_bytes_be bs)
+    let to_bytes_be (x : t) = Uint.to_bytes_be (to_uint x)
+
     let of_signed_int (x : int) = Signed.(as_unsigned ~$x)
 
     let to_rlp (x : t) = Uint.to_rlp (to_uint x)
