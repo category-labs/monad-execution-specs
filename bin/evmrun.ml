@@ -1,5 +1,6 @@
 open Monad_lib
-open Monad_lib.Numeric
+open Numeric
+open Byte_string
 open Chain.Ethereum
 
 let usage_str =
@@ -54,7 +55,7 @@ let msg =
       ; sender = Address.zero
       ; input_data = calldata
       ; value = U256.of_int 1000
-      ; create2_salt = U256.zero
+      ; create2_salt = B32.zeros
       ; code_address = Address.zero
       ; code = bytecode } )
 

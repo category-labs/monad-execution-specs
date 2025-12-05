@@ -2,24 +2,24 @@
     Work in progress, will be expanded as needed. *)
 open Numeric
 
+open Byte_string
+
 module Address = struct
-  include Bytes.B20
+  include B20
 
-  type create2_params = {salt : Bytes.B32.t; code : Bytes.t}
+  type create2_params = {salt : B32.t; code : Bytes.t}
 
-  let zero = init () (fun _ -> '\x00')
+  let zero = init (fun _ -> '\x00')
 
   let to_rlp (addr : t) = Rlp.Bytes (to_bytes addr)
 
-  let of_bytes32_truncating (bs : Bytes.B32.t) : t = init () (fun i -> Bytes.B32.(bs.$(i + 32 - 20)))
-  let to_bytes32 (addr : t) : Bytes.B32.t =
-    Bytes.B32.init () (fun i -> if Stdlib.(i < 32 - 20) then '\x00' else addr.$(i - 32 + 20))
+  let of_bytes32_truncating (bs : B32.t) : t = init (fun i -> B32.(bs.$(i + 32 - 20)))
+  let to_bytes32 (addr : t) : B32.t =
+    B32.init (fun i -> if Stdlib.(i < 32 - 20) then '\x00' else addr.$(i - 32 + 20))
 
   (* Frequently used in the VM to read and write addresses (Bytes.B20.t) as stack elements (U256.t). *)
-  let of_u256_truncating (x : U256.t) : t =
-    of_bytes32_truncating (U256.to_bytes_be x)
-  let to_u256 (addr : t) =
-    U256.of_bytes_be (to_bytes32 addr)
+  let of_u256_truncating (x : U256.t) : t = of_bytes32_truncating (U256.to_repr x)
+  let to_u256 (addr : t) = U256.of_repr (to_bytes32 addr)
 
   (* YP (95) *)
   let of_contract_creation ~(sender : t) ~nonce ~create2 =
@@ -30,9 +30,9 @@ module Address = struct
          | Some {salt; code} ->
              Bytes.(
                of_char '\xff'
-               ^ Bytes.B20.to_bytes sender
-               ^ Bytes.B32.to_bytes salt
-               ^ Bytes.B32.to_bytes (Crypto.keccak_256 code) ) ) )
+               ^ B20.to_bytes sender
+               ^ B32.to_bytes salt
+               ^ B32.to_bytes (Crypto.keccak_256 code) ) ) )
 end
 
 module Revision = struct
@@ -90,7 +90,7 @@ end
 
 module Transaction = struct
   module Access = struct
-    type t = {address : Address.t (* E_a *); storage_keys : Bytes.B32.t list [@tag "storageKeys"] (* E_s *)}
+    type t = {address : Address.t (* E_a *); storage_keys : B32.t list [@tag "storageKeys"] (* E_s *)}
     [@@deriving yojson]
 
     let to_rlp {address; storage_keys} =
@@ -305,7 +305,7 @@ module Transaction = struct
   let encode tx =
     match kind_tag tx with
     | `Legacy -> Rlp.encode (to_rlp tx)
-    | tag -> Bytes.(kind_tag_to_bytes tag ^ Rlp.encode (to_rlp tx))
+    | tag -> kind_tag_to_bytes tag ^ Rlp.encode (to_rlp tx)
 
   let signing_hash chain_id tx =
     let bytes =
@@ -336,52 +336,49 @@ module Transaction = struct
       | AccessList tx ->
           assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-2930 *)
-          Bytes.(
-            kind_tag_to_bytes `AccessList
-            ^ Rlp.encode
-                (Rlp.List
-                   [ Uint.to_rlp chain_id
-                   ; U256.to_rlp tx.nonce
-                   ; Uint.to_rlp tx.gas_price
-                   ; Uint.to_rlp tx.gas_limit
-                   ; Address.to_rlp tx.to_
-                   ; U256.to_rlp tx.value
-                   ; Rlp.Bytes tx.data
-                   ; Rlp.List (List.map Access.to_rlp tx.access_list) ] ) )
+          kind_tag_to_bytes `AccessList
+          ^ Rlp.encode
+              (Rlp.List
+                 [ Uint.to_rlp chain_id
+                 ; U256.to_rlp tx.nonce
+                 ; Uint.to_rlp tx.gas_price
+                 ; Uint.to_rlp tx.gas_limit
+                 ; Address.to_rlp tx.to_
+                 ; U256.to_rlp tx.value
+                 ; Rlp.Bytes tx.data
+                 ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
       | FeeMarket tx ->
           assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-1559 *)
-          Bytes.(
-            kind_tag_to_bytes `FeeMarket
-            ^ Rlp.encode
-                (Rlp.List
-                   [ Uint.to_rlp chain_id
-                   ; U256.to_rlp tx.nonce
-                   ; Uint.to_rlp tx.max_priority_fee_per_gas
-                   ; Uint.to_rlp tx.max_fee_per_gas
-                   ; Uint.to_rlp tx.gas_limit
-                   ; Address.to_rlp tx.to_
-                   ; U256.to_rlp tx.value
-                   ; Rlp.Bytes tx.data
-                   ; Rlp.List (List.map Access.to_rlp tx.access_list) ] ) )
+          kind_tag_to_bytes `FeeMarket
+          ^ Rlp.encode
+              (Rlp.List
+                 [ Uint.to_rlp chain_id
+                 ; U256.to_rlp tx.nonce
+                 ; Uint.to_rlp tx.max_priority_fee_per_gas
+                 ; Uint.to_rlp tx.max_fee_per_gas
+                 ; Uint.to_rlp tx.gas_limit
+                 ; Address.to_rlp tx.to_
+                 ; U256.to_rlp tx.value
+                 ; Rlp.Bytes tx.data
+                 ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
       | Blob tx ->
           assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-4844 *)
-          Bytes.(
-            kind_tag_to_bytes `Blob
-            ^ Rlp.encode
-                (Rlp.List
-                   [ Uint.to_rlp chain_id
-                   ; U256.to_rlp tx.nonce
-                   ; Uint.to_rlp tx.max_priority_fee_per_gas
-                   ; Uint.to_rlp tx.max_fee_per_gas
-                   ; Uint.to_rlp tx.gas_limit
-                   ; Address.to_rlp tx.to_
-                   ; U256.to_rlp tx.value
-                   ; Rlp.Bytes tx.data
-                   ; Rlp.List (List.map Access.to_rlp tx.access_list)
-                   ; U256.to_rlp tx.max_fee_per_blob_gas
-                   ; Rlp.List (List.map U256.to_rlp tx.blob_versioned_hashes) ] ) )
+          kind_tag_to_bytes `Blob
+          ^ Rlp.encode
+              (Rlp.List
+                 [ Uint.to_rlp chain_id
+                 ; U256.to_rlp tx.nonce
+                 ; Uint.to_rlp tx.max_priority_fee_per_gas
+                 ; Uint.to_rlp tx.max_fee_per_gas
+                 ; Uint.to_rlp tx.gas_limit
+                 ; Address.to_rlp tx.to_
+                 ; U256.to_rlp tx.value
+                 ; Rlp.Bytes tx.data
+                 ; Rlp.List (List.map Access.to_rlp tx.access_list)
+                 ; U256.to_rlp tx.max_fee_per_blob_gas
+                 ; Rlp.List (List.map U256.to_rlp tx.blob_versioned_hashes) ] )
     in
     let hash = Crypto.keccak_256 bytes in
     hash
@@ -394,7 +391,7 @@ module Transaction = struct
       match tx with
       | Legacy {v; _} ->
           if U256.(v = ~$27 || v = ~$28) then U256.(v - ~$27)
-          else (* EIP-155 *) U256.(v - ~$35 - (~$2 * U256.of_unbounded_exn chain_id))
+          else (* EIP-155 *) U256.(v - ~$35 - (~$2 * U256.of_uint_exn chain_id))
       | AccessList {y_parity; _} | FeeMarket {y_parity; _} | Blob {y_parity; _} -> y_parity
     in
     assert (U256.(y_parity <= ~$1)) ;
@@ -439,9 +436,9 @@ module Block = struct
       { parent_hash : U256.t (* H_p *) [@key "parentHash"]
       ; ommers_hash : U256.t (* H_o *) [@key "uncleHash"]
       ; beneficiary : Address.t (* H_c *) [@key "coinbase"]
-      ; state_root : Bytes.B32.t (* H_r *) [@key "stateRoot"]
-      ; transactions_root : Bytes.B32.t (* H_t *) [@key "transactionsTrie"]
-      ; receipts_root : Bytes.B32.t (* H_e *) [@key "receiptTrie"]
+      ; state_root : B32.t (* H_r *) [@key "stateRoot"]
+      ; transactions_root : B32.t (* H_t *) [@key "transactionsTrie"]
+      ; receipts_root : B32.t (* H_e *) [@key "receiptTrie"]
       ; logs_bloom : Bloom.t (* H_b *) [@key "bloom"]
       ; difficulty : Uint.t (* H_d *) [@key "difficulty"]
       ; number : Uint.t (* H_i *) [@key "number"]
@@ -449,14 +446,14 @@ module Block = struct
       ; gas_used : Uint.t (* H_g *) [@key "gasUsed"]
       ; timestamp : U256.t (* H_s *) [@key "timestamp"]
       ; extra_data : Bytes.t (* H_x *) [@key "extraData"]
-      ; prev_randao : Bytes.B32.t (* H_a *) [@key "mixHash"]
+      ; prev_randao : B32.t (* H_a *) [@key "mixHash"]
       ; nonce : U64.t (* H_n *) [@key "nonce"]
       ; base_fee_per_gas : Uint.t (* H_f *) [@key "baseFeePerGas"]
-      ; withdrawals_root : Bytes.B32.t (* H_w *) [@key "withdrawalsRoot"]
+      ; withdrawals_root : B32.t (* H_w *) [@key "withdrawalsRoot"]
       ; blob_gas_used : U64.t (* EIP-4844 *) [@key "blobGasUsed"]
       ; excess_blob_gas : U64.t (* EIP-4844 *) [@key "excessBlobGas"]
-      ; parent_beacon_block_root : Bytes.B32.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
-      ; requests_hash : Bytes.B32.t (* EIP-7685 *) [@key "requestsHash"] }
+      ; parent_beacon_block_root : B32.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
+      ; requests_hash : B32.t (* EIP-7685 *) [@key "requestsHash"] }
     [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}]
 
     (* YP 4.4.3 (40) *)
@@ -513,20 +510,20 @@ end
 
 module Log = struct
   (* YP 4.4.1 (28) *)
-  type t = {address : Address.t (* O_a *); topics : Bytes.B32.t list (* O_t *); data : Bytes.t (* O_d *)}
+  type t = {address : Address.t (* O_a *); topics : B32.t list (* O_t *); data : Bytes.t (* O_d *)}
   [@@deriving yojson]
 
   (* YP (30) *)
   let to_bloom (log : t) : Bloom.t =
     let entries = Address.to_bytes32 log.address :: log.topics in
     List.fold_left
-      (fun bloom entry -> Bloom.(logor bloom (of_bytes (Bytes.B32.to_bytes entry))))
+      (fun bloom entry -> Bloom.(logor bloom (hash_bytes (B32.to_bytes entry))))
       Bloom.zeros entries
 
   let to_rlp {address; topics; data} =
     Rlp.List
       [ Address.to_rlp address
-      ; Rlp.List (List.map (fun bs -> Rlp.Bytes (Bytes.B32.to_bytes bs)) topics)
+      ; Rlp.List (List.map (fun bs -> Rlp.Bytes (B32.to_bytes bs)) topics)
       ; Rlp.Bytes data ]
 end
 
@@ -553,19 +550,19 @@ module Receipt = struct
   let encode (receipt : t) =
     match receipt.tx_type with
     | `Legacy -> Rlp.encode (to_rlp receipt)
-    | tag -> Bytes.(Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt))
+    | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
 module Account = struct
   type t =
     { nonce : U256.t (* σ[a]_n *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : Bytes.B32.t Bytes.B32.Map.t (* σ[a]_s *)
+    ; storage : B32.t B32.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
 
-  let empty = {balance = U256.zero; storage = Bytes.B32.Map.empty; code = Bytes.empty; nonce = U256.zero}
+  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U256.zero}
 
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = balance = U256.zero && nonce = U256.zero && code = Bytes.empty
@@ -574,10 +571,10 @@ module Account = struct
     let storage_root =
       let mpt =
         storage
-        |> Bytes.B32.Map.to_seq
+        |> B32.Map.to_seq
         |> Seq.map (fun (k, v) ->
             (* YP (8) *)
-            (Bytes.B32.to_bytes (Crypto.keccak_256 (Bytes.B32.to_bytes k)), Bytes.B32.to_bytes v) )
+            (B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)), B32.to_bytes v) )
         |> Mpt.of_seq
       in
       mpt.root_hash

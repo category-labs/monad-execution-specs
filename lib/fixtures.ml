@@ -1,4 +1,5 @@
 open Chain.Ethereum
+open Byte_string
 open Numeric
 open Yojson.Safe.Util
 
@@ -20,7 +21,7 @@ let object_as_alist_to_yojson value_to_yojson (alist : 'v object_as_alist) : Yoj
 (* Safe (non-throwing) conversions from hex strings to bytes. *)
 let bytes_of_hex_string str = try Ok (Bytes.of_hex_string str) with _ -> Error "Fixtures.hex_or_string"
 let hex_or_string str =
-  if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok (Bytes.of_byte_string str)
+  if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
 
 module StateTest = struct end
 module BlockchainTest = struct
@@ -81,7 +82,7 @@ module TrieTest = struct
       let read = if hex_encoded then bytes_of_hex_string else hex_or_string in
       let of_kv (k, v) : (entry, string) result =
         let$ k = read k in
-        let key = if hash_keys then Bytes.B32.to_bytes (Crypto.keccak_256 k) else k in
+        let key = if hash_keys then B32.to_bytes (Crypto.keccak_256 k) else k in
         let$ value =
           match v with
           | `String str -> hex_or_string str
@@ -98,10 +99,10 @@ module TrieTest = struct
             | _ -> fail "Fixtures.TrieTest.entry_list" )
       | _ -> fail "Fixtures.TrieTest.test_case.entries" )
 
-  type test_case = {ordered : bool; entries : entry list; root : U256.t}
+  type test_case = {ordered : bool; entries : entry list; root : B32.t}
   let test_case_of_yojson ~hex_encoded ~hash_keys (json : Yojson.Safe.t) : (test_case, string) result =
     Result.(
-      let$ root = U256.of_yojson json.$("root") in
+      let$ root = B32.of_yojson json.$("root") in
       let entries = json.$("in") in
       let$ ordered =
         match entries with

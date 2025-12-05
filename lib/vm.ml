@@ -1,4 +1,5 @@
 open Numeric
+open Byte_string
 open Lens.Infix
 
 module Memory : sig
@@ -29,7 +30,7 @@ end = struct
   (** Check that the index start + size - 1 does not exceed the active bytes. Memory must be extended
      by a call to [extend_to] beforehand. *)
   let active_bytes_overflow_check mem start size_bytes =
-    assert (Uint.(mem.active_bytes >= U256.(to_unbounded start) + U256.(to_unbounded size_bytes)))
+    assert (Uint.(mem.active_bytes >= U256.(to_uint start) + U256.(to_uint size_bytes)))
 
   let read_block_at start size (mem : t) =
     if U256.(size = zero) then Bytes.empty
@@ -41,7 +42,7 @@ end = struct
           U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' ) )
 
   let read_word_at pos (mem : t) =
-    read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_bytes_be
+    read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
 
   let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
     let size = U256.of_int (Bytes.length bytes) in
@@ -51,12 +52,12 @@ end = struct
       active_bytes_overflow_check mem pos size ;
       let contents =
         Seq.take (Bytes.length bytes) (Seq.ints 0)
-        |> Seq.map (fun i -> (U256.(pos + ~$i), Bytes.(bytes.$(i))))
+        |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
         |> fun entries -> U256.Map.add_seq entries mem.contents
       in
       {mem with contents} )
 
-  let write_word_at pos w = U256.to_bytes_be w |> U256.Repr.to_bytes |> write_block_at pos
+  let write_word_at pos w = U256.to_repr w |> U256.Repr.to_bytes |> write_block_at pos
 
   let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
 
@@ -69,7 +70,7 @@ end = struct
     else
       (* Round up to whole words. *)
       let active_words =
-        Uint.(bytes_to_whole_words (U256.to_unbounded start + U256.to_unbounded size_bytes))
+        Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes))
       in
       let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
       {mem with active_bytes}
@@ -78,8 +79,8 @@ end = struct
     (* Write one word at a time *)
     let rec loop pos =
       if Uint.(pos < mem.active_bytes) then (
-        Format.printf "%s: %s\n" (Uint.to_short_hex_string pos)
-          (Bytes.to_hex_string (read_block_at (U256.of_unbounded_exn pos) U256.(~$32) mem)) ;
+        Format.printf "%s: %s\n" (Uint.to_hex_string pos)
+          (Bytes.to_hex_string (read_block_at (U256.of_uint_exn pos) U256.(~$32) mem)) ;
         loop Uint.(pos + ~$32) )
     in
     loop Uint.zero
@@ -154,7 +155,7 @@ module ExecutionEnvironment = struct
     ; header : ExecutionBlockHeader.t (* I_H *)
     ; depth : int (* I_e *)
     ; write_permission : bool (* I_w *)
-    ; blob_versioned_hashes : Bytes.B32.t list (* EIP-4844 *)
+    ; blob_versioned_hashes : B32.t list (* EIP-4844 *)
     ; blob_base_fee : U256.t (* EIP-7516 *) }
   [@@deriving lens {submodule = true; prefix = true}]
   include TLens
@@ -188,7 +189,7 @@ module Context = struct
     let rec loop i valid_destinations =
       if i >= Bytes.length code then valid_destinations
       else
-        match Bytes.(code.$(i)) with
+        match code.[i] with
         | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
         | '\x60' .. '\x7f' as opcode ->
             let push_bytes = Char.code opcode - 0x60 + 1 in
@@ -252,13 +253,13 @@ struct
 
       let get_storage addr key =
         host_trace (fun () ->
-            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr) (Bytes.B32.to_short_hex_string key) ) ;
+            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr) (B32.to_short_hex_string key) ) ;
         Base.get_storage addr key
 
       let set_storage addr key v =
         host_trace (fun () ->
-            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr) (Bytes.B32.to_short_hex_string key)
-              (Bytes.B32.to_short_hex_string v) ) ;
+            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr) (B32.to_short_hex_string key)
+              (B32.to_short_hex_string v) ) ;
         Base.set_storage addr key v
 
       let get_balance addr =
@@ -271,7 +272,7 @@ struct
 
       let access_storage addr key =
         host_trace (fun () ->
-            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr) (Bytes.B32.to_short_hex_string key) ) ;
+            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr) (B32.to_short_hex_string key) ) ;
         Base.access_storage addr key
 
       let get_code_size addr =
@@ -308,20 +309,20 @@ struct
         host_trace (fun () ->
             Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr) (Bytes.to_short_hex_string data)
               (List.fold_left
-                 (fun acc topic -> Format.sprintf "%s, %s" acc (Bytes.B32.to_short_hex_string topic))
+                 (fun acc topic -> Format.sprintf "%s, %s" acc (B32.to_short_hex_string topic))
                  "" topics ) ) ;
         Base.emit_log addr ~data ~topics
 
       let get_transient_storage addr key =
         host_trace (fun () ->
             Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
-              (Bytes.B32.to_short_hex_string key) ) ;
+              (B32.to_short_hex_string key) ) ;
         Base.get_transient_storage addr key
 
       let set_transient_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
-              (Bytes.B32.to_short_hex_string key) (Bytes.B32.to_short_hex_string v) ) ;
+              (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
         Base.set_transient_storage addr key v
     end
   end
@@ -762,13 +763,13 @@ struct
       spend
         Gas.(
           keccak256_base_cost
-          + (keccak256_cost_per_word * U256.to_unbounded num_hashed_words)
+          + (keccak256_cost_per_word * U256.to_uint num_hashed_words)
           + memory_extension_gas )
     in
 
     (* Operation *)
     let$ bytes = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
-    let$ () = push (U256.of_bytes_be (Crypto.keccak_256 bytes)) in
+    let$ () = push (U256.of_repr (Crypto.keccak_256 bytes)) in
 
     (* PC *)
     increase_pc_and_continue
@@ -821,7 +822,7 @@ struct
       push
         ( match U256.to_int_opt i with
         | None -> U256.zero (* Index exceeds max theoretical data size *)
-        | Some i -> U256.of_bytes_be (Bytes.B32.sub_with_zero_padding data i ()) )
+        | Some i -> U256.of_repr (B32.sub_with_zero_padding data i) )
     in
 
     (* PC *)
@@ -842,7 +843,7 @@ struct
     let$ size_bytes = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let n_words = U256.(to_uint (bytes_to_whole_words size_bytes)) in
     let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
@@ -889,7 +890,7 @@ struct
 
     (* Gas *)
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account address in
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let n_words = U256.(to_uint (bytes_to_whole_words size_bytes)) in
     let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
     let$ () = spend Gas.((n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
 
@@ -916,7 +917,7 @@ struct
 
     (* Operation *)
     let$ hash = HostAPI.get_code_hash address in
-    let$ () = push (U256.of_bytes_be hash) in
+    let$ () = push (U256.of_repr hash) in
 
     (* PC *)
     increase_pc_and_continue
@@ -943,7 +944,7 @@ struct
       | Some start, Some sz -> return (start, sz)
     in
 
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let n_words = U256.(to_uint (bytes_to_whole_words size_bytes)) in
     let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
@@ -956,16 +957,16 @@ struct
 
   let blockhash =
     (* Stack *)
-    let$ block_num = U256.to_unbounded <$> pop in
+    let$ block_num = U256.to_uint <$> pop in
 
     (* Gas *)
     let$ () = spend Gas.block_hash_cost in
 
     (* Operation *)
-    let$ current_block_num = U256.to_unbounded <$> !(execution_environment |-- header |-- number) in
+    let$ current_block_num = U256.to_uint <$> !(execution_environment |-- header |-- number) in
     let$ hash =
       if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then return U256.zero
-      else U256.of_bytes_be <$> HostAPI.get_block_hash (Uint.to_int64 block_num)
+      else U256.of_repr <$> HostAPI.get_block_hash (Uint.to_int64 block_num)
     in
     let$ () = push hash in
 
@@ -1018,7 +1019,7 @@ struct
     let hash =
       match U256.to_int_opt index with
       | None -> U256.zero
-      | Some i -> ( match List.nth_opt hashes i with None -> U256.zero | Some h -> U256.of_bytes_be h )
+      | Some i -> ( match List.nth_opt hashes i with None -> U256.zero | Some h -> U256.of_repr h )
     in
     let$ () = push hash in
 
@@ -1060,7 +1061,7 @@ struct
     let$ here = U256.to_int <$> !(machine_state |-- pc) in
     let$ code = !(execution_environment |-- bytecode) in
     let$ () =
-      push (U256.of_unbounded_exn (Uint.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)))
+      push (U256.of_uint_exn (Uint.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)))
     in
 
     (* PC *)
@@ -1165,11 +1166,11 @@ struct
 
     (* Gas *)
     let$ self_addr = self in
-    let$ access = HostAPI.access_storage self_addr (U256.to_bytes_be key) in
+    let$ access = HostAPI.access_storage self_addr (U256.to_repr key) in
     let$ () = spend Gas.(match access with `Cold -> cold_sload_cost | `Warm -> warm_access_cost) in
 
     (* Operation *)
-    let$ value = U256.of_bytes_be <$> HostAPI.get_storage self_addr (U256.to_bytes_be key) in
+    let$ value = U256.of_repr <$> HostAPI.get_storage self_addr (U256.to_repr key) in
     let$ () = push value in
 
     (* PC *)
@@ -1190,9 +1191,9 @@ struct
        costs. *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ storage_status = HostAPI.set_storage self_addr (U256.to_bytes_be key) (U256.to_bytes_be value') in
+    let$ storage_status = HostAPI.set_storage self_addr (U256.to_repr key) (U256.to_repr value') in
 
-    let$ access = HostAPI.access_storage self_addr (U256.to_bytes_be key) in
+    let$ access = HostAPI.access_storage self_addr (U256.to_repr key) in
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
       match storage_status with
@@ -1254,7 +1255,7 @@ struct
 
   let msize =
     fetch_environment_variable_opcode_impl (fun ctx ->
-        U256.of_unbounded_truncating Uint.(~$32 * Memory.active_words ctx.machine_state.memory) )
+        U256.of_uint_truncating Uint.(~$32 * Memory.active_words ctx.machine_state.memory) )
 
   let gas_ =
     (* Stack *)
@@ -1263,7 +1264,7 @@ struct
 
     (* Operation *)
     let$ current_gas = !(machine_state |-- gas) in
-    let$ () = push (U256.of_unbounded_truncating current_gas) in
+    let$ () = push (U256.of_uint_truncating current_gas) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1286,7 +1287,7 @@ struct
 
     (* Operation *)
     let$ self_addr = self in
-    let$ value = U256.of_bytes_be <$> HostAPI.get_transient_storage self_addr (U256.to_bytes_be key) in
+    let$ value = U256.of_repr <$> HostAPI.get_transient_storage self_addr (U256.to_repr key) in
     let$ () = push value in
 
     (* PC *)
@@ -1303,7 +1304,7 @@ struct
     (* Operation *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ () = HostAPI.set_transient_storage self_addr (U256.to_bytes_be key) (U256.to_bytes_be value) in
+    let$ () = HostAPI.set_transient_storage self_addr (U256.to_repr key) (U256.to_repr value) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1315,7 +1316,7 @@ struct
     let$ size_bytes = pop in
 
     (* Gas *)
-    let n_words = U256.(to_unbounded (bytes_to_whole_words size_bytes)) in
+    let n_words = U256.(to_uint (bytes_to_whole_words size_bytes)) in
     let$ memory_extension_gas = extend_memory_to ~start:U256.(max src_start dst_start) ~size_bytes in
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
@@ -1332,8 +1333,8 @@ struct
     let$ start = pop in
     let$ size_bytes = pop in
 
-    let$ topics : Bytes.B32.t list =
-      List.of_seq <$> (Seq.(take n_topics (ints 0)) |> Seq.mapM ~f:(fun _ -> U256.to_bytes_be <$> pop))
+    let$ topics : B32.t list =
+      List.of_seq <$> (Seq.(take n_topics (ints 0)) |> Seq.mapM ~f:(fun _ -> U256.to_repr <$> pop))
     in
 
     (* Gas *)
@@ -1342,7 +1343,7 @@ struct
       spend
         Gas.(
           log_cost
-          + (log_cost_per_byte * U256.to_unbounded size_bytes)
+          + (log_cost_per_byte * U256.to_uint size_bytes)
           + (log_cost_per_topic * ~$n_topics)
           + memory_extension_gas )
     in
@@ -1383,7 +1384,7 @@ struct
 
     let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
     if new_depth > max_stack_depth then
-      let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g + U256.to_unbounded call_gas)) in
+      let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g + U256.to_uint call_gas)) in
       push U256.zero
     else
       let$ input_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
@@ -1400,7 +1401,7 @@ struct
             ; sender
             ; input_data
             ; value
-            ; create2_salt = Bytes.B32.zero
+            ; create2_salt = B32.zeros
             ; code_address
             ; code = Bytes.empty } )
       in
@@ -1421,7 +1422,7 @@ struct
 
   let generic_create_impl
       ~(kind : Evmc.Message.CallKind.t)
-      ~(create2_salt : Bytes.B32.t)
+      ~(create2_salt : B32.t)
       ~(endowment : U256.t)
       ~(input_start : U256.t)
       ~(input_size_bytes : U256.t) =
@@ -1478,12 +1479,12 @@ struct
         Gas.(
           memory_extension_gas
           + create_cost
-          + (create_cost_per_initcode_word * U256.(to_unbounded (bytes_to_whole_words input_size_bytes))) )
+          + (create_cost_per_initcode_word * U256.(to_uint (bytes_to_whole_words input_size_bytes))) )
     in
 
     (* Operation *)
     let$ () =
-      generic_create_impl ~create2_salt:Bytes.B32.zero ~kind:Evmc.Message.CallKind.Create ~endowment ~input_start
+      generic_create_impl ~create2_salt:B32.zeros ~kind:Evmc.Message.CallKind.Create ~endowment ~input_start
         ~input_size_bytes
     in
 
@@ -1554,7 +1555,7 @@ struct
         machine_state |-- output_buffer := Bytes.empty
       else
         generic_call_impl ~kind
-          ~call_gas:U256.(of_unbounded_exn callee_available_gas)
+          ~call_gas:U256.(of_uint_exn callee_available_gas)
           ~value ~sender ~recipient ~code_address ~input_start ~input_size ~output_start ~output_size
           ~delegation ~static
     in
@@ -1564,7 +1565,7 @@ struct
 
   let call =
     (* Stack *)
-    let$ gas = U256.to_unbounded <$> pop in
+    let$ gas = U256.to_uint <$> pop in
     let$ recipient = Address.of_u256_truncating <$> pop in
     let$ value = pop in
     let$ input_start = pop in
@@ -1589,7 +1590,7 @@ struct
 
   let callcode =
     (* Stack *)
-    let$ gas = U256.to_unbounded <$> pop in
+    let$ gas = U256.to_uint <$> pop in
     let$ code_address = Address.of_u256_truncating <$> pop in
     let$ value = pop in
     let$ input_start = pop in
@@ -1635,7 +1636,7 @@ struct
 
   let delegatecall =
     (* Stack *)
-    let$ gas = U256.to_unbounded <$> pop in
+    let$ gas = U256.to_uint <$> pop in
     let$ code_address = Address.of_u256_truncating <$> pop in
     let$ input_start = pop in
     let$ input_size = pop in
@@ -1665,11 +1666,11 @@ struct
     let$ endowment = pop in
     let$ input_start = pop in
     let$ input_size_bytes = pop in
-    let$ create2_salt = U256.to_bytes_be <$> pop in
+    let$ create2_salt = U256.to_repr <$> pop in
 
     (* Gas *)
     let$ memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size_bytes in
-    let input_size_in_words = U256.(to_unbounded (bytes_to_whole_words input_size_bytes)) in
+    let input_size_in_words = U256.(to_uint (bytes_to_whole_words input_size_bytes)) in
     let$ () =
       spend
         Gas.(
@@ -1690,7 +1691,7 @@ struct
 
   let staticcall =
     (* Stack *)
-    let$ gas = U256.to_unbounded <$> pop in
+    let$ gas = U256.to_uint <$> pop in
     let$ recipient = Address.of_u256_truncating <$> pop in
     let$ input_start = pop in
     let$ input_size = pop in
@@ -1887,7 +1888,7 @@ struct
     let opcode =
       (* YP (157) *)
       match U256.to_int_opt pc with
-      | Some pc when pc < Bytes.length code -> Opcode.of_byte Bytes.(code.$(pc))
+      | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
       | _ -> Opcode.Stop
     in
     trace (fun () ->

@@ -1,10 +1,10 @@
 (** 256-byte Bloom filters, used to index Ethereum logs. *)
 
-include Bytes.Make(Traits.Byte_width.Bytes256)
+open Byte_string
+include B256
 
-let zeros = init () (fun _ -> '\x00')
 let logor (b1 : t) (b2 : t) : t =
-  init () (fun i ->
+  init (fun i ->
       Char.unsafe_chr (Char.code b1.$(i) lor Char.code b2.$(i)))
 
 let union (bs : t Seq.t) : t = Seq.fold_left logor zeros bs
@@ -12,7 +12,7 @@ let union (bs : t Seq.t) : t = Seq.fold_left logor zeros bs
 let set_bit (bloom : t) (bit_index : int) =
   let byte_index = bit_index / 8 in
   let bit_index = bit_index mod 8 in
-  init () (fun i ->
+  init (fun i ->
       if Stdlib.(i = byte_index) then Char.unsafe_chr (Char.code bloom.$(i) lor (1 lsl bit_index))
       else bloom.$(i) )
 
@@ -22,11 +22,11 @@ let test_bit (bloom : t) (bit_index : int) : bool =
   Stdlib.(Char.code bloom.$(byte_index) land (1 lsl bit_index) <> 0)
 
 (* M_{3:2048} in YP (31) to YP (34) *)
-let of_bytes (bytes : Bytes.t) : t =
+let hash_bytes (bytes : Bytes.t) : t =
   let of_bit_indices (indices : int list) : t = List.fold_left set_bit zeros indices in
-  let byte_pair_at (bytes : Bytes.B32.t) index =
-    let b0 = Bytes.B32.(bytes.$(index)) in
-    let b1 = Bytes.B32.(bytes.$(index + 1)) in
+  let byte_pair_at (bytes : B32.t) index =
+    let b0 = B32.(bytes.$(index)) in
+    let b1 = B32.(bytes.$(index + 1)) in
     (Char.code b0 lsl 8) + Char.code b1
   in
   let hash_bytes = Crypto.keccak_256 bytes in
