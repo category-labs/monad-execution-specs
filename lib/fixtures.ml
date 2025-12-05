@@ -20,8 +20,7 @@ let object_as_alist_to_yojson value_to_yojson (alist : 'v object_as_alist) : Yoj
 
 (* Safe (non-throwing) conversions from hex strings to bytes. *)
 let bytes_of_hex_string str = try Ok (Bytes.of_hex_string str) with _ -> Error "Fixtures.hex_or_string"
-let hex_or_string str =
-  if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
+let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
 
 module StateTest = struct end
 module BlockchainTest = struct

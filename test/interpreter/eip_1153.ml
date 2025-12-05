@@ -51,8 +51,7 @@ let () =
           let read_key_2 = U256.(write_key + one) in
           test_case
             (Format.sprintf "Tstore(%s); Tload(%s); Tload(%s)" (U256.to_hex_string write_key)
-               (U256.to_hex_string read_key_1)
-               (U256.to_hex_string read_key_2) )
+               (U256.to_hex_string read_key_1) (U256.to_hex_string read_key_2) )
             `Quick
             (fun () ->
               test_bytecode_pure ~input_stack:[]

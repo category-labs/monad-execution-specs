@@ -41,8 +41,7 @@ end = struct
       Bytes.init size (fun byte_i ->
           U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' ) )
 
-  let read_word_at pos (mem : t) =
-    read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
+  let read_word_at pos (mem : t) = read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
 
   let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
     let size = U256.of_int (Bytes.length bytes) in
@@ -69,9 +68,7 @@ end = struct
     if U256.(size_bytes = zero) then mem
     else
       (* Round up to whole words. *)
-      let active_words =
-        Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes))
-      in
+      let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
       let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
       {mem with active_bytes}
 
@@ -253,13 +250,14 @@ struct
 
       let get_storage addr key =
         host_trace (fun () ->
-            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr) (B32.to_short_hex_string key) ) ;
+            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
+              (B32.to_short_hex_string key) ) ;
         Base.get_storage addr key
 
       let set_storage addr key v =
         host_trace (fun () ->
-            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr) (B32.to_short_hex_string key)
-              (B32.to_short_hex_string v) ) ;
+            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
+              (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
         Base.set_storage addr key v
 
       let get_balance addr =
@@ -272,7 +270,8 @@ struct
 
       let access_storage addr key =
         host_trace (fun () ->
-            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr) (B32.to_short_hex_string key) ) ;
+            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
+              (B32.to_short_hex_string key) ) ;
         Base.access_storage addr key
 
       let get_code_size addr =
@@ -284,7 +283,8 @@ struct
         Base.get_code_hash addr
 
       let copy_code addr ~offset ~size =
-        host_trace (fun () -> Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size) ;
+        host_trace (fun () ->
+            Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
         Base.copy_code addr ~offset ~size
 
       let get_block_hash id =
@@ -301,13 +301,15 @@ struct
 
       let selfdestruct ~address ~beneficiary =
         host_trace (fun () ->
-            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s" (Address.to_short_hex_string address)
+            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
+              (Address.to_short_hex_string address)
               (Address.to_short_hex_string beneficiary) ) ;
         Base.selfdestruct ~address ~beneficiary
 
       let emit_log addr ~data ~topics =
         host_trace (fun () ->
-            Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr) (Bytes.to_short_hex_string data)
+            Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr)
+              (Bytes.to_short_hex_string data)
               (List.fold_left
                  (fun acc topic -> Format.sprintf "%s, %s" acc (B32.to_short_hex_string topic))
                  "" topics ) ) ;
@@ -1060,9 +1062,7 @@ struct
     (* Operation *)
     let$ here = U256.to_int <$> !(machine_state |-- pc) in
     let$ code = !(execution_environment |-- bytecode) in
-    let$ () =
-      push (U256.of_uint_exn (Uint.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i)))
-    in
+    let$ () = push (U256.of_uint_exn (Uint.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i))) in
 
     (* PC *)
     update_pc_and_continue (fun pc -> U256.(pc + one + ~$i))

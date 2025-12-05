@@ -355,8 +355,7 @@ struct
               ; output_data = Bytes.empty
               ; status_code =
                   Evmc.Result.StatusCode.(
-                    if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas )
-              }
+                    if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
           else
             let$ () = account create_address |-- code := contract_code in
             return {result with create_address}

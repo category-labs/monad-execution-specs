@@ -85,7 +85,7 @@ module Trie = struct
   let rec insert (k : Nibbles.t) ?(depth = 0) (v : Rlp.t) = function
     | Branch (branches, _) when depth = Nibbles.length k -> Branch (branches, v)
     | Branch (branches, v') ->
-        let k_i = Char.code (k.[depth]) in
+        let k_i = Char.code k.[depth] in
         let branches =
           Iarray.mapi (fun i b -> if i = k_i then insert k ~depth:(depth + 1) v b else b) branches
         in
@@ -151,7 +151,7 @@ module PatriciaTrie = struct
     | Empty -> None
     | Branch (_branches, v) when depth = Nibbles.length k -> Some v
     | Branch (branches, _) ->
-        let k_i = Char.code (k.[depth]) in
+        let k_i = Char.code k.[depth] in
         find k ~depth:(depth + 1) (Iarray.get branches k_i)
     | Leaf {path; value} ->
         if depth + Nibbles.length path <> Nibbles.length k then None
@@ -290,7 +290,7 @@ let find (k : Nibbles.t) {inv_hashes; root_hash} =
     | Node.Empty -> None
     | Branch (_branches, v) when depth = Nibbles.length k -> Some v
     | Branch (branches, _) ->
-        let k_i = Char.code (k.[depth]) in
+        let k_i = Char.code k.[depth] in
         loop (depth + 1) (get_node (Iarray.get branches k_i))
     | Leaf {path; value} ->
         if depth + Nibbles.length path <> Nibbles.length k then None

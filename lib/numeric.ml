@@ -210,51 +210,6 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   let bytes_to_whole_words (x : t) =
     let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
     of_z_exn q + if Z.(equal r zero) then zero else one
-
-  (*
-  (* Conversions to and from variable-length byte-strings. *)
-  let of_bytes_be : Bytes.t -> t =
-    match (bit_width, signed) with
-    | Some bits, true ->
-        fun bs ->
-          let x_abs = Z.of_bits (Byte_string.reverse bs) in
-          let negative = Z.testbit x_abs Stdlib.(bits - 1) in
-          if negative then of_z_exn Z.(zero - x_abs) else of_z_exn x_abs
-    | None, true ->
-        (* Cannot recover sign *)
-        fun _bs -> raise Invalid_operation
-    | _, false ->
-        (* This should never fail, as Repr.t has the exact byte width of t. *)
-        fun bs -> of_z_exn (Z.of_bits (Byte_string.reverse bs :> string))
-  let to_bytes_be : t -> Repr.t =
-    match byte_width with
-    | None ->
-        fun x ->
-          (* Option.get never fails here as the representation is unbounded. *)
-          Repr.reverse (Option.get (Repr.of_string (Z.to_bits (to_z x))))
-    | Some byte_width ->
-        fun x ->
-          let z_bytes = Z.to_bits (to_z x) in
-          let z_n_bytes = String.length z_bytes in
-          String.init byte_width (fun i ->
-              (* Z.to_bits may return more bytes than we need because it does the conversion one limb at a
-                 time. When limbs are 64 bits, this means we get e.g. 24 bytes for a 160-bit number. The
-                 code below handles truncating, reversing and optionally zero-padding *)
-              let le_i = Stdlib.(byte_width - i - 1) in
-              if Stdlib.(le_i >= z_n_bytes) then '\x00' else z_bytes.[le_i] )
-          |> Repr.of_string
-             (* Option.get never fails here as it's converting from a string of exactly byte_width bytes. *)
-          |> Option.get
-
-  let to_bytes_le : t -> Repr.t = fun x -> Repr.reverse (to_bytes_be x)
-
-  let to_rlp (x : t) : Rlp.t =
-    let x_bytes_le = Byte_string.of_string (Z.to_bits (to_z x)) in
-    let sig_bytes = significant_bytes x in
-    (* Reverse the first sig_bytes of x. Note that Z.to_bits returns little-endian bits. *)
-    let x_sig_bytes_be = Byte_string.(init sig_bytes (fun i -> x_bytes_le.$(Stdlib.(sig_bytes - 1 - i)))) in
-    Rlp.Bytes x_sig_bytes_be
-   *)
 end
 
 module UintBase = Make (Traits.Byte_width.Variable) (Traits.Signedness.Unsigned)

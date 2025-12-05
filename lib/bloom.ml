@@ -3,9 +3,7 @@
 open Byte_string
 include B256
 
-let logor (b1 : t) (b2 : t) : t =
-  init (fun i ->
-      Char.unsafe_chr (Char.code b1.$(i) lor Char.code b2.$(i)))
+let logor (b1 : t) (b2 : t) : t = init (fun i -> Char.unsafe_chr (Char.code b1.$(i) lor Char.code b2.$(i)))
 
 let union (bs : t Seq.t) : t = Seq.fold_left logor zeros bs
 

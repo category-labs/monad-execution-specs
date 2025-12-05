@@ -51,12 +51,12 @@ let rec decode_first (bs : Bytes.t) : t * Bytes.t =
     | b when b >= short_bytes_prefix && b <= long_bytes_prefix -> (1, b - short_bytes_prefix)
     | b when b > long_bytes_prefix && b < short_list_prefix ->
         let payload_len_len = b - long_bytes_prefix in
-        let payload_len = Z.(to_int (of_bits ((Bytes.reverse (Bytes.sub bs 1 payload_len_len)) :> string))) in
+        let payload_len = Z.(to_int (of_bits (Bytes.reverse (Bytes.sub bs 1 payload_len_len) :> string))) in
         (1 + payload_len_len, payload_len)
     | b when b >= short_list_prefix && b <= long_list_prefix -> (1, b - short_list_prefix)
     | b ->
         let payload_len_len = b - long_list_prefix in
-        let payload_len = Z.(to_int (of_bits ((Bytes.reverse (Bytes.sub bs 1 payload_len_len)) :> string))) in
+        let payload_len = Z.(to_int (of_bits (Bytes.reverse (Bytes.sub bs 1 payload_len_len) :> string))) in
         (1 + payload_len_len, payload_len)
   in
   let payload = Bytes.sub bs payload_start payload_len in

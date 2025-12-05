@@ -9,5 +9,5 @@ let get_or_default (default : 'a) : ('a option, 'a) Lens.t =
 
 let get_or_throw : ('a option, 'a) Lens.t = {get; set = (fun x _ -> Some x)}
 
-let (>>=) = bind
-let (let$) = bind
+let ( >>= ) = bind
+let ( let$ ) = bind

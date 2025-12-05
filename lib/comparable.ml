@@ -14,7 +14,7 @@ struct
   let ( > ) = comparison_op Stdlib.( > )
   let ( <> ) = comparison_op Stdlib.( <> )
 
-  let equal = (=)
+  let equal = ( = )
   let compare = T.compare
 
   let max x y = if x < y then y else x
