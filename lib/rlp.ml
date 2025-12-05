@@ -17,8 +17,13 @@ let encode_payload payload ~long_payload_prefix ~short_payload_prefix =
   let header =
     if len <= 55 then Bytes.of_char (Char.chr (short_payload_prefix + len))
     else
-      let len_hex = Format.sprintf "%x" len in
-      let len_bytes = Bytes.of_hex_string len_hex in
+      let len = Z.of_int len in
+      let len_bytes = (Z.numbits len + 7) / 8 in
+      let len_bytes =
+        let len_le = Z.to_bits len in
+        let byte_i i = len_le.[len_bytes - i - 1] in
+        Bytes.init len_bytes byte_i
+      in
       let len_bytes_len = Bytes.length len_bytes in
       Bytes.(of_char (Char.chr (long_payload_prefix + len_bytes_len)) ^ len_bytes)
   in
