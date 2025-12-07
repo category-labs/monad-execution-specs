@@ -554,10 +554,13 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   in
 
   (* Update gas used by the block. *)
+  (* Monad §2.3: Gas refunds do not affect gas consumed by the block. *)
+  let block_gas_used = Gas.(block_state.gas_used + tx_gas_used_before_refund) in
+  let block_blob_gas_used = Gas.(block_state.blob_gas_used + tx_blob_gas_used) in
   let block_state =
     { block_state with
-      gas_used = Gas.(block_state.gas_used + tx_gas_used_after_refund)
-    ; blob_gas_used = Gas.(block_state.blob_gas_used + tx_blob_gas_used) }
+      gas_used = block_gas_used
+    ; blob_gas_used = block_blob_gas_used }
   in
 
   (* Add receipt and logs. *)
@@ -607,4 +610,4 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
     Format.eprintf "Actual: %s\n"
       (Yojson.Safe.pretty_to_string (Block.Header.to_yojson finalized_block.header)) ;
     failwith "Block verification failed" ) ;
-  {block_state.world_state with history = block :: world_state.history}
+  {block_state.world_state with history = finalized_block :: world_state.history}

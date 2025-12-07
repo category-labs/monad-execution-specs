@@ -50,7 +50,7 @@ module QCheck2 = struct
             return (to_string bytes) ) )
         else string_size ~gen:uint8 (int_bound 32)
       in
-      return U256.(of_repr (Repr.of_bytes_exn bytes_be))
+      return U256.(of_bytes_be_exn bytes_be)
 
     let i256 : I256.t t =
       let* num = u256 in
