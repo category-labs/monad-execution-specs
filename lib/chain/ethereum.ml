@@ -433,8 +433,8 @@ module Block = struct
   module Header = struct
     (* YP 4.4 *)
     type t =
-      { parent_hash : U256.t (* H_p *) [@key "parentHash"]
-      ; ommers_hash : U256.t (* H_o *) [@key "uncleHash"]
+      { parent_hash : B32.t (* H_p *) [@key "parentHash"]
+      ; ommers_hash : B32.t (* H_o *) [@key "uncleHash"]
       ; beneficiary : Address.t (* H_c *) [@key "coinbase"]
       ; state_root : B32.t (* H_r *) [@key "stateRoot"]
       ; transactions_root : B32.t (* H_t *) [@key "transactionsTrie"]
@@ -447,7 +447,7 @@ module Block = struct
       ; timestamp : U256.t (* H_s *) [@key "timestamp"]
       ; extra_data : Bytes.t (* H_x *) [@key "extraData"]
       ; prev_randao : B32.t (* H_a *) [@key "mixHash"]
-      ; nonce : U64.t (* H_n *) [@key "nonce"]
+      ; nonce : B8.t (* H_n *) [@key "nonce"]
       ; base_fee_per_gas : Uint.t (* H_f *) [@key "baseFeePerGas"]
       ; withdrawals_root : B32.t (* H_w *) [@key "withdrawalsRoot"]
       ; blob_gas_used : U64.t (* EIP-4844 *) [@key "blobGasUsed"]
@@ -459,8 +459,8 @@ module Block = struct
     (* YP 4.4.3 (40) *)
     let to_rlp h =
       Rlp.List
-        [ U256.to_rlp h.parent_hash
-        ; U256.to_rlp h.ommers_hash
+        [ Rlp.of_bytes32 h.parent_hash
+        ; Rlp.of_bytes32 h.ommers_hash
         ; Address.to_rlp h.beneficiary
         ; Rlp.of_bytes32 h.state_root
         ; Rlp.of_bytes32 h.transactions_root
@@ -473,7 +473,7 @@ module Block = struct
         ; U256.to_rlp h.timestamp
         ; Rlp.Bytes h.extra_data
         ; Rlp.of_bytes32 h.prev_randao
-        ; U64.to_rlp h.nonce
+        ; Rlp.of_bytes (B8.to_bytes h.nonce)
         ; Uint.to_rlp h.base_fee_per_gas
         ; Rlp.of_bytes32 h.withdrawals_root
         ; U64.to_rlp h.blob_gas_used
