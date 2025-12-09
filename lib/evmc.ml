@@ -138,8 +138,8 @@ module Host = struct
     include Monad.SIG
     val account_exists : Address.t -> bool t
 
-    val get_storage : Address.t -> B32.t -> B32.t t
-    val set_storage : Address.t -> B32.t -> B32.t -> StorageStatus.t t
+    val get_storage : Address.t -> B32.t -> U256.t t
+    val set_storage : Address.t -> B32.t -> U256.t -> StorageStatus.t t
 
     val get_balance : Address.t -> U256.t t
 
@@ -160,8 +160,8 @@ module Host = struct
     val access_account : Address.t -> [`Warm | `Cold] t
     val access_storage : Address.t -> B32.t -> [`Warm | `Cold] t
 
-    val get_transient_storage : Address.t -> B32.t -> B32.t t
-    val set_transient_storage : Address.t -> B32.t -> B32.t -> unit t
+    val get_transient_storage : Address.t -> B32.t -> U256.t t
+    val set_transient_storage : Address.t -> B32.t -> U256.t -> unit t
   end
 
   (* Lift a host monad through a transformer stack *)
@@ -228,7 +228,7 @@ module DummyHost = struct
   open Lens.Infix
 
   module Account = struct
-    type t = {balance : U256.t; storage : B32.t B32.Map.t; code : Bytes.t; nonce : Uint.t}
+    type t = {balance : U256.t; storage : U256.t B32.Map.t; code : Bytes.t; nonce : Uint.t}
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
@@ -281,7 +281,7 @@ module DummyHost = struct
     type t =
       { accounts : Account.t Address.Map.t
       ; substate : AccruedSubstate.t
-      ; transient_storage : B32.t B32.Map.t
+      ; transient_storage : U256.t B32.Map.t
       ; accounts_created_in_current_transaction : Address.Set.t (* Needed for EIP-6780 *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
@@ -348,7 +348,7 @@ module DummyHost = struct
     let account_exists addr = Option.is_some <$> !(accounts |-- Address.Map.at addr)
 
     let get_storage addr key =
-      !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
+      !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default U256.zero)
 
     let set_storage addr key v =
       let$ () = account addr |-- storage |-- B32.Map.at key := Some v in
@@ -484,7 +484,7 @@ module DummyHost = struct
         return `Cold
 
     let get_transient_storage _addr key =
-      !(transient_storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
+      !(transient_storage |-- B32.Map.at key |-- Option.get_or_default U256.zero)
 
     let set_transient_storage _addr key value = transient_storage |-- B32.Map.at key := Some value
   end

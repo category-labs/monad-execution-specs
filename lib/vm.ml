@@ -257,7 +257,7 @@ struct
       let set_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
-              (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
+              (B32.to_short_hex_string key) (U256.to_hex_string v) ) ;
         Base.set_storage addr key v
 
       let get_balance addr =
@@ -324,7 +324,7 @@ struct
       let set_transient_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
-              (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
+              (B32.to_short_hex_string key) (U256.to_hex_string v) ) ;
         Base.set_transient_storage addr key v
     end
   end
@@ -1170,7 +1170,7 @@ struct
     let$ () = spend Gas.(match access with `Cold -> cold_sload_cost | `Warm -> warm_access_cost) in
 
     (* Operation *)
-    let$ value = U256.of_repr <$> HostAPI.get_storage self_addr (U256.to_repr key) in
+    let$ value = HostAPI.get_storage self_addr (U256.to_repr key) in
     let$ () = push value in
 
     (* PC *)
@@ -1191,7 +1191,7 @@ struct
        costs. *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ storage_status = HostAPI.set_storage self_addr (U256.to_repr key) (U256.to_repr value') in
+    let$ storage_status = HostAPI.set_storage self_addr (U256.to_repr key) value' in
 
     let$ access = HostAPI.access_storage self_addr (U256.to_repr key) in
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
@@ -1287,7 +1287,7 @@ struct
 
     (* Operation *)
     let$ self_addr = self in
-    let$ value = U256.of_repr <$> HostAPI.get_transient_storage self_addr (U256.to_repr key) in
+    let$ value = HostAPI.get_transient_storage self_addr (U256.to_repr key) in
     let$ () = push value in
 
     (* PC *)
@@ -1304,7 +1304,7 @@ struct
     (* Operation *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ () = HostAPI.set_transient_storage self_addr (U256.to_repr key) (U256.to_repr value) in
+    let$ () = HostAPI.set_transient_storage self_addr (U256.to_repr key) value in
 
     (* PC *)
     increase_pc_and_continue
