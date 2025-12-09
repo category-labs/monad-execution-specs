@@ -283,6 +283,7 @@ module Transaction = struct
           ; U256.to_rlp tx.nonce
           ; Uint.to_rlp tx.max_priority_fee_per_gas
           ; Uint.to_rlp tx.max_fee_per_gas
+          ; Uint.to_rlp tx.gas_limit
           ; Address.to_rlp tx.to_
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
@@ -296,6 +297,7 @@ module Transaction = struct
           ; U256.to_rlp tx.nonce
           ; Uint.to_rlp tx.max_priority_fee_per_gas
           ; Uint.to_rlp tx.max_fee_per_gas
+          ; Uint.to_rlp tx.gas_limit
           ; Address.to_rlp tx.to_
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
@@ -502,9 +504,8 @@ module Block = struct
     let transaction_to_rlp tx =
       match Transaction.kind_tag tx with
       | `Legacy -> Transaction.to_rlp tx
-      | tag ->
-          Rlp.List
-            [Rlp.Bytes (Transaction.kind_tag_to_bytes tag); Rlp.Bytes (Rlp.encode (Transaction.to_rlp tx))]
+      | _ ->
+          Rlp.Bytes (Transaction.encode tx)
     in
     Rlp.List
       [ Header.to_rlp b.header
@@ -562,7 +563,7 @@ module Account = struct
   type t =
     { nonce : U256.t (* σ[a]_n *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : U256.t B32.Map.t (* σ[a]_s *)
+    ; storage : B32.t B32.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
@@ -578,8 +579,10 @@ module Account = struct
         storage
         |> B32.Map.to_seq
         |> Seq.map (fun (k, v) ->
+            let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
+            let v = Rlp.encode U256.(to_rlp (of_repr v)) in
             (* YP (8) *)
-            (B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)), (Rlp.encode (U256.to_rlp v)) ))
+            (k, v) )
         |> Mpt.of_seq
       in
       mpt.root_hash

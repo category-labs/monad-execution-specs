@@ -81,14 +81,10 @@ module BlockState = struct
     let transactions_root =
       ( block_state.transactions_processed
       |> List.to_seq
-      |> Seq.mapi (fun i (tx, _) ->
-          let tx_enc = Transaction.encode tx in
-          Format.eprintf "TXN %d RLP: %s\n" i (Bytes.to_hex_string tx_enc) ;
-          tx_enc )
+      |> Seq.map (fun (tx, _) -> Transaction.encode tx)
       |> Mpt.of_seq_i )
         .root_hash
     in
-    Format.eprintf "tx root: %s\n" (B32.to_hex_string transactions_root) ;
     let receipts_root =
       ( block_state.transactions_processed
       |> List.to_seq
@@ -154,7 +150,7 @@ module TransactionState = struct
     { initial_world_state : WorldState.t
     ; world_state : WorldState.t
     ; current_block : Block.t
-    ; transient_storage : U256.t B32.Map.t Address.Map.t
+    ; transient_storage : B32.t B32.Map.t Address.Map.t
     ; accounts_created_in_current_transaction : Address.Set.t
     ; tx_origin : Address.t
     ; tx_gas_price : Gas.t
@@ -291,7 +287,7 @@ struct
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
   let get_storage addr key =
-    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default U256.zero)
+    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
 
   let set_storage addr key v =
     let$ () = account addr |-- storage |-- B32.Map.at key := Some v in
@@ -446,7 +442,7 @@ struct
     |-- Address.Map.at addr
     |-- Option.get_or_default B32.Map.empty
     |-- B32.Map.at key
-    |-- Option.get_or_default U256.zero
+    |-- Option.get_or_default B32.zeros
 
   let get_transient_storage addr key = !(transient_storage addr key)
 
