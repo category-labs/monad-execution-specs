@@ -5,8 +5,11 @@ open Numeric
 open Byte_string
 open Chain.Ethereum
 
-(* Bring Uint into scope so the operators are all available to users *)
+(* Bring Uint into scope so the operators are all available to users. *)
 include Uint
+
+(* See EIP-2935, EIP-4788. *)
+let system_transaction_gas = ~$30_000_000
 
 let gas_per_blob = exp ~$2 ~$17
 let max_blob_gas_per_block = ~$1_179_648

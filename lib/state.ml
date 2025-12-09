@@ -32,6 +32,13 @@ module WorldState = struct
       |> Mpt.of_seq
     in
     mpt.root_hash
+
+  let dump_accounts ws =
+    Address.Map.iter
+      (fun addr acc ->
+        Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
+          (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) )
+      ws.accounts
 end
 
 module BlockState = struct
@@ -74,10 +81,14 @@ module BlockState = struct
     let transactions_root =
       ( block_state.transactions_processed
       |> List.to_seq
-      |> Seq.map (fun (tx, _) -> Transaction.encode tx)
+      |> Seq.mapi (fun i (tx, _) ->
+          let tx_enc = Transaction.encode tx in
+          Format.eprintf "TXN %d RLP: %s\n" i (Bytes.to_hex_string tx_enc) ;
+          tx_enc )
       |> Mpt.of_seq_i )
         .root_hash
     in
+    Format.eprintf "tx root: %s\n" (B32.to_hex_string transactions_root) ;
     let receipts_root =
       ( block_state.transactions_processed
       |> List.to_seq
@@ -143,7 +154,6 @@ module TransactionState = struct
     { initial_world_state : WorldState.t
     ; world_state : WorldState.t
     ; current_block : Block.t
-    ; current_transaction : Transaction.t
     ; transient_storage : B32.t B32.Map.t Address.Map.t
     ; accounts_created_in_current_transaction : Address.Set.t
     ; self_destruct : Address.Set.t  (** A_s *)
@@ -189,7 +199,6 @@ module TransactionState = struct
     { initial_world_state = block_state.world_state
     ; world_state = block_state.world_state
     ; current_block = block_state.current_block
-    ; current_transaction = tx
     ; transient_storage = Address.Map.empty
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; self_destruct = Address.Set.empty
@@ -256,16 +265,22 @@ struct
   open TransactionState
   include TransactionState.M
 
+  let dump_account addr =
+    let$ acc = !(account addr) in
+    Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
+      (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) ;
+    return ()
+
   let move_ether sender recipient amount =
     let$ () =
       update_field
         (account sender |-- balance)
         (fun eth ->
-          (* TODO: check this assertion on the host side. *)
           assert (U256.(eth >= amount)) ;
           U256.(eth - amount) )
     in
-    update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount))
+    let$ () = update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount)) in
+    return ()
 
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
@@ -429,9 +444,21 @@ struct
   let set_transient_storage addr key value = transient_storage addr key := value
 end
 
+let process_message (msg : Evmc.Message.t) (transaction_state : TransactionState.t) =
+  let module H =
+    Evmc.Instantiate (TransactionState.M) (Host)
+      (Vm.Make (struct
+        let trace = false
+      end))
+  in
+  H.Host.call msg transaction_state
+
 let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   let open BlockState in
-  let tx_gas_limit = Transaction.gas_limit tx in
+  let tx_gas_limit =
+    Transaction.gas_limit tx
+    (* T_g *)
+  in
   let tx_value = Transaction.value tx in
   let tx_nonce = Transaction.nonce tx in
 
@@ -490,22 +517,22 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   let sender = Transaction.sender block_state.world_state.chain_id tx in
   let sender_account = block_state.world_state |. WorldState.account sender in
-  if U256.(sender_account.nonce <> tx_nonce) then failwith "Invalid transaction 1" ;
+  if U256.(sender_account.nonce <> tx_nonce) then failwith "Invalid transaction" ;
   if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then (
     Format.eprintf "Account %s (%s) cannot afford to pay %s gas fees + %s tx_value\n"
       (Address.to_hex_string sender)
       (U256.to_string sender_account.balance)
       (Gas.to_string max_gas_fee) (U256.to_string tx_value) ;
-    failwith "Invalid transaction 2" ) ;
+    failwith "Invalid transaction" ) ;
   if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
-    failwith "Invalid transaction 3" ;
+    failwith "Invalid transaction" ;
 
   let effective_gas_fee = Gas.(tx_gas_limit * effective_gas_price) in
   let total_fee = Gas.(effective_gas_fee + blob_gas_fee) in
-  if total_fee > U256.to_uint sender_account.balance then failwith "Invalid transaction 4" ;
+  if total_fee > U256.to_uint sender_account.balance then failwith "Invalid transaction" ;
   let total_fee = U256.of_uint_exn total_fee in
 
-  (* pay gas and blob fees, increase nonce *)
+  (* Pay gas and blob fees, increase nonce *)
   let block_state =
     (* The yellow paper does not specify a behaviour for nonce overflows. *)
     assert (U256.(sender_account.nonce < max_t)) ;
@@ -519,29 +546,17 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   let access_list = Transaction.access_list tx in
   let transaction_state = TransactionState.make block_state sender tx access_list in
   let message = prepare_message block_state sender available_gas tx in
-  let module H =
-    Evmc.Instantiate (TransactionState.M) (Host)
-      (Vm.Make (struct
-        let trace = false
-      end))
-  in
-  let result, transaction_state = H.Vm.execute message message.code transaction_state in
+  let result, transaction_state = process_message message transaction_state in
 
-  let tx_gas_used_before_refund = Gas.(tx_gas_limit - of_int64 result.gas_left) in
-  let tx_gas_refund = Gas.(min (tx_gas_used_before_refund / ~$5) (of_int64 result.gas_refund)) in
-  let tx_gas_used_after_refund = Gas.(max (tx_gas_used_before_refund - tx_gas_refund) floor_gas) in
+  (* Propagate state changes. *)
+  let block_state = {block_state with world_state = transaction_state.world_state} in
 
-  (* Refund gas to sender. *)
-  let block_state =
-    let tx_gas_left = Gas.(tx_gas_limit - tx_gas_used_after_refund) in
-    let gas_refund_amount = U256.of_uint_exn Gas.(tx_gas_left * effective_gas_price) in
-    block_state.^(account sender |-- Account.balance) <-
-      U256.(block_state.^(account sender |-- Account.balance) + gas_refund_amount)
-  in
+  (* Monad §2.3: unlike Ethereum, gas is not refunded to the sender. *)
+  let tx_gas_used = tx_gas_limit in
 
   (* Transfer miner fees. *)
   let priority_fee_per_gas = Gas.(effective_gas_price - base_fee_per_gas) in
-  let transaction_fee = U256.of_uint_exn Gas.(tx_gas_used_after_refund * priority_fee_per_gas) in
+  let transaction_fee = U256.of_uint_exn Gas.(tx_gas_used * priority_fee_per_gas) in
   let block_state = transfer_money_and_delete_if_empty block_state transaction_fee header.beneficiary in
 
   (* Destroy deleted accounts. *)
@@ -554,14 +569,9 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   in
 
   (* Update gas used by the block. *)
-  (* Monad §2.3: Gas refunds do not affect gas consumed by the block. *)
-  let block_gas_used = Gas.(block_state.gas_used + tx_gas_used_before_refund) in
+  let block_gas_used = Gas.(block_state.gas_used + tx_gas_used) in
   let block_blob_gas_used = Gas.(block_state.blob_gas_used + tx_blob_gas_used) in
-  let block_state =
-    { block_state with
-      gas_used = block_gas_used
-    ; blob_gas_used = block_blob_gas_used }
-  in
+  let block_state = {block_state with gas_used = block_gas_used; blob_gas_used = block_blob_gas_used} in
 
   (* Add receipt and logs. *)
   let block_state =
@@ -582,7 +592,55 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
   BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
 
-let validate_header (_world_state : WorldState.t) (_header : Block.Header.t) = ()
+let validate_header (_world_state : WorldState.t) (_header : Block.Header.t) =
+  (* TODO *)
+  ()
+
+(* Process a system message call as in EIP-2935, EIP-4788. *)
+let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
+  let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
+  let code = (block_state |. BlockState.account addr).code in
+  if code = Bytes.empty then
+    (* If no code exists at the address, the call must fail silently. *)
+    block_state
+  else
+    let message =
+      Evmc.Message.
+        { sender = system_sender_address
+        ; kind = Call
+        ; static = false
+        ; delegated = false
+        ; depth = 0l
+        ; gas = Gas.(to_uint64 system_transaction_gas)
+        ; value = U256.zero
+        ; recipient = addr
+        ; input_data = data
+        ; create2_salt = B32.zeros
+        ; code_address = addr
+        ; code }
+    in
+    let transaction_state =
+      TransactionState.
+        { initial_world_state = block_state.world_state
+        ; world_state = block_state.world_state
+        ; current_block = block_state.current_block
+        ; transient_storage = Address.Map.empty
+        ; accounts_created_in_current_transaction = Address.Set.empty
+        ; self_destruct = Address.Set.empty
+        ; logs = []
+        ; touched = Address.Set.empty
+        ; refund = U256.zero
+        ; accessed_addresses = Address.Set.empty
+        ; accessed_keys = StorageKey.Set.empty }
+    in
+    let result, transaction_state = process_message message transaction_state in
+    assert (result.status_code = Success) ;
+    (* Update block state with storage changes. As per the relevant EIPs, a system message call
+     does not warm up accounts or storage slots, and it does not count towards the block gas
+     limit. *)
+    {block_state with world_state = transaction_state.world_state}
+
+let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
 
 let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
   validate_header world_state block.header ;
@@ -590,7 +648,14 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
 
   let block_state = BlockState.make world_state block in
 
-  (* TODO: system transactions *)
+  (* EIP-4788 *)
+  (* TODO *)
+
+  (* EIP-2935 *)
+  let block_state =
+    let parent_hash = block_state.current_block.header.parent_hash in
+    process_system_message block_state history_storage_address (B32.to_bytes parent_hash)
+  in
 
   (* Process block transactions. *)
   let block_state = List.fold_left process_transaction block_state block.transactions in

@@ -119,6 +119,8 @@ let test_case_to_yojson fixture =
     in
     fixture_json.$("blocks") <- blocks
   in
+  (* TODO: don't hard-code this. *)
+  let fixture_json = fixture_json.$("network") <- `String "MONAD_EIGHT" in
   fixture_json
 
 let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) list) =
