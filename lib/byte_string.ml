@@ -26,17 +26,24 @@ module Bytes = struct
     |> String.concat ""
 
   (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
-    '0x', into an array of bytes. Raises an exception if the given string does not follow the correct format. *)
-  let of_hex_string str =
+      '0x', into an array of bytes. If the [width] argument is provided, the resulting byte-string is left-padded
+      with zeros up to the desired width. Raises an exception if the given string does not follow the correct format. *)
+  let of_hex_string ?width str =
     assert (String.length str mod 2 = 0) ;
     (* Optionally discard 0x prefix *)
     let start = if String.starts_with ~prefix:"0x" str || String.starts_with ~prefix:"0X" str then 2 else 0 in
-    let len = (String.length str - start) / 2 in
+    let padding, len =
+      let len = (String.length str - start) / 2 in
+      match width with None -> (0, len) | Some w -> (max w len - len, max w len)
+    in
     let byte_i i =
-      let c1 = str.[start + (i * 2)] in
-      let c0 = str.[start + (i * 2) + 1] in
-      (* TODO: this is very inefficient. It can be replaced with a lookup table. *)
-      Char.chr (int_of_string (Printf.sprintf "0x%c%c" c1 c0))
+      if i < padding then '\x00'
+      else
+        let i = i - padding in
+        let c1 = str.[start + (i * 2)] in
+        let c0 = str.[start + (i * 2) + 1] in
+        (* TODO: this is very inefficient. It can be replaced with a lookup table. *)
+        Char.chr (int_of_string (Printf.sprintf "0x%c%c" c1 c0))
     in
     String.init len byte_i
 
@@ -60,10 +67,10 @@ module Bytes = struct
     let compare (x : t) (y : t) = String.compare (x :> string) (y :> string)
   end)
 
-  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+  let of_yojson ?width (json : Yojson.Safe.t) : (t, string) result =
     let type_name = "Byte_string.t" in
     match json with
-    | `String str -> ( try Ok (of_hex_string str) with _ -> Error type_name )
+    | `String str -> ( try Ok (of_hex_string ?width str) with _ -> Error type_name )
     | _ -> Error type_name
 
   let to_yojson (x : t) : Yojson.Safe.t = `String (Format.sprintf "0x%s" (to_hex_string x))
@@ -153,7 +160,9 @@ struct
   (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
       '0x', into an array of bytes. Raises an exception if the given string does not follow the correct format,
       or the length of the resulting byte-string is different from {!byte_width}. *)
-  let of_hex_string str = of_bytes_exn (Bytes.of_hex_string str)
+  let of_hex_string ?(zero_pad = false) str =
+    let width = if zero_pad then Some byte_width else None in
+    of_bytes_exn (Bytes.of_hex_string ?width str)
 
   let ( ~@ ) str = of_hex_string str
 
@@ -164,7 +173,7 @@ struct
 
   let of_yojson (json : Yojson.Safe.t) : (t, string) result =
     let type_name = Format.sprintf "Byte_string.B%d.t" byte_width in
-    match Bytes.of_yojson json with
+    match Bytes.of_yojson ~width:byte_width json with
     | Ok bs when Int.(equal (Bytes.length bs) byte_width) -> Ok (of_bytes_exn bs)
     | _ -> Error type_name
 
@@ -188,11 +197,13 @@ struct
           Ok
             ( List.to_seq pairs
             |> Seq.map (fun (k, v) ->
-                ( of_hex_string k
+                (* In many Ethereum fixture test json files, 32-byte strings are encoded as variable-width, so
+                   we need to zero-pad the keys here up to the correct width. *)
+                ( of_hex_string ~zero_pad:true k
                 , match elt_of_yojson v with Ok elt -> elt | Error msg -> raise (Value_decoding_error msg) ) )
             |> Map.of_seq )
         with Value_decoding_error err -> Error err )
-      | _ -> Error "map"
+      | _ -> Error (Format.sprintf "B%d.Map.t" byte_width)
 
     let to_yojson elt_to_yojson (map : 'elt t) : Yojson.Safe.t =
       to_seq map
