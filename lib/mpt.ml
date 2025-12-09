@@ -279,9 +279,11 @@ let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
   |> PatriciaTrie.of_trie
   |> of_patricia
 
-(** {!of_seq_i seq} works as {!of_seq}, but it uses the position of every entry in the sequence as the key. *)
+(** {!of_seq_i seq} works as {!of_seq}, but it uses the RLP encoding of the position of every entry in the
+    sequence as the key. This implements the encoding scheme described in YP (36), YP (37) and YP (38). *)
 let of_seq_i (entries : Bytes.t Seq.t) =
-  of_seq (Seq.mapi (fun i v -> (U64.(to_repr_bytes (of_int i)), v)) entries)
+  let to_kv i v = (Rlp.encode U64.(to_rlp ~$i), v) in
+  of_seq (Seq.mapi to_kv entries)
 
 let find (k : Nibbles.t) {inv_hashes; root_hash} =
   let get_node = function Node.Small node -> node | Node.Hash h -> B32.Map.find h inv_hashes in
