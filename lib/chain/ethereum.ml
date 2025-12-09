@@ -150,7 +150,7 @@ module Transaction = struct
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U256.t (* T_y *) [@key "v"]
     ; max_fee_per_blob_gas : U256.t (* EIP-4844 *) [@key "maxFeePerBlobGas"]
-    ; blob_versioned_hashes : U256.t list (* EIP-4844 *) [@key "blobVersionedHashes"] }
+    ; blob_versioned_hashes : B32.t list (* EIP-4844 *) [@key "blobVersionedHashes"] }
   [@@deriving yojson {strict = false}]
   type t = Legacy of legacy_tx | AccessList of access_list_tx | FeeMarket of fee_market_tx | Blob of blob_tx
 
@@ -231,6 +231,11 @@ module Transaction = struct
     | Legacy {gas_limit; _} | AccessList {gas_limit; _} | FeeMarket {gas_limit; _} | Blob {gas_limit; _} ->
         gas_limit
 
+  let blob_hashes tx =
+    match tx with
+    | Blob {blob_versioned_hashes; _} -> blob_versioned_hashes
+    | Legacy _ | AccessList _ | FeeMarket _ -> []
+
   type signature = {r : U256.t; s : U256.t}
   let signature tx =
     match tx with Legacy {r; s; _} | AccessList {r; s; _} | FeeMarket {r; s; _} | Blob {r; s; _} -> {r; s}
@@ -296,7 +301,7 @@ module Transaction = struct
           ; Rlp.Bytes tx.data
           ; Rlp.List (List.map Access.to_rlp tx.access_list)
           ; U256.to_rlp tx.max_fee_per_blob_gas
-          ; Rlp.List (List.map U256.to_rlp tx.blob_versioned_hashes)
+          ; Rlp.List (List.map Rlp.of_bytes32 tx.blob_versioned_hashes)
           ; U256.to_rlp tx.y_parity
           ; U256.to_rlp tx.r
           ; U256.to_rlp tx.s ]
@@ -378,7 +383,7 @@ module Transaction = struct
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list)
                  ; U256.to_rlp tx.max_fee_per_blob_gas
-                 ; Rlp.List (List.map U256.to_rlp tx.blob_versioned_hashes) ] )
+                 ; Rlp.List (List.map Rlp.of_bytes32 tx.blob_versioned_hashes) ] )
     in
     let hash = Crypto.keccak_256 bytes in
     hash
@@ -557,7 +562,7 @@ module Account = struct
   type t =
     { nonce : U256.t (* σ[a]_n *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : B32.t B32.Map.t (* σ[a]_s *)
+    ; storage : U256.t B32.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
@@ -574,7 +579,7 @@ module Account = struct
         |> B32.Map.to_seq
         |> Seq.map (fun (k, v) ->
             (* YP (8) *)
-            (B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)), B32.to_bytes v) )
+            (B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)), (Rlp.encode (U256.to_rlp v)) ))
         |> Mpt.of_seq
       in
       mpt.root_hash

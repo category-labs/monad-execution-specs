@@ -50,14 +50,14 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
             let v_actual = B32.Map.find_opt key actual.storage in
             let v_expected = B32.Map.find_opt key expected.storage in
             match (v_actual, v_expected) with
-            | Some v_actual, Some v_expected when B32.(v_actual <> v_expected) ->
-                Format.eprintf "\t\tactual(%s): %s\n" key_s (B32.to_short_hex_string v_actual) ;
-                Format.eprintf "\t\texpected(%s): %s\n" key_s (B32.to_short_hex_string v_expected)
+            | Some v_actual, Some v_expected when U256.(v_actual <> v_expected) ->
+                Format.eprintf "\t\tactual(%s): %s\n" key_s (U256.to_string v_actual) ;
+                Format.eprintf "\t\texpected(%s): %s\n" key_s (U256.to_string v_expected)
             | None, Some v_expected ->
                 Format.eprintf "\t\tactual(%s): <EMPTY>\n" key_s ;
-                Format.eprintf "\t\texpected(%s): %s\n" key_s (B32.to_short_hex_string v_expected)
+                Format.eprintf "\t\texpected(%s): %s\n" key_s (U256.to_string v_expected)
             | Some v_actual, None ->
-                Format.eprintf "\t\tactual(%s): %s\n" key_s (B32.to_short_hex_string v_actual) ;
+                Format.eprintf "\t\tactual(%s): %s\n" key_s (U256.to_string v_actual) ;
                 Format.eprintf "\t\texpected(%s): <EMPTY>\n" key_s
             | _, _ -> () )
           (union actual_keys expected_keys) ) ) ;

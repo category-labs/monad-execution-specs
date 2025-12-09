@@ -154,8 +154,11 @@ module TransactionState = struct
     { initial_world_state : WorldState.t
     ; world_state : WorldState.t
     ; current_block : Block.t
-    ; transient_storage : B32.t B32.Map.t Address.Map.t
+    ; transient_storage : U256.t B32.Map.t Address.Map.t
     ; accounts_created_in_current_transaction : Address.Set.t
+    ; tx_origin : Address.t
+    ; tx_gas_price : Gas.t
+    ; tx_blob_hashes : B32.t list
     ; self_destruct : Address.Set.t  (** A_s *)
     ; logs : Log.t list  (** A_l *)
     ; touched : Address.Set.t  (** A_t *)
@@ -201,6 +204,9 @@ module TransactionState = struct
     ; current_block = block_state.current_block
     ; transient_storage = Address.Map.empty
     ; accounts_created_in_current_transaction = Address.Set.empty
+    ; tx_origin = sender
+    ; tx_gas_price = block_state.current_block.header.base_fee_per_gas
+    ; tx_blob_hashes = Transaction.blob_hashes tx
     ; self_destruct = Address.Set.empty
     ; logs = []
     ; touched = Address.Set.empty
@@ -285,7 +291,7 @@ struct
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
   let get_storage addr key =
-    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
+    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default U256.zero)
 
   let set_storage addr key v =
     let$ () = account addr |-- storage |-- B32.Map.at key := Some v in
@@ -387,19 +393,22 @@ struct
     return result
 
   let get_tx_context =
+    let$ state = get in
     return
       Evmc.TxContext.
-        { tx_gas_price = U256.zero
-        ; tx_origin = Address.zero
-        ; block_coinbase = Address.zero
-        ; block_number = 0L
-        ; block_timestamp = 0L
-        ; block_gas_limit = 99999L
-        ; block_prev_randao = U256.zero
-        ; chain_id = U256.zero
-        ; block_base_fee = U256.zero
-        ; blob_base_fee = U256.zero
-        ; blob_hashes = []
+        { tx_gas_price = U256.of_uint_exn state.tx_gas_price
+        ; tx_origin = state.tx_origin
+        ; block_coinbase = state.current_block.header.beneficiary
+        ; block_number = Uint.to_uint64 state.current_block.header.number
+        ; block_timestamp = U256.to_uint64 state.current_block.header.timestamp
+        ; block_gas_limit = Gas.to_uint64 state.current_block.header.gas_limit
+        ; block_prev_randao = U256.of_repr state.current_block.header.prev_randao
+        ; chain_id = U256.of_uint_exn state.world_state.chain_id
+        ; block_base_fee = U256.of_uint_exn state.current_block.header.base_fee_per_gas
+        ; blob_base_fee =
+            U256.of_uint_exn
+              (Gas.block_blob_gas_price (U64.to_uint state.current_block.header.excess_blob_gas))
+        ; blob_hashes = state.tx_blob_hashes
         ; initcodes = [] }
 
   let get_block_hash i =
@@ -437,7 +446,7 @@ struct
     |-- Address.Map.at addr
     |-- Option.get_or_default B32.Map.empty
     |-- B32.Map.at key
-    |-- Option.get_or_default B32.zeros
+    |-- Option.get_or_default U256.zero
 
   let get_transient_storage addr key = !(transient_storage addr key)
 
@@ -448,7 +457,7 @@ let process_message (msg : Evmc.Message.t) (transaction_state : TransactionState
   let module H =
     Evmc.Instantiate (TransactionState.M) (Host)
       (Vm.Make (struct
-        let trace = false
+        let trace = true
       end))
   in
   H.Host.call msg transaction_state
@@ -474,7 +483,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   | Blob {blob_versioned_hashes; _} ->
       if blob_versioned_hashes = [] then failwith "Invalid transaction" ;
       let check_blob_hash_version hash =
-        if not (U256.byte ~index_le:31 hash = versioned_hash_version_kzg) then failwith "Invalid transaction"
+        if not (B32.(hash.$(0)) = versioned_hash_version_kzg) then failwith "Invalid transaction"
       in
       List.iter check_blob_hash_version blob_versioned_hashes
   | _ -> () ) ;
@@ -626,6 +635,9 @@ let process_system_message (block_state : BlockState.t) (addr : Address.t) (data
         ; current_block = block_state.current_block
         ; transient_storage = Address.Map.empty
         ; accounts_created_in_current_transaction = Address.Set.empty
+        ; tx_origin = system_sender_address
+        ; tx_gas_price = Uint.zero
+        ; tx_blob_hashes = []
         ; self_destruct = Address.Set.empty
         ; logs = []
         ; touched = Address.Set.empty
