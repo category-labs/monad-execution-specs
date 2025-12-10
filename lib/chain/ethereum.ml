@@ -136,43 +136,21 @@ module Transaction = struct
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U256.t (* T_y *) [@key "v"] }
   [@@deriving yojson {strict = false}]
-  type blob_tx =
-    { nonce : U256.t (* T_n *)
-    ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
-    ; value : U256.t (* T_v *)
-    ; r : U256.t (* T_r *)
-    ; s : U256.t (* T_s *)
-    ; to_ : Address.t (* T_t *) [@key "to"]
-    ; data : Bytes.t (* T_d *)
-    ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
-    ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
-    ; access_list : Access.t list (* T_A *) [@key "accessList"]
-    ; chain_id : Uint.t (* T_c *) [@key "chainId"]
-    ; y_parity : U256.t (* T_y *) [@key "v"]
-    ; max_fee_per_blob_gas : U256.t (* EIP-4844 *) [@key "maxFeePerBlobGas"]
-    ; blob_versioned_hashes : B32.t list (* EIP-4844 *) [@key "blobVersionedHashes"] }
-  [@@deriving yojson {strict = false}]
-  type t = Legacy of legacy_tx | AccessList of access_list_tx | FeeMarket of fee_market_tx | Blob of blob_tx
+  type t = Legacy of legacy_tx | AccessList of access_list_tx | FeeMarket of fee_market_tx
 
-  type kind_tag = [`Legacy | `AccessList | `FeeMarket | `Blob]
+  type kind_tag = [`Legacy | `AccessList | `FeeMarket]
   let kind_tag tx : kind_tag =
-    match tx with
-    | Legacy _ -> `Legacy
-    | AccessList _ -> `AccessList
-    | FeeMarket _ -> `FeeMarket
-    | Blob _ -> `Blob
+    match tx with Legacy _ -> `Legacy | AccessList _ -> `AccessList | FeeMarket _ -> `FeeMarket
 
   let kind_tag_to_bytes : kind_tag -> Bytes.t = function
     | `Legacy -> Bytes.of_char '\x00'
     | `AccessList -> Bytes.of_char '\x01'
     | `FeeMarket -> Bytes.of_char '\x02'
-    | `Blob -> Bytes.of_char '\x03'
 
   let byte_to_kind_tag : char -> kind_tag option = function
     | '\x00' -> Some `Legacy
     | '\x01' -> Some `AccessList
     | '\x02' -> Some `FeeMarket
-    | '\x03' -> Some `Blob
     | _ -> None
 
   let kind_tag_to_yojson (tag : kind_tag) : Yojson.Safe.t =
@@ -196,7 +174,6 @@ module Transaction = struct
       | Ok None -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
       | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
       | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
-      | Ok (Some 3) -> [%of_yojson: blob_tx] json >>= fun tx -> return (Blob tx)
       | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
 
   let to_yojson (tx : t) : Yojson.Safe.t =
@@ -205,40 +182,25 @@ module Transaction = struct
       | Legacy tx -> [%to_yojson: legacy_tx] tx
       | AccessList tx -> [%to_yojson: access_list_tx] tx
       | FeeMarket tx -> [%to_yojson: fee_market_tx] tx
-      | Blob tx -> [%to_yojson: blob_tx] tx
     in
     (* For non-legacy transactions, add the transaction type back in. *)
     match kind_tag tx with
     | `Legacy -> untagged_tx
     | tag -> `Assoc (("type", kind_tag_to_yojson tag) :: Yojson.Safe.Util.to_assoc untagged_tx)
 
-  let to_ tx =
-    match tx with Legacy {to_; _} | AccessList {to_; _} | FeeMarket {to_; _} | Blob {to_; _} -> to_
+  let to_ tx = match tx with Legacy {to_; _} | AccessList {to_; _} | FeeMarket {to_; _} -> to_
 
-  let nonce tx =
-    match tx with
-    | Legacy {nonce; _} | AccessList {nonce; _} | FeeMarket {nonce; _} | Blob {nonce; _} -> nonce
+  let nonce tx = match tx with Legacy {nonce; _} | AccessList {nonce; _} | FeeMarket {nonce; _} -> nonce
 
-  let data tx =
-    match tx with Legacy {data; _} | AccessList {data; _} | FeeMarket {data; _} | Blob {data; _} -> data
+  let data tx = match tx with Legacy {data; _} | AccessList {data; _} | FeeMarket {data; _} -> data
 
-  let value tx =
-    match tx with
-    | Legacy {value; _} | AccessList {value; _} | FeeMarket {value; _} | Blob {value; _} -> value
+  let value tx = match tx with Legacy {value; _} | AccessList {value; _} | FeeMarket {value; _} -> value
 
   let gas_limit tx =
-    match tx with
-    | Legacy {gas_limit; _} | AccessList {gas_limit; _} | FeeMarket {gas_limit; _} | Blob {gas_limit; _} ->
-        gas_limit
-
-  let blob_hashes tx =
-    match tx with
-    | Blob {blob_versioned_hashes; _} -> blob_versioned_hashes
-    | Legacy _ | AccessList _ | FeeMarket _ -> []
+    match tx with Legacy {gas_limit; _} | AccessList {gas_limit; _} | FeeMarket {gas_limit; _} -> gas_limit
 
   type signature = {r : U256.t; s : U256.t}
-  let signature tx =
-    match tx with Legacy {r; s; _} | AccessList {r; s; _} | FeeMarket {r; s; _} | Blob {r; s; _} -> {r; s}
+  let signature tx = match tx with Legacy {r; s; _} | AccessList {r; s; _} | FeeMarket {r; s; _} -> {r; s}
 
   type fee_mechanism =
     | LegacyFee of {gas_price : Uint.t}
@@ -246,8 +208,7 @@ module Transaction = struct
   let fee_mechanism (tx : t) =
     match tx with
     | Legacy {gas_price; _} | AccessList {gas_price; _} -> LegacyFee {gas_price}
-    | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas; _}
-     |Blob {max_fee_per_gas; max_priority_fee_per_gas; _} ->
+    | FeeMarket {max_fee_per_gas; max_priority_fee_per_gas; _} ->
         FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas}
 
   (* YP (16). Note that this is different to the encoding used by the signing hash function below. *)
@@ -288,22 +249,6 @@ module Transaction = struct
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
           ; Rlp.List (List.map Access.to_rlp tx.access_list)
-          ; U256.to_rlp tx.y_parity
-          ; U256.to_rlp tx.r
-          ; U256.to_rlp tx.s ]
-    | Blob tx ->
-        Rlp.List
-          [ Uint.to_rlp tx.chain_id
-          ; U256.to_rlp tx.nonce
-          ; Uint.to_rlp tx.max_priority_fee_per_gas
-          ; Uint.to_rlp tx.max_fee_per_gas
-          ; Uint.to_rlp tx.gas_limit
-          ; Address.to_rlp tx.to_
-          ; U256.to_rlp tx.value
-          ; Rlp.Bytes tx.data
-          ; Rlp.List (List.map Access.to_rlp tx.access_list)
-          ; U256.to_rlp tx.max_fee_per_blob_gas
-          ; Rlp.List (List.map Rlp.of_bytes32 tx.blob_versioned_hashes)
           ; U256.to_rlp tx.y_parity
           ; U256.to_rlp tx.r
           ; U256.to_rlp tx.s ]
@@ -369,23 +314,6 @@ module Transaction = struct
                  ; U256.to_rlp tx.value
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
-      | Blob tx ->
-          assert (Uint.(tx.chain_id = chain_id)) ;
-          (* EIP-4844 *)
-          kind_tag_to_bytes `Blob
-          ^ Rlp.encode
-              (Rlp.List
-                 [ Uint.to_rlp chain_id
-                 ; U256.to_rlp tx.nonce
-                 ; Uint.to_rlp tx.max_priority_fee_per_gas
-                 ; Uint.to_rlp tx.max_fee_per_gas
-                 ; Uint.to_rlp tx.gas_limit
-                 ; Address.to_rlp tx.to_
-                 ; U256.to_rlp tx.value
-                 ; Rlp.Bytes tx.data
-                 ; Rlp.List (List.map Access.to_rlp tx.access_list)
-                 ; U256.to_rlp tx.max_fee_per_blob_gas
-                 ; Rlp.List (List.map Rlp.of_bytes32 tx.blob_versioned_hashes) ] )
     in
     let hash = Crypto.keccak_256 bytes in
     hash
@@ -399,16 +327,14 @@ module Transaction = struct
       | Legacy {v; _} ->
           if U256.(v = ~$27 || v = ~$28) then U256.(v - ~$27)
           else (* EIP-155 *) U256.(v - ~$35 - (~$2 * U256.of_uint_exn chain_id))
-      | AccessList {y_parity; _} | FeeMarket {y_parity; _} | Blob {y_parity; _} -> y_parity
+      | AccessList {y_parity; _} | FeeMarket {y_parity; _} -> y_parity
     in
     assert (U256.(y_parity <= ~$1)) ;
     let public_key = Crypto.secp256k1_recover r s y_parity (signing_hash chain_id tx) in
     Address.of_bytes32_truncating (Crypto.keccak_256 public_key)
 
   let access_list tx =
-    match tx with
-    | Legacy _ -> []
-    | AccessList {access_list; _} | FeeMarket {access_list; _} | Blob {access_list; _} -> access_list
+    match tx with Legacy _ -> [] | AccessList {access_list; _} | FeeMarket {access_list; _} -> access_list
 
   type call_or_create =
     | Call of {data : Bytes.t (* T_d *); to_ : Address.t (* T_t *)}
@@ -504,8 +430,7 @@ module Block = struct
     let transaction_to_rlp tx =
       match Transaction.kind_tag tx with
       | `Legacy -> Transaction.to_rlp tx
-      | _ ->
-          Rlp.Bytes (Transaction.encode tx)
+      | _ -> Rlp.Bytes (Transaction.encode tx)
     in
     Rlp.List
       [ Header.to_rlp b.header

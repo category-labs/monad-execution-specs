@@ -11,9 +11,6 @@ include Uint
 (* See EIP-2935, EIP-4788. *)
 let system_transaction_gas = ~$30_000_000
 
-let gas_per_blob = exp ~$2 ~$17
-let max_blob_gas_per_block = ~$1_179_648
-
 let taylor_approximation_exponential ~factor ~numerator ~denominator =
   let i = ref one in
   let output = ref zero in
@@ -24,13 +21,6 @@ let taylor_approximation_exponential ~factor ~numerator ~denominator =
     i := !i + one
   done ;
   !output / denominator
-
-let min_blob_gas_price = one
-let blob_base_fee_update_fraction = ~$5_007_716
-
-let block_blob_gas_price (excess_blob_gas : t) =
-  taylor_approximation_exponential ~factor:min_blob_gas_price ~numerator:excess_blob_gas
-    ~denominator:blob_base_fee_update_fraction
 
 let tx_calldata_token_gas = ~$4
 let tx_calldata_floor_token_gas = ~$10
