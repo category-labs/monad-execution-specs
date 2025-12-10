@@ -51,7 +51,6 @@ module BlockState = struct
     ; transactions_processed : (Transaction.t * Receipt.t) list
     ; withdrawals_processed : Withdrawal.t list
     ; requests : Bytes.t list (* EIP-7685 execution layer requests *) }
-
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
@@ -109,7 +108,7 @@ module BlockState = struct
     let requests_hash =
       block_state.requests
       |> List.filter (fun req -> Bytes.length req > 1)
-      |> List.sort (fun r_a r_b -> Char.compare r_a.[0] r_b.[0])
+      |> List.stable_sort (fun r_a r_b -> Char.compare r_a.[0] r_b.[0])
       |> Bytes.concat Bytes.empty
       |> Crypto.keccak_256
     in
@@ -482,6 +481,24 @@ let process_message (msg : Evmc.Message.t) (transaction_state : TransactionState
   in
   H.Host.call msg transaction_state
 
+let process_authorization transaction_state (authorization : Transaction.Authorization.t) : TransactionState.t
+    =
+  let open TransactionState in
+  let authority = Transaction.Authorization.authority authorization in
+  let transaction_state =
+    { transaction_state with
+      accessed_addresses = Address.Set.add authority transaction_state.accessed_addresses }
+  in
+  let Account.{code; nonce; _} = transaction_state.^(account authority) in
+  (* If the authorization is valid, update the code of the authority to the delegation indicator. *)
+  if
+    (Bytes.(code = empty) || Delegation.is_valid_delegation code)
+    && Uint.(U64.to_uint authorization.nonce = U256.to_uint nonce)
+  then
+    transaction_state.^(account authority |-- Account.code) <-
+      Delegation.delegation_code authorization.address
+  else transaction_state
+
 let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   let open BlockState in
   let tx_gas_limit =
@@ -554,11 +571,19 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
       ; nonce = U256.(sender_account.nonce + one) }
   in
 
-  let available_gas = Gas.(tx_gas_limit - intrinsic_gas) in
-  let access_list = Transaction.access_list tx in
-  let transaction_state = TransactionState.make block_state sender tx access_list in
-  let message = prepare_message block_state sender available_gas tx in
-  let result, transaction_state = process_message message transaction_state in
+  (* Execute transaction. *)
+  let result, transaction_state =
+    let transaction_state = TransactionState.make block_state sender tx (Transaction.access_list tx) in
+
+    (* Process EIP-7702 authorizations. *)
+    let transaction_state =
+      List.fold_left process_authorization transaction_state (Transaction.authorization_list tx)
+    in
+
+    let available_gas = Gas.(tx_gas_limit - intrinsic_gas) in
+    let message = prepare_message block_state sender available_gas tx in
+    process_message message transaction_state
+  in
 
   (* Propagate state changes. *)
   let block_state = {block_state with world_state = transaction_state.world_state} in
@@ -611,9 +636,7 @@ let validate_header (_world_state : WorldState.t) (_header : Block.Header.t) =
 let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
   let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
   let code = block_state.^(BlockState.account addr).code in
-  if code = Bytes.empty then
-    (* If no code exists at the address, the call must fail silently. *)
-    block_state
+  if code = Bytes.empty then (None, block_state)
   else
     let message =
       Evmc.Message.
@@ -651,7 +674,7 @@ let process_system_message (block_state : BlockState.t) (addr : Address.t) (data
     (* Update block state with storage changes. As per the relevant EIPs, a system message call
      does not warm up accounts or storage slots, and it does not count towards the block gas
      limit. *)
-    {block_state with world_state = transaction_state.world_state}
+    (Some result, {block_state with world_state = transaction_state.world_state})
 
 let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
@@ -665,13 +688,21 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
   (* EIP-4788 *)
   let block_state =
     let parent_beacon_block_root = block_state.current_block.header.parent_beacon_block_root in
-    process_system_message block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
+    (* Ignore call result as per EIP-4788. *)
+    let _, block_state =
+      process_system_message block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
+    in
+    block_state
   in
 
   (* EIP-2935 *)
   let block_state =
     let parent_hash = block_state.current_block.header.parent_hash in
-    process_system_message block_state history_storage_address (B32.to_bytes parent_hash)
+    (* Ignore call result as per EIP-2935. *)
+    let _, block_state =
+      process_system_message block_state history_storage_address (B32.to_bytes parent_hash)
+    in
+    block_state
   in
 
   (* Process block transactions. *)
@@ -679,8 +710,6 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
 
   (* Process block withdrawals. *)
   let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
-
-  (* TODO process EIP-7685 requests *)
 
   (* TODO coalesce destructing dead accounts here *)
 

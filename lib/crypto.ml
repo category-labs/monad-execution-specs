@@ -18,7 +18,12 @@ let secp256k1n = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD2
 
 let context = Libsecp256k1.External.Context.create ()
 
-let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (msg_hash : B32.t) : Bytes.t =
+type signature = {r : U256.t; s : U256.t; y_parity : U8.t}
+
+let ecrecover {r; s; y_parity} (msg_hash : B32.t) : B20.t =
+  assert (U256.(r <= secp256k1n)) ;
+  assert (U256.(s <= secp256k1n / ~$2)) ;
+  assert (U8.(y_parity = zero || y_parity = one));
   let is_square =
     U256.(
       one
@@ -28,11 +33,11 @@ let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (msg_hash : B32.t) 
   Libsecp256k1.External.(
     let r = U256.to_repr r in
     let s = U256.to_repr s in
-    let v = U256.to_repr v in
+    let y_parity = U8.to_repr y_parity in
     let signature_i = function
       | i when i < 32 -> B32.(r.$(i))
       | i when i < 64 -> B32.(s.$(i - 32))
-      | _ -> B32.(v.$(31))
+      | _ -> U8.Repr.(y_parity.$(0))
     in
     let signature = Sign.read_recoverable_exn context (Bigstring.init Sign.recoverable_bytes signature_i) in
     let result_bigstring =
@@ -41,6 +46,7 @@ let secp256k1_recover (r : U256.t) (s : U256.t) (v : U256.t) (msg_hash : B32.t) 
       |> Sign.recover_exn context ~signature
       |> Key.to_bytes ~compress:false context
     in
-    let result_i i = result_bigstring.{i + 1} in
-    let result = Bytes.init 64 result_i in
-    result )
+    let public_key_i i = result_bigstring.{i + 1} in
+    let public_key = Bytes.init 64 public_key_i in
+    B20.of_bytes32_truncating (keccak_256 public_key) )
+
