@@ -8,7 +8,7 @@ let ( .^()<- ) x lens v' = lens.Lens.set v' x
 
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
-        includes the world state as per YP 4.1. *)
+      includes the world state as per YP 4.1. *)
   type t = {history : Block.t list; accounts : Account.t Address.Map.t (* σ[a] *); chain_id : Uint.t (* β *)}
   [@@deriving lens {submodule = true; prefix = true}]
 
@@ -43,15 +43,15 @@ end
 
 module BlockState = struct
   (** State across multiple transactions in a single block. Tracks the world state, the gas that has been
-        consumed so far by transactions in the block, logs and receipts. *)
+      consumed so far by transactions in the block, logs and receipts. *)
   type t =
     { world_state : WorldState.t
     ; current_block : Block.t
     ; gas_used : Gas.t
-    ; blob_gas_used : Gas.t
     ; transactions_processed : (Transaction.t * Receipt.t) list
     ; withdrawals_processed : Withdrawal.t list
     ; requests : Bytes.t list (* EIP-7685 execution layer requests *) }
+
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
@@ -59,7 +59,6 @@ module BlockState = struct
     { world_state
     ; current_block
     ; gas_used = Gas.zero
-    ; blob_gas_used = Gas.zero
     ; transactions_processed = []
     ; withdrawals_processed = []
     ; requests = [] }
@@ -116,7 +115,8 @@ module BlockState = struct
     in
 
     let gas_used = block_state.gas_used in
-    let blob_gas_used = U64.of_uint_exn block_state.blob_gas_used in
+    (* Monad does not support Blob transactions. *)
+    let blob_gas_used = U64.zero in
 
     let header =
       { block_state.current_block.header with
@@ -145,7 +145,7 @@ module TransactionState = struct
   end
 
   (** State within a single transaction. Tracks the initial world state, any changes to its storage,
-        and variables that are internal to the transaction such as the accrued substate (YP 6.1). *)
+      and variables that are internal to the transaction such as the accrued substate (YP 6.1). *)
   type t =
     { initial_world_state : WorldState.t
     ; world_state : WorldState.t
@@ -154,7 +154,6 @@ module TransactionState = struct
     ; accounts_created_in_current_transaction : Address.Set.t
     ; tx_origin : Address.t
     ; tx_gas_price : Gas.t
-    ; tx_blob_hashes : B32.t list
     ; self_destruct : Address.Set.t  (** A_s *)
     ; logs : Log.t list  (** A_l *)
     ; touched : Address.Set.t  (** A_t *)
@@ -165,7 +164,7 @@ module TransactionState = struct
 
   include TLens
 
-  let pre_compiled_contract_addresses = Address.Set.empty (* TODO *)
+  let pre_compiled_contract_addresses = Address.Set.of_list [] (* TODO *)
 
   let make (block_state : BlockState.t) sender tx access_list =
     let open BlockState in
@@ -202,7 +201,6 @@ module TransactionState = struct
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; tx_origin = sender
     ; tx_gas_price = block_state.current_block.header.base_fee_per_gas
-    ; tx_blob_hashes = Transaction.blob_hashes tx
     ; self_destruct = Address.Set.empty
     ; logs = []
     ; touched = Address.Set.empty
@@ -290,9 +288,31 @@ struct
     !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
 
   let set_storage addr key v =
+    let$ o =
+      !( initial_world_state
+       |-- WorldState.account addr
+       |-- storage
+       |-- B32.Map.at key
+       |-- Option.get_or_default B32.zeros )
+    in
+    let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
     let$ () = account addr |-- storage |-- B32.Map.at key := Some v in
-    (* TODO: make this accurate. *)
-    return Evmc.StorageStatus.Assigned
+    let zero u = B32.(u = zeros) in
+    let x u = B32.(u <> zeros && u = o) in
+    let y u = B32.(u <> zeros && u = c) in
+    let z u = B32.(u <> zeros && u = v) in
+    let open Evmc.StorageStatus in
+    return
+      ( match () with
+      | () when zero o && zero c && z v -> Added
+      | () when x o && x c && zero v -> Deleted
+      | () when x o && x c && z v -> Modified
+      | () when x o && zero c && z v -> DeletedAdded
+      | () when x o && y c && zero v -> ModifiedDeleted
+      | () when x o && zero c && x v -> DeletedRestored
+      | () when zero o && y c && zero v -> AddedDeleted
+      | () when x o && y c && x v -> ModifiedRestored
+      | () -> Assigned )
 
   let get_balance addr = !(account addr |-- balance)
 
@@ -402,9 +422,13 @@ struct
         ; chain_id = U256.of_uint_exn state.world_state.chain_id
         ; block_base_fee = U256.of_uint_exn state.current_block.header.base_fee_per_gas
         ; blob_base_fee =
-            U256.of_uint_exn
-              (Gas.block_blob_gas_price (U64.to_uint state.current_block.header.excess_blob_gas))
-        ; blob_hashes = state.tx_blob_hashes
+            (* The current Monad implementation calculates blob base fee as per EIP-4844, which is
+               inconsistent with Prague as it does not implement the blob fee changes in EIP-7691.
+               As blob transactions are disallowed in Monad, we set it to one here. This should not
+               case an observable difference in the behaviour of the BLOBBASEFEE opcode unless a block
+               has non-zero excess_blob_gas. *)
+            U256.one
+        ; blob_hashes = []
         ; initcodes = [] }
 
   let get_block_hash i =
@@ -474,15 +498,6 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   ( match Transaction.call_or_create tx with
   | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size -> failwith "Invalid transaction"
   | _ -> () ) ;
-  (* Blob hash length and versioning *)
-  ( match tx with
-  | Blob {blob_versioned_hashes; _} ->
-      if blob_versioned_hashes = [] then failwith "Invalid transaction" ;
-      let check_blob_hash_version hash =
-        if not (B32.(hash.$(0)) = versioned_hash_version_kzg) then failwith "Invalid transaction"
-      in
-      List.iter check_blob_hash_version blob_versioned_hashes
-  | _ -> () ) ;
 
   (* YP (64) *)
   let intrinsic_gas = Gas.tx_intrinsic_gas tx in
@@ -497,31 +512,22 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   let base_fee_per_gas = header.base_fee_per_gas in
   (* Calculate effective gas price and max payable gas fee depending on transaction type. Here we also check
      that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
-  let effective_gas_price, max_gas_fee, tx_blob_gas_used, blob_gas_fee =
+  let effective_gas_price, max_gas_fee =
     match Transaction.fee_mechanism tx with
-    | FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas} -> (
+    | FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas} ->
         if Gas.(max_fee_per_gas < max_priority_fee_per_gas) then failwith "Invalid transaction" ;
         if Gas.(max_fee_per_gas < base_fee_per_gas) then failwith "Invalid transaction" ;
         let priority_fee_per_gas = Gas.(min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas)) in
         let effective_gas_price = Gas.(priority_fee_per_gas + base_fee_per_gas) in
         let max_gas_fee = Gas.(Transaction.gas_limit tx * max_fee_per_gas) in
-        match tx with
-        | Blob {max_fee_per_blob_gas; blob_versioned_hashes; _} ->
-            let max_fee_per_blob_gas = U256.to_uint max_fee_per_blob_gas in
-            let blob_gas_price = Gas.block_blob_gas_price (U64.to_uint header.excess_blob_gas) in
-            if Gas.(max_fee_per_blob_gas < blob_gas_price) then failwith "Invalid transaction" ;
-            let total_blob_gas = Gas.(gas_per_blob * ~$(List.length blob_versioned_hashes)) in
-            let max_blob_gas_fee = Gas.(total_blob_gas * max_fee_per_blob_gas) in
-            let blob_gas_fee = Gas.(total_blob_gas * blob_gas_price) in
-            (effective_gas_price, Gas.(max_gas_fee + max_blob_gas_fee), total_blob_gas, blob_gas_fee)
-        | _ -> (effective_gas_price, max_gas_fee, Gas.zero, Gas.zero) )
+        (effective_gas_price, max_gas_fee)
     | LegacyFee {gas_price} ->
         if Gas.(gas_price < base_fee_per_gas) then failwith "Invalid transaction" ;
-        (gas_price, Gas.(tx_gas_limit * gas_price), Gas.zero, Gas.zero)
+        (gas_price, Gas.(tx_gas_limit * gas_price))
   in
 
   let sender = Transaction.sender block_state.world_state.chain_id tx in
-  let sender_account = block_state.world_state |. WorldState.account sender in
+  let sender_account = block_state.world_state.^(WorldState.account sender) in
   if U256.(sender_account.nonce <> tx_nonce) then failwith "Invalid transaction" ;
   if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then (
     Format.eprintf "Account %s (%s) cannot afford to pay %s gas fees + %s tx_value\n"
@@ -532,12 +538,13 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
     failwith "Invalid transaction" ;
 
-  let effective_gas_fee = Gas.(tx_gas_limit * effective_gas_price) in
-  let total_fee = Gas.(effective_gas_fee + blob_gas_fee) in
-  if total_fee > U256.to_uint sender_account.balance then failwith "Invalid transaction" ;
-  let total_fee = U256.of_uint_exn total_fee in
+  let total_fee =
+    let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
+    if total_fee > U256.to_uint sender_account.balance then failwith "Invalid transaction" ;
+    U256.of_uint_exn total_fee
+  in
 
-  (* Pay gas and blob fees, increase nonce *)
+  (* Pay gas fees, increase nonce *)
   let block_state =
     (* The yellow paper does not specify a behaviour for nonce overflows. *)
     assert (U256.(sender_account.nonce < max_t)) ;
@@ -575,8 +582,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   (* Update gas used by the block. *)
   let block_gas_used = Gas.(block_state.gas_used + tx_gas_used) in
-  let block_blob_gas_used = Gas.(block_state.blob_gas_used + tx_blob_gas_used) in
-  let block_state = {block_state with gas_used = block_gas_used; blob_gas_used = block_blob_gas_used} in
+  let block_state = {block_state with gas_used = block_gas_used} in
 
   (* Add receipt and logs. *)
   let block_state =
@@ -604,7 +610,7 @@ let validate_header (_world_state : WorldState.t) (_header : Block.Header.t) =
 (* Process a system message call as in EIP-2935, EIP-4788. *)
 let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
   let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
-  let code = (block_state |. BlockState.account addr).code in
+  let code = block_state.^(BlockState.account addr).code in
   if code = Bytes.empty then
     (* If no code exists at the address, the call must fail silently. *)
     block_state
@@ -633,7 +639,6 @@ let process_system_message (block_state : BlockState.t) (addr : Address.t) (data
         ; accounts_created_in_current_transaction = Address.Set.empty
         ; tx_origin = system_sender_address
         ; tx_gas_price = Uint.zero
-        ; tx_blob_hashes = []
         ; self_destruct = Address.Set.empty
         ; logs = []
         ; touched = Address.Set.empty
@@ -648,6 +653,7 @@ let process_system_message (block_state : BlockState.t) (addr : Address.t) (data
      limit. *)
     {block_state with world_state = transaction_state.world_state}
 
+let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
 
 let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
@@ -657,7 +663,10 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
   let block_state = BlockState.make world_state block in
 
   (* EIP-4788 *)
-  (* TODO *)
+  let block_state =
+    let parent_beacon_block_root = block_state.current_block.header.parent_beacon_block_root in
+    process_system_message block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
+  in
 
   (* EIP-2935 *)
   let block_state =

@@ -125,7 +125,7 @@ module StorageStatus = struct
     | AddedDeleted
     (* X -> Y -> X *)
     | ModifiedRestored
-    (* X -> Y -> Z *)
+    (* Catch-all *)
     | Assigned
 end
 
