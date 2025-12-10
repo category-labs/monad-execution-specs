@@ -1,5 +1,6 @@
 (** Utilities for handling EOA delegation as per EIP-7702. *)
 
+module Authorization = Chain.Ethereum.Transaction.Authorization
 module Address = Chain.Ethereum.Address
 open Numeric
 open Byte_string
@@ -16,6 +17,9 @@ let per_auth_base_cost = Uint.(~$12_500)
     (corresponding to the delegation indicator plus a 20-byte address) *)
 let is_valid_delegation (code : Bytes.t) : bool =
   Bytes.length code = eoa_delegated_code_length && Bytes.starts_with ~prefix:eoa_delegation_prefix code
+
+let delegation_code (address: Address.t) : Bytes.t =
+  Format.sprintf "%s%s" eoa_delegation_prefix (Address.to_bytes address)
 
 (** If the bytecode starts with a delegation indicator (0xef0100), [get_delegated_address] returns the address
     where the delegated code is hosted, otherwise it returns [None]. *)

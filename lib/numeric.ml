@@ -352,3 +352,6 @@ module Bits64 = TwosComplement (Traits.Byte_width.Bytes8)
 
 module U64 = Bits64.Unsigned
 module I64 = Bits64.Signed
+
+module Bits8 = TwosComplement (Traits.Byte_width.Bytes1)
+module U8 = Bits8.Unsigned

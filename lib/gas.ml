@@ -37,6 +37,9 @@ let tokens_in_calldata (tx : Transaction.t) =
   let Bytes.{zero_bytes; nonzero_bytes} = Bytes.count_zero_and_nonzero_bytes Transaction.(data tx) in
   Stdlib.(zero_bytes + (4 * nonzero_bytes))
 
+(* EIP-7702 *)
+let tx_authorization_list_gas_per_address = ~$25_000
+
 (* YP (64) *)
 let tx_intrinsic_gas (tx : Transaction.t) =
   let calldata_gas = ~$(tokens_in_calldata tx) * tx_calldata_token_gas in
@@ -53,7 +56,10 @@ let tx_intrinsic_gas (tx : Transaction.t) =
         g + tx_access_list_address + (tx_access_list_storage * ~$(List.length access.storage_keys)) )
       zero (Transaction.access_list tx)
   in
-  calldata_gas + create_gas + transaction_gas + access_list_gas
+  let authorization_list_gas =
+    tx_authorization_list_gas_per_address * ~$(List.length (Transaction.authorization_list tx))
+  in
+  calldata_gas + create_gas + transaction_gas + access_list_gas + authorization_list_gas
 
 (* EIP-7623 *)
 let tx_floor_gas (tx : Transaction.t) =
