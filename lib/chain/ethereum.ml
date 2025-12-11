@@ -107,11 +107,14 @@ module Transaction = struct
         ; U256.to_rlp s ]
 
     (** Recover the authority address from an EIP-7702 authorization entry. *)
-    let authority ({y_parity; r; s; chain_id; address; nonce} : t) : Address.t =
+    let authority ({y_parity; r; s; chain_id; address; nonce} : t) : Address.t option =
       let auth_hash =
         Crypto.keccak_256 Rlp.(encode (List [U256.to_rlp chain_id; Address.to_rlp address; U64.to_rlp nonce]))
       in
-      Crypto.ecrecover {y_parity; r; s} auth_hash
+      Option.(
+        let$ () = ensure U256.(zero < r && r < Crypto.secp256k1n) in
+        let$ () = ensure U256.(zero < s && s < Crypto.secp256k1n / ~$2) in
+        Crypto.ecrecover {y_parity; r; s} auth_hash )
   end
 
   (* YP 4.2 *)
@@ -416,9 +419,13 @@ module Transaction = struct
     let hash = Crypto.keccak_256 bytes in
     hash
 
-  let sender (chain_id : Uint.t) (tx : t) =
+  let sender (chain_id : Uint.t) (tx : t) : Address.t option =
     let msg_hash = signing_hash chain_id tx in
-    Crypto.ecrecover (signature chain_id tx) msg_hash
+    Option.(
+      let signature = signature chain_id tx in
+      let$ () = ensure U256.(zero < signature.r && signature.r < Crypto.secp256k1n) in
+      let$ () = ensure U256.(zero < signature.s && signature.s < Crypto.secp256k1n / ~$2) in
+      Crypto.ecrecover signature msg_hash )
 
   let access_list tx =
     match tx with

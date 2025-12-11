@@ -36,7 +36,9 @@ let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
         let$ () = ensure U256.(r > zero && r < Crypto.secp256k1n) in
         let$ () = ensure U256.(s > zero && s < Crypto.secp256k1n) in
 
-        try return (Address.to_bytes (Crypto.ecrecover {r; s; y_parity} h)) with _ -> None ) )
+        let$ addr = Crypto.ecrecover {r; s; y_parity} h in
+
+        return (Address.to_bytes addr) ) )
 
 let sha256_address = Address.of_hex_string "0x02"
 let sha256 (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
