@@ -9,7 +9,7 @@ let set_tests_kind kind = Arg.String (fun filename -> tests_kind := Some (kind, 
 let execution_mode = ref `Verify
 let set_execution_mode_update_fixture = Arg.String (fun filename -> execution_mode := `Update filename)
 
-let usage_str = "Usage: execrun (--blockchain_test FILE | --state_test FILE) [--update_fixture <file>]\n"
+let usage_str = "Usage: execrun (--blockchain_test FILE | --state_test FILE) [--update_fixture FILE]\n"
 
 let () =
   Arg.(
