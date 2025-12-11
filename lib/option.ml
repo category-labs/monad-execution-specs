@@ -11,3 +11,7 @@ let get_or_throw : ('a option, 'a) Lens.t = {get; set = (fun x _ -> Some x)}
 
 let ( >>= ) = bind
 let ( let$ ) = bind
+let return x = Some x
+
+let ensure (predicate : bool) : unit option =
+  if predicate then Some () else None

@@ -88,7 +88,7 @@ let load_preconditions pre (state : State.WorldState.t) =
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   State.WorldState.make fixtures.config.chain_id
   |> load_preconditions fixtures.pre
-  |> fun s -> List.fold_left (State.process_block ~verify:false) s fixtures.blocks
+  |> fun s -> List.fold_left (Execution.process_block ~verify:false) s fixtures.blocks
 
 let check_test_result (name, fixtures, post_state) =
   let success = check_postconditions post_state fixtures.Fixtures.BlockchainTest.post in
