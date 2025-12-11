@@ -160,7 +160,7 @@ struct
   (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
       '0x', into an array of bytes. Raises an exception if the given string does not follow the correct format,
       or the length of the resulting byte-string is different from {!byte_width}. *)
-  let of_hex_string ?(zero_pad = false) str =
+  let of_hex_string ?(zero_pad = true) str =
     let width = if zero_pad then Some byte_width else None in
     of_bytes_exn (Bytes.of_hex_string ?width str)
 
