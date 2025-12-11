@@ -17,20 +17,23 @@ let process_message (msg : Evmc.Message.t) (transaction_state : TransactionState
 let process_authorization transaction_state (authorization : Transaction.Authorization.t) : TransactionState.t
     =
   let open TransactionState in
-  let authority = Transaction.Authorization.authority authorization in
-  let transaction_state =
-    { transaction_state with
-      accessed_addresses = Address.Set.add authority transaction_state.accessed_addresses }
-  in
-  let Account.{code; nonce; _} = transaction_state.^(account authority) in
-  (* If the authorization is valid, update the code of the authority to the delegation indicator. *)
-  if
-    (Bytes.(code = empty) || Delegation.is_valid_delegation code)
-    && Uint.(U64.to_uint authorization.nonce = U256.to_uint nonce)
-  then
-    transaction_state.^(account authority |-- Account.code) <-
-      Delegation.delegation_code authorization.address
-  else transaction_state
+  match Transaction.Authorization.authority authorization with
+  | None ->
+      (* As per EIP-7702, skip invalid authorizations. *)
+      transaction_state
+  | Some authority ->
+      let transaction_state =
+        { transaction_state with
+          accessed_addresses = Address.Set.add authority transaction_state.accessed_addresses }
+      in
+      let Account.{code; nonce; _} = transaction_state.^(account authority) in
+      if
+        (Bytes.(code = empty) || Delegation.is_valid_delegation code)
+        && Uint.(U64.to_uint authorization.nonce = U256.to_uint nonce)
+      then
+        transaction_state.^(account authority |-- Account.code) <-
+          Delegation.delegation_code authorization.address
+      else transaction_state
 
 let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
   let open BlockState in
@@ -76,7 +79,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
         (gas_price, Gas.(tx_gas_limit * gas_price))
   in
 
-  let sender = Transaction.sender block_state.world_state.chain_id tx in
+  let sender = Option.get (Transaction.sender block_state.world_state.chain_id tx) in
   let sender_account = block_state.world_state.^(WorldState.account sender) in
   if U256.(sender_account.nonce <> tx_nonce) then failwith "Invalid transaction" ;
   if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then (
