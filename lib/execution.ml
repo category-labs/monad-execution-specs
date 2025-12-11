@@ -9,7 +9,7 @@ let process_message (msg : Evmc.Message.t) (transaction_state : TransactionState
   let module H =
     Evmc.Instantiate (TransactionState.M) (Host)
       (Vm.Make (struct
-        let trace = true
+        let trace = false
       end))
   in
   H.Host.call msg transaction_state

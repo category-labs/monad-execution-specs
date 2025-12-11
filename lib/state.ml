@@ -284,7 +284,7 @@ struct
        |-- Option.get_or_default B32.zeros )
     in
     let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
-    let$ () = account addr |-- storage |-- B32.Map.at key := Some v in
+    let$ () = account addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v in
     let zero u = B32.(u = zeros) in
     let x u = B32.(u <> zeros && u = o) in
     let y u = B32.(u <> zeros && u = c) in
