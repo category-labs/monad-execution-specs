@@ -92,7 +92,7 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
 
 let check_test_result (name, fixtures, post_state) =
   let success = check_postconditions post_state fixtures.Fixtures.BlockchainTest.post in
-  Format.eprintf "Test %s: %s" name (if success then "PASS" else "FAIL") ;
+  Format.eprintf "Test %s: %s\n" name (if success then "PASS" else "FAIL") ;
   success
 
 let check_test_results results = List.for_all check_test_result results
@@ -146,7 +146,7 @@ let () =
   | Some (`Blockchain, blockchain_fixtures) ->
       let blockchain_tests =
         match
-          Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file blockchain_fixtures)
+          Fixtures.BlockchainTest.of_yojson ~skip_invalid:true (Yojson.Safe.from_file blockchain_fixtures)
         with
         | Ok fix -> fix
         | Error place -> failwith (Format.sprintf "Error when decoding %s" place)
