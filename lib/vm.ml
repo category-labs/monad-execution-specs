@@ -1931,11 +1931,5 @@ struct
                 ; gas_refund = 0L
                 ; output_data = ctx.machine_state.output_buffer
                 ; create_address = Address.zero }
-          | _ ->
-              Evmc.Result.
-                { status_code = err
-                ; gas_left = 0L
-                ; gas_refund = 0L
-                ; output_data = Bytes.empty
-                ; create_address = Address.zero } ) )
+          | _ -> Evmc.Result.failure err ) )
 end

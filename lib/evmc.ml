@@ -62,6 +62,14 @@ module Result = struct
     ; gas_refund : Int64.t
     ; output_data : Bytes.t
     ; create_address : Address.t }
+
+  let failure error_code =
+    assert StatusCode.(error_code <> Success && error_code <> Revert) ;
+    { status_code = error_code
+    ; gas_left = 0L
+    ; gas_refund = 0L
+    ; output_data = Bytes.empty
+    ; create_address = Address.zero }
 end
 
 module Message = struct
