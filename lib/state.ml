@@ -365,7 +365,7 @@ struct
           let contract_length = Bytes.length contract_code in
           let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
           if
-            (contract_length = 0 && contract_code.[0] = '\xef')
+            (contract_length > 0 && contract_code.[0] = '\xef')
             || Uint.(contract_code_gas > of_int64 result.gas_left)
           then
             return
