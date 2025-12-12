@@ -94,7 +94,7 @@ end
 
 module Transaction = struct
   module Access = struct
-    type t = {address : Address.t (* E_a *); storage_keys : B32.t list [@tag "storageKeys"] (* E_s *)}
+    type t = {address : Address.t (* E_a *); storage_keys : B32.t list (* E_s *) [@key "storageKeys"]}
     [@@deriving yojson]
 
     let to_rlp {address; storage_keys} =
@@ -459,10 +459,10 @@ end
 module Withdrawal = struct
   (* YP 4.3 *)
   type t =
-    { global_index : U64.t [@tag "index"] (* W_g *)
-    ; validator_index : U64.t [@tag "validatorIndex"] (* W_v *)
-    ; recipient : Address.t [@tag "address"] (* W_r *)
-    ; amount : U256.t [@tag "amount"] (* W_a *) }
+    { global_index : U64.t (* W_g *) [@key "index"]
+    ; validator_index : U64.t (* W_v *) [@key "validatorIndex"]
+    ; recipient : Address.t (* W_r *) [@key "address"]
+    ; amount : U256.t (* W_a *) [@key "amount"] }
   [@@deriving yojson]
 
   (* YP (21) *)
@@ -598,8 +598,8 @@ module Receipt = struct
   type t =
     { tx_type : Transaction.kind_tag (* R_x *)
     ; succeeded : bool (* R_z *)
-    ; cumulative_gas_used : Uint.t (* R_u *) [@tag "cumulativeGasUsed"]
-    ; bloom : Bloom.t (* R_b *) [@tag "logsBloom"]
+    ; cumulative_gas_used : Uint.t (* R_u *) [@key "cumulativeGasUsed"]
+    ; bloom : Bloom.t (* R_b *) [@key "logsBloom"]
     ; logs : Log.t list (* R_l *) }
   [@@deriving yojson]
 
