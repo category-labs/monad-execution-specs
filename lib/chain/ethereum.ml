@@ -514,6 +514,30 @@ module Block = struct
         ; U64.to_rlp h.excess_blob_gas
         ; Rlp.of_bytes32 h.parent_beacon_block_root
         ; Rlp.of_bytes32 h.requests_hash ]
+
+    (* Empty block header, useful for testing. *)
+    let empty =
+      { parent_hash = B32.zeros
+      ; ommers_hash = B32.zeros
+      ; beneficiary = Address.zero
+      ; state_root = B32.zeros
+      ; transactions_root = B32.zeros
+      ; receipts_root = B32.zeros
+      ; logs_bloom = Bloom.zeros
+      ; difficulty = Uint.zero
+      ; number = Uint.zero
+      ; gas_limit = Uint.zero
+      ; gas_used = Uint.zero
+      ; timestamp = U256.zero
+      ; extra_data = Bytes.empty
+      ; prev_randao = B32.zeros
+      ; nonce = B8.zeros
+      ; base_fee_per_gas = Uint.zero
+      ; withdrawals_root = B32.zeros
+      ; blob_gas_used = U64.zero
+      ; excess_blob_gas = U64.zero
+      ; parent_beacon_block_root = B32.zeros
+      ; requests_hash = B32.zeros }
   end
 
   (* YP 4.4 (23) *)
