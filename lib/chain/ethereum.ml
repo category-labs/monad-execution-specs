@@ -29,6 +29,14 @@ module Address = struct
                ^ B20.to_bytes sender
                ^ B32.to_bytes salt
                ^ B32.to_bytes (Crypto.keccak_256 code) ) ) )
+
+  (* Encoding/decoding address options, used to handle the recipient of a transaction. *)
+  type t_opt = t option
+  let t_opt_to_yojson (addr : t option) = match addr with Some addr -> to_yojson addr | None -> `String ""
+  let t_opt_of_yojson (json : Yojson.Safe.t) =
+    match json with `String "" -> Ok None | _ -> Result.map Option.some (of_yojson json)
+
+  let t_opt_to_rlp (addr : t option) = match addr with None -> Rlp.Bytes "" | Some addr -> to_rlp addr
 end
 
 module Revision = struct
@@ -124,7 +132,7 @@ module Transaction = struct
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
-    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; to_ : Address.t_opt (* T_t *) [@key "to"]
     ; data : Bytes.t (* Either T_d or T_i *)
     ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
     ; v : U256.t (* T_w *) }
@@ -135,7 +143,7 @@ module Transaction = struct
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
-    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; to_ : Address.t_opt (* T_t *) [@key "to"]
     ; data : Bytes.t (* Either T_d or T_i *)
     ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
@@ -148,7 +156,7 @@ module Transaction = struct
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
-    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; to_ : Address.t_opt (* T_t *) [@key "to"]
     ; data : Bytes.t (* Either T_d or T_i *)
     ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
     ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
@@ -164,7 +172,7 @@ module Transaction = struct
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
-    ; to_ : Address.t (* T_t *) [@key "to"]
+    ; to_ : Address.t_opt (* T_t *) [@key "to"]
     ; data : Bytes.t (* Either T_d or T_i *)
     ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
     ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
@@ -200,43 +208,6 @@ module Transaction = struct
     | '\x02' -> Some `FeeMarket
     | '\x04' -> Some `SetCode
     | _ -> None
-
-  let kind_tag_to_yojson (tag : kind_tag) : Yojson.Safe.t =
-    let bytestring = Format.sprintf "0x%s" (Bytes.to_hex_string (kind_tag_to_bytes tag)) in
-    `String bytestring
-  let kind_tag_of_yojson (json : Yojson.Safe.t) : (kind_tag, string) result =
-    Result.(
-      match U64.(to_int <$> of_yojson json) with
-      | Ok i when i >= 0 && i < 256 -> (
-        match byte_to_kind_tag (Char.unsafe_chr i) with
-        | Some tag -> return tag
-        | None -> fail "Ethereum.Transaction.kind_tag" )
-      | _ -> fail "Ethereum.Transaction.kind_tag" )
-
-  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
-    Result.(
-      (* Ethereum text fixtures encode numeric values as hex strings, but yojson assumes primitive number types
-         are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
-         match on it. *)
-      match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
-      | Ok None -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
-      | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
-      | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
-      | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
-      | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
-
-  let to_yojson (tx : t) : Yojson.Safe.t =
-    let untagged_tx =
-      match tx with
-      | Legacy tx -> [%to_yojson: legacy_tx] tx
-      | AccessList tx -> [%to_yojson: access_list_tx] tx
-      | FeeMarket tx -> [%to_yojson: fee_market_tx] tx
-      | SetCode tx -> [%to_yojson: set_code_tx] tx
-    in
-    (* For non-legacy transactions, add the transaction type back in. *)
-    match kind_tag tx with
-    | `Legacy -> untagged_tx
-    | tag -> `Assoc (("type", kind_tag_to_yojson tag) :: Yojson.Safe.Util.to_assoc untagged_tx)
 
   let to_ tx =
     match tx with Legacy {to_; _} | AccessList {to_; _} | FeeMarket {to_; _} | SetCode {to_; _} -> to_
@@ -289,7 +260,7 @@ module Transaction = struct
           [ U256.to_rlp tx.nonce
           ; Uint.to_rlp tx.gas_price
           ; Uint.to_rlp tx.gas_limit
-          ; Address.to_rlp tx.to_
+          ; Address.t_opt_to_rlp tx.to_
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
           ; U256.to_rlp tx.v
@@ -301,7 +272,7 @@ module Transaction = struct
           ; U256.to_rlp tx.nonce
           ; Uint.to_rlp tx.gas_price
           ; Uint.to_rlp tx.gas_limit
-          ; Address.to_rlp tx.to_
+          ; Address.t_opt_to_rlp tx.to_
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
           ; Rlp.List (List.map Access.to_rlp tx.access_list)
@@ -315,7 +286,7 @@ module Transaction = struct
           ; Uint.to_rlp tx.max_priority_fee_per_gas
           ; Uint.to_rlp tx.max_fee_per_gas
           ; Uint.to_rlp tx.gas_limit
-          ; Address.to_rlp tx.to_
+          ; Address.t_opt_to_rlp tx.to_
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
           ; Rlp.List (List.map Access.to_rlp tx.access_list)
@@ -329,7 +300,7 @@ module Transaction = struct
           ; Uint.to_rlp tx.max_priority_fee_per_gas
           ; Uint.to_rlp tx.max_fee_per_gas
           ; Uint.to_rlp tx.gas_limit
-          ; Address.to_rlp tx.to_
+          ; Address.t_opt_to_rlp tx.to_
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
           ; Rlp.List (List.map Access.to_rlp tx.access_list)
@@ -354,7 +325,7 @@ module Transaction = struct
                [ U256.to_rlp tx.nonce
                ; Uint.to_rlp tx.gas_price
                ; Uint.to_rlp tx.gas_limit
-               ; Address.to_rlp tx.to_
+               ; Address.t_opt_to_rlp tx.to_
                ; U256.to_rlp tx.value
                ; Rlp.Bytes tx.data ] )
       | Legacy tx ->
@@ -364,7 +335,7 @@ module Transaction = struct
                [ U256.to_rlp tx.nonce
                ; Uint.to_rlp tx.gas_price
                ; Uint.to_rlp tx.gas_limit
-               ; Address.to_rlp tx.to_
+               ; Address.t_opt_to_rlp tx.to_
                ; U256.to_rlp tx.value
                ; Rlp.Bytes tx.data
                ; Uint.to_rlp chain_id
@@ -380,7 +351,7 @@ module Transaction = struct
                  ; U256.to_rlp tx.nonce
                  ; Uint.to_rlp tx.gas_price
                  ; Uint.to_rlp tx.gas_limit
-                 ; Address.to_rlp tx.to_
+                 ; Address.t_opt_to_rlp tx.to_
                  ; U256.to_rlp tx.value
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
@@ -395,7 +366,7 @@ module Transaction = struct
                  ; Uint.to_rlp tx.max_priority_fee_per_gas
                  ; Uint.to_rlp tx.max_fee_per_gas
                  ; Uint.to_rlp tx.gas_limit
-                 ; Address.to_rlp tx.to_
+                 ; Address.t_opt_to_rlp tx.to_
                  ; U256.to_rlp tx.value
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
@@ -410,14 +381,13 @@ module Transaction = struct
                  ; Uint.to_rlp tx.max_priority_fee_per_gas
                  ; Uint.to_rlp tx.max_fee_per_gas
                  ; Uint.to_rlp tx.gas_limit
-                 ; Address.to_rlp tx.to_
+                 ; Address.t_opt_to_rlp tx.to_
                  ; U256.to_rlp tx.value
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list)
                  ; Rlp.List (List.map Authorization.to_rlp tx.authorization_list) ] )
     in
-    let hash = Crypto.keccak_256 bytes in
-    hash
+    Crypto.keccak_256 bytes
 
   let sender (chain_id : Uint.t) (tx : t) : Address.t option =
     let msg_hash = signing_hash chain_id tx in
@@ -443,7 +413,49 @@ module Transaction = struct
   let call_or_create tx =
     let to_ = to_ tx in
     let data = data tx in
-    if Address.(to_ = zero) then Create {initcode = data} else Call {data; to_}
+    match to_ with None -> Create {initcode = data} | Some to_ -> Call {data; to_}
+
+  let kind_tag_to_yojson (tag : kind_tag) : Yojson.Safe.t =
+    let bytestring = Format.sprintf "0x%s" (Bytes.to_hex_string (kind_tag_to_bytes tag)) in
+    `String bytestring
+  let kind_tag_of_yojson (json : Yojson.Safe.t) : (kind_tag, string) result =
+    Result.(
+      match U64.(to_int <$> of_yojson json) with
+      | Ok i when i >= 0 && i < 256 -> (
+        match byte_to_kind_tag (Char.unsafe_chr i) with
+        | Some tag -> return tag
+        | None -> fail "Ethereum.Transaction.kind_tag" )
+      | _ -> fail "Ethereum.Transaction.kind_tag" )
+
+  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+    Result.(
+      (* Ethereum text fixtures encode numeric values as hex strings, but yojson assumes primitive number types
+         are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
+         match on it. *)
+      let$ tx =
+        match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
+        | Ok None -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
+        | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
+        | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
+        | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
+        | Ok _ | Error _ -> fail "Ethereum.Transaction.t"
+      in
+      let$ fixture_sender = [%of_yojson: Address.t] (Yojson.Safe.Util.member "sender" json) in
+      assert (Address.(fixture_sender = Option.get (sender Uint.one tx))) ;
+      return tx )
+
+  let to_yojson (tx : t) : Yojson.Safe.t =
+    let untagged_tx =
+      match tx with
+      | Legacy tx -> [%to_yojson: legacy_tx] tx
+      | AccessList tx -> [%to_yojson: access_list_tx] tx
+      | FeeMarket tx -> [%to_yojson: fee_market_tx] tx
+      | SetCode tx -> [%to_yojson: set_code_tx] tx
+    in
+    (* For non-legacy transactions, add the transaction type back in. *)
+    match kind_tag tx with
+    | `Legacy -> untagged_tx
+    | tag -> `Assoc (("type", kind_tag_to_yojson tag) :: Yojson.Safe.Util.to_assoc untagged_tx)
 end
 
 module Withdrawal = struct
