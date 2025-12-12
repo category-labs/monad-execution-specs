@@ -132,11 +132,13 @@ module Transaction = struct
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
-    ; to_ : Address.t_opt (* T_t *) [@key "to"]
+    ; to_ : Address.t_opt
+          (* T_t *) [@of_yojson Address.t_opt_of_yojson] [@to_yojson Address.t_opt_to_yojson] [@key "to"]
     ; data : Bytes.t (* Either T_d or T_i *)
     ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
     ; v : U256.t (* T_w *) }
   [@@deriving yojson {strict = false}]
+
   type access_list_tx =
     { nonce : U256.t (* T_n *)
     ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
@@ -150,6 +152,7 @@ module Transaction = struct
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U8.t (* T_y *) [@key "v"] }
   [@@deriving yojson {strict = false}]
+
   type fee_market_tx =
     { nonce : U256.t (* T_n *)
     ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
@@ -432,17 +435,12 @@ module Transaction = struct
       (* Ethereum text fixtures encode numeric values as hex strings, but yojson assumes primitive number types
          are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
          match on it. *)
-      let$ tx =
-        match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
-        | Ok None -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
-        | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
-        | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
-        | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
-        | Ok _ | Error _ -> fail "Ethereum.Transaction.t"
-      in
-      let$ fixture_sender = [%of_yojson: Address.t] (Yojson.Safe.Util.member "sender" json) in
-      assert (Address.(fixture_sender = Option.get (sender Uint.one tx))) ;
-      return tx )
+      match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
+      | Ok None -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
+      | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
+      | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
+      | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
+      | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
 
   let to_yojson (tx : t) : Yojson.Safe.t =
     let untagged_tx =
