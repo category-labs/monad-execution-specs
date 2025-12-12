@@ -41,52 +41,59 @@ let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
         return (Address.to_bytes addr) ) )
 
 let sha256_address = Address.of_hex_string "0x02"
-let sha256 (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let sha256 (msg : Evmc.Message.t) : Evmc.Result.t =
+  check_gas msg
+    Gas.(~$60 + (~$12 * bytes_to_whole_words ~$(Bytes.length msg.input_data)))
+    (fun () -> Some (B32.to_bytes (Crypto.keccak_256 msg.input_data)))
 
 let ripemd160_address = Address.of_hex_string "0x03"
-let ripemd160 (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let ripemd160 (msg : Evmc.Message.t) : Evmc.Result.t =
+  check_gas msg
+    Gas.(~$600 + (~$120 * bytes_to_whole_words ~$(Bytes.length msg.input_data)))
+    (fun () -> Some (B20.to_bytes (Crypto.ripemd_160 msg.input_data)))
 
 let identity_address = Address.of_hex_string "0x04"
-let identity (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let identity (msg : Evmc.Message.t) : Evmc.Result.t =
+  check_gas msg (Gas.of_int (15 + (3 * Bytes.length msg.input_data))) (fun () -> Some msg.input_data)
 
 let modexp_address = Address.of_hex_string "0x05"
-let modexp (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let modexp (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 4"
 
 let alt_bn128_add_address = Address.of_hex_string "0x06"
-let alt_bn128_add (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let alt_bn128_add (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 5"
 
 let alt_bn128_mul_address = Address.of_hex_string "0x07"
-let alt_bn128_mul (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let alt_bn128_mul (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 6"
 
 let alt_bn128_pairing_check_address = Address.of_hex_string "0x08"
-let alt_bn128_pairing_check (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let alt_bn128_pairing_check (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 7"
 
 let blake2f_address = Address.of_hex_string "0x09"
-let blake2f (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let blake2f (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 8"
 
 let point_evaluation_address = Address.of_hex_string "0x0a"
-let point_evaluation (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let point_evaluation (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 9"
 
 let bls12_g1_add_address = Address.of_hex_string "0x0b"
-let bls12_g1_add (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let bls12_g1_add (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 10"
 
 let bls12_g1_msm_address = Address.of_hex_string "0x0c"
-let bls12_g1_msm (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let bls12_g1_msm (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 11"
 
 let bls12_g2_add_address = Address.of_hex_string "0x0d"
-let bls12_g2_add (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let bls12_g2_add (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 12"
 
 let bls12_g2_msm_address = Address.of_hex_string "0x0e"
-let bls12_g2_msm (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let bls12_g2_msm (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 13"
 
 let bls12_pairing_address = Address.of_hex_string "0x0f"
-let bls12_pairing (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let bls12_pairing (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 14"
 
 let bls12_map_fp_to_g1_address = Address.of_hex_string "0x10"
-let bls12_map_fp_to_g1 (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let bls12_map_fp_to_g1 (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 15"
 
 let bls12_map_fp2_to_g2_address = Address.of_hex_string "0x11"
-let bls12_map_fp2_to_g2 (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo"
+let bls12_map_fp2_to_g2 (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 16"
 
 let precompiles : precompile Address.Map.t =
   Address.Map.of_list
