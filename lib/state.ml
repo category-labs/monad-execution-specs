@@ -165,9 +165,29 @@ module TransactionState = struct
 
   let pre_compiled_contract_addresses = Address.Map.keys Precompiles.precompiles
 
-  let make (block_state : BlockState.t) sender tx access_list =
+  (* Empty transaction state, useful for running EVM tests against it. *)
+  let empty =
+    let world_state = WorldState.make Uint.zero in
+    let current_block = Block.{header = Header.empty; transactions = []; withdrawals = []; ommers = []} in
+    { initial_world_state = world_state
+    ; world_state
+    ; current_block
+    ; transient_storage = Address.Map.empty
+    ; accounts_created_in_current_transaction = Address.Set.empty
+    ; tx_origin = Address.zero
+    ; tx_gas_price = Gas.zero
+    ; self_destruct = Address.Set.empty
+    ; logs = []
+    ; touched = Address.Set.empty
+    ; refund = U256.zero
+    ; accessed_addresses = Address.Set.empty
+    ; accessed_keys = StorageKey.Set.empty }
+
+  let make (block_state : BlockState.t) tx =
     let open BlockState in
     let open Transaction.Access in
+    let sender = Option.get (Transaction.sender block_state.world_state.chain_id tx) in
+    let access_list = Transaction.access_list tx in
     let access_list_addresses =
       List.to_seq access_list |> Seq.map (fun acc -> acc.address) |> Address.Set.of_seq
     in
@@ -214,36 +234,6 @@ module TransactionState = struct
   end)
 end
 
-let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
-  let kind, current_target, data, code, code_address =
-    match Transaction.call_or_create tx with
-    | Call {to_; data} ->
-        let code =
-          let account_code = block_state.^(BlockState.account to_).code in
-          match Delegation.get_delegated_address account_code with
-          | None -> account_code
-          | Some delegated -> block_state.^(BlockState.account delegated).code
-        in
-        (Evmc.Message.CallKind.Call, to_, data, code, to_)
-    | Create {initcode} ->
-        let nonce = block_state.^(BlockState.account sender).nonce in
-        let target = Address.of_contract_creation ~sender ~nonce ~create2:None in
-        (Evmc.Message.CallKind.Create, target, Bytes.empty, initcode, Address.zero)
-  in
-  Evmc.Message.
-    { kind
-    ; sender
-    ; recipient = current_target
-    ; value = Transaction.value tx
-    ; gas = Gas.to_int64 gas
-    ; code
-    ; code_address
-    ; static = false
-    ; delegated = Delegation.is_valid_delegation code
-    ; input_data = data
-    ; depth = 0l
-    ; create2_salt = B32.zeros }
-
 module Host (Vm : sig
   val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
 end) =
@@ -251,7 +241,7 @@ struct
   open Account
   open WorldState
   open TransactionState
-  include TransactionState.M
+  include M
 
   let dump_account addr =
     let$ acc = !(account addr) in

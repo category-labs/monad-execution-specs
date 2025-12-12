@@ -18,7 +18,7 @@ let per_auth_base_cost = Uint.(~$12_500)
 let is_valid_delegation (code : Bytes.t) : bool =
   Bytes.length code = eoa_delegated_code_length && Bytes.starts_with ~prefix:eoa_delegation_prefix code
 
-let delegation_code (address: Address.t) : Bytes.t =
+let delegation_code (address : Address.t) : Bytes.t =
   Format.sprintf "%s%s" eoa_delegation_prefix (Address.to_bytes address)
 
 (** If the bytecode starts with a delegation indicator (0xef0100), [get_delegated_address] returns the address

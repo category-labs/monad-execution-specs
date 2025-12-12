@@ -221,6 +221,5 @@ module B20 = struct
   let of_bytes32_truncating (bs : B32.t) : t = init (fun i -> B32.(bs.$(i + 32 - 20)))
   let to_bytes32 (addr : t) : B32.t =
     B32.init (fun i -> if Stdlib.(i < 32 - 20) then '\x00' else addr.$(i - 32 + 20))
-
 end
 module B8 = Fixed (Traits.Byte_width.Bytes8)

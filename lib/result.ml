@@ -9,3 +9,5 @@ include Monad.Make2 (struct
 end)
 
 let fail err = Error err
+
+let ensure (predicate : bool) ~or_error = if predicate then Ok () else Error or_error

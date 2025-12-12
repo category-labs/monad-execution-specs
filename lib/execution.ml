@@ -5,11 +5,41 @@ open Numeric
 open Byte_string
 open State
 
-let process_message (msg : Evmc.Message.t) (transaction_state : TransactionState.t) =
+let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
+  let kind, current_target, data, code, code_address =
+    match Transaction.call_or_create tx with
+    | Call {to_; data} ->
+        let code =
+          let account_code = block_state.^(BlockState.account to_).code in
+          match Delegation.get_delegated_address account_code with
+          | None -> account_code
+          | Some delegated -> block_state.^(BlockState.account delegated).code
+        in
+        (Evmc.Message.CallKind.Call, to_, data, code, to_)
+    | Create {initcode} ->
+        let nonce = block_state.^(BlockState.account sender).nonce in
+        let target = Address.of_contract_creation ~sender ~nonce ~create2:None in
+        (Evmc.Message.CallKind.Create, target, Bytes.empty, initcode, Address.zero)
+  in
+  Evmc.Message.
+    { kind
+    ; sender
+    ; recipient = current_target
+    ; value = Transaction.value tx
+    ; gas = Gas.to_int64 gas
+    ; code
+    ; code_address
+    ; static = false
+    ; delegated = Delegation.is_valid_delegation code
+    ; input_data = data
+    ; depth = 0l
+    ; create2_salt = B32.zeros }
+
+let process_message ?(trace = false) (msg : Evmc.Message.t) (transaction_state : TransactionState.t) =
   let module H =
     Evmc.Instantiate (TransactionState.M) (Host)
       (Vm.Make (struct
-        let trace = false
+        let trace = trace
       end))
   in
   H.Host.call msg transaction_state
@@ -109,7 +139,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
   (* Execute transaction. *)
   let result, transaction_state =
-    let transaction_state = TransactionState.make block_state sender tx (Transaction.access_list tx) in
+    let transaction_state = TransactionState.make block_state tx in
 
     (* Process EIP-7702 authorizations. *)
     let transaction_state =

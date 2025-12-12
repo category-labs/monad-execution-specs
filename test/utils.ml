@@ -3,22 +3,6 @@ open Monad_lib.Chain.Ethereum
 open Monad_lib.Numeric
 open Monad_lib.Byte_string
 
-module Revision = struct
-  let rev = Chain.Monad.Revision.Four
-end
-
-module Params = struct
-  let trace = false
-end
-
-module Evm = struct
-  module Evm0 = Evmc.Instantiate (Evmc.DummyHost.M) (Evmc.DummyHost.Make) (Vm.Make (Params))
-
-  (* Unfold one level of recursion to get access to the full signature of Vm *)
-  module Vm = Vm.Make (Params) (Evm0.Host)
-  module Host = Evm0.Host
-end
-
 (* Generators and printers for our types. *)
 module QCheck2 = struct
   include QCheck2
@@ -114,6 +98,23 @@ let status_code =
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
+module Evm = struct
+  module Evm0 =
+    Evmc.Instantiate (State.TransactionState.M) (State.Host)
+      (Vm.Make (struct
+        let trace = false
+      end))
+
+  (* Unfold one level of recursion to get access to the full signature of Vm *)
+  module Vm =
+    Vm.Make
+      (struct
+        let trace = false
+      end)
+      (Evm0.Host)
+  module Host = State.Host (Vm)
+end
+
 let test_message
     ?(prepare_env : unit Evm.Host.t = Evm.Host.return ())
     ?(prepare_vm : unit Evm.Vm.M.t = Evm.Vm.M.return ())
@@ -124,7 +125,6 @@ let test_message
   (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
      With better VM instrumentation we can remove the duplucation *)
   let action =
-    let open Evmc.DummyHost in
     let open Evm.Host in
     let$ () = prepare_env in
     let$ tx_context = get_tx_context in
@@ -166,7 +166,7 @@ let test_message
               ; output_data = Bytes.empty
               ; create_address = Address.zero } ) )
   in
-  let result, state = action Evmc.DummyHost.State.empty in
+  let result, state = action State.TransactionState.empty in
   (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;

@@ -13,5 +13,4 @@ let ( >>= ) = bind
 let ( let$ ) = bind
 let return x = Some x
 
-let ensure (predicate : bool) : unit option =
-  if predicate then Some () else None
+let ensure (predicate : bool) : unit option = if predicate then Some () else None
