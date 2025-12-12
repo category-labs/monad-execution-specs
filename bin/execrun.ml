@@ -151,7 +151,9 @@ let () =
         | Ok fix -> fix
         | Error place -> failwith (Format.sprintf "Error when decoding %s" place)
       in
-      if List.is_empty blockchain_tests then Format.eprintf "No valid tests found!\n" ;
+      if List.is_empty blockchain_tests then (
+        Format.eprintf "No valid tests found!\n" ;
+        exit (-1) ) ;
       if not (run_blockchain_tests blockchain_tests) then (Format.eprintf "Some tests failed\n" ; exit (-1))
   | Some (`State, _state_fixtures) -> failwith "TODO"
   | None ->
