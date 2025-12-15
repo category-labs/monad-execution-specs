@@ -65,7 +65,7 @@ let process_authorization transaction_state (authorization : Transaction.Authori
           Delegation.delegation_code authorization.address
       else transaction_state
 
-let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
+let process_transaction ?(trace=false) (block_state : BlockState.t) (tx : Transaction.t) =
   let open BlockState in
   let tx_gas_limit =
     Transaction.gas_limit tx
@@ -148,7 +148,7 @@ let process_transaction (block_state : BlockState.t) (tx : Transaction.t) =
 
     let available_gas = Gas.(tx_gas_limit - intrinsic_gas) in
     let message = prepare_message block_state sender available_gas tx in
-    process_message message transaction_state
+    process_message ~trace message transaction_state
   in
 
   (* Propagate state changes. *)
@@ -199,7 +199,7 @@ let validate_header (_world_state : WorldState.t) (_header : Block.Header.t) =
   ()
 
 (* Process a system message call as in EIP-2935, EIP-4788. *)
-let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
+let process_system_message ?(trace=false) (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
   let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
   let code = block_state.^(BlockState.account addr).code in
   if code = Bytes.empty then (None, block_state)
@@ -235,7 +235,7 @@ let process_system_message (block_state : BlockState.t) (addr : Address.t) (data
         ; accessed_addresses = Address.Set.empty
         ; accessed_keys = StorageKey.Set.empty }
     in
-    let result, transaction_state = process_message message transaction_state in
+    let result, transaction_state = process_message ~trace message transaction_state in
     assert (result.status_code = Success) ;
     (* Update block state with storage changes. As per the relevant EIPs, a system message call
      does not warm up accounts or storage slots, and it does not count towards the block gas
@@ -245,7 +245,7 @@ let process_system_message (block_state : BlockState.t) (addr : Address.t) (data
 let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
 
-let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
+let process_block ?(trace=false) ~verify (world_state : WorldState.t) (block : Block.t) =
   validate_header world_state block.header ;
   if block.ommers <> [] then failwith "Invalid block" ;
 
@@ -256,7 +256,7 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
     let parent_beacon_block_root = block_state.current_block.header.parent_beacon_block_root in
     (* Ignore call result as per EIP-4788. *)
     let _, block_state =
-      process_system_message block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
+      process_system_message ~trace block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
     in
     block_state
   in
@@ -266,13 +266,13 @@ let process_block ~verify (world_state : WorldState.t) (block : Block.t) =
     let parent_hash = block_state.current_block.header.parent_hash in
     (* Ignore call result as per EIP-2935. *)
     let _, block_state =
-      process_system_message block_state history_storage_address (B32.to_bytes parent_hash)
+      process_system_message ~trace block_state history_storage_address (B32.to_bytes parent_hash)
     in
     block_state
   in
 
   (* Process block transactions. *)
-  let block_state = List.fold_left process_transaction block_state block.transactions in
+  let block_state = List.fold_left (process_transaction ~trace) block_state block.transactions in
 
   (* Process block withdrawals. *)
   let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
