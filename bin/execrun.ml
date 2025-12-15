@@ -2,6 +2,7 @@ open Monad_lib
 open Chain.Ethereum
 open Numeric
 open Byte_string
+open Lens.Infix
 
 let tests_kind = ref None
 let set_tests_kind kind = Arg.String (fun filename -> tests_kind := Some (kind, filename))
@@ -98,8 +99,17 @@ let check_test_result (name, fixtures, post_state) =
 let check_test_results results = List.for_all check_test_result results
 
 let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : State.WorldState.t) =
+  (* Due to gas cost differences, most blocks cost more gas on Monad than they do on Ethereum. This causes
+     some blockchain tests in the Ethereum test battery fail due to blocks consuming gas above their limit.
+
+     To fix this, we just adjust the block gas limit as necessary here. This is an interim solution and
+     will go away once all tests are migrated to Monad.
+   *)
+  let update_block (block : Block.t) =
+    (Block.(header |-- gas_limit) ^= Uint.max block.header.gas_limit block.header.gas_used) block
+  in
   assert (List.length post_state.history = List.length fixtures.blocks) ;
-  {fixtures with post = post_state.accounts; blocks = List.rev post_state.history}
+  {fixtures with post = post_state.accounts; blocks = List.rev_map update_block post_state.history}
 
 let test_case_to_yojson fixture =
   let open Yojson.Safe.Util in
