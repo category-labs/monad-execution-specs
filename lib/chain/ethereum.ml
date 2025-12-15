@@ -498,7 +498,7 @@ module Block = struct
       ; excess_blob_gas : U64.t (* EIP-4844 *) [@key "excessBlobGas"]
       ; parent_beacon_block_root : B32.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
       ; requests_hash : B32.t (* EIP-7685 *) [@key "requestsHash"] }
-    [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}]
+    [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens]
 
     (* YP 4.4.3 (40) *)
     let to_rlp h =
@@ -549,6 +549,8 @@ module Block = struct
       ; parent_beacon_block_root = B32.zeros
       ; requests_hash = B32.zeros }
   end
+  (* Bring block header lenses into scope for convenience. *)
+  include Header
 
   (* YP 4.4 (23) *)
   type t =
@@ -556,7 +558,7 @@ module Block = struct
     ; transactions : Transaction.t list (* B_T *) [@key "transactions"]
     ; ommers : Header.t list (* B_U *) [@key "uncleHeaders"]
     ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] }
-  [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}]
+  [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens]
 
   (* YP 4.4.3 (41) *)
   let to_rlp b =
@@ -581,10 +583,10 @@ module Log = struct
 
   (* YP (30) *)
   let to_bloom (log : t) : Bloom.t =
-    let entries = Address.to_bytes32 log.address :: log.topics in
-    List.fold_left
-      (fun bloom entry -> Bloom.(logor bloom (hash_bytes (B32.to_bytes entry))))
-      Bloom.zeros entries
+    let topics = Seq.map (fun topic -> B32.to_bytes topic) (List.to_seq log.topics) in
+    Seq.fold_left
+      (fun bloom entry -> Bloom.(logor bloom (hash_bytes entry)))
+      (Bloom.hash_bytes (Address.to_bytes log.address)) topics
 
   let to_rlp {address; topics; data} =
     Rlp.List
