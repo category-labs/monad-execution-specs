@@ -11,7 +11,7 @@ let set_bit (bloom : t) (bit_index : int) =
   let byte_index = bit_index / 8 in
   let bit_index = bit_index mod 8 in
   init (fun i ->
-      if Stdlib.(i = byte_index) then Char.unsafe_chr (Char.code bloom.$(i) lor (1 lsl bit_index))
+      if Stdlib.(i = byte_index) then Char.unsafe_chr (Char.code bloom.$(i) lor (128 lsr bit_index))
       else bloom.$(i) )
 
 let test_bit (bloom : t) (bit_index : int) : bool =
@@ -27,9 +27,9 @@ let hash_bytes (bytes : Bytes.t) : t =
     let b1 = B32.(bytes.$(index + 1)) in
     (Char.code b0 lsl 8) + Char.code b1
   in
-  let hash_bytes = Crypto.keccak_256 bytes in
+  let hashed_bytes = Crypto.keccak_256 bytes in
   [0; 2; 4]
   |> List.map (fun i ->
-      let bp = byte_pair_at hash_bytes i in
+      let bp = byte_pair_at hashed_bytes i in
       0x07ff - (bp land 0x07ff) )
   |> of_bit_indices
