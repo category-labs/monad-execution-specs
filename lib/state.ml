@@ -330,7 +330,13 @@ struct
     | Some _ ->
         (* Delegated calls to precompiles are executed as if the corresponding contract was empty, as per EIP-7702. *)
         Vm.execute msg Bytes.empty
-    | None -> Vm.execute msg msg.code
+    | None ->
+        let$ code =
+          (* If the message provides the code to be called then it's executed, otherwise it's fetched from
+             the provided code_address. *)
+          if Bytes.(msg.code = empty) then !(account msg.code_address |-- code) else return msg.code
+        in
+        Vm.execute msg code
 
   let process_create (msg : Evmc.Message.t) =
     let$ sender_nonce = !(account msg.sender |-- nonce) in

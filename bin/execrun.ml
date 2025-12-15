@@ -12,11 +12,14 @@ let set_execution_mode_update_fixture = Arg.String (fun filename -> execution_mo
 
 let usage_str = "Usage: execrun (--blockchain_test FILE | --state_test FILE) [--update_fixture FILE]\n"
 
+let trace = ref false
+
 let () =
   Arg.(
     parse
       [ ("--blockchain_test", set_tests_kind `Blockchain, "Blockchain test fixture file")
       ; ("--state_test", set_tests_kind `State, "State test fixture file")
+      ; ("--trace", Set trace, "Trace VM execution")
       ; ( "--update_fixture"
         , set_execution_mode_update_fixture
         , "Generate new fixtures from execution, do not verify provided roots" ) ]
@@ -24,6 +27,8 @@ let () =
         Format.printf "Unknown argument %s\n" extra_arg ;
         exit (-1) )
       usage_str )
+
+let trace = !trace
 
 let check_account_state (address : Address.t) (actual : Account.t) (expected : Account.t) =
   if actual = expected then (
@@ -89,7 +94,7 @@ let load_preconditions pre (state : State.WorldState.t) =
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   State.WorldState.make fixtures.config.chain_id
   |> load_preconditions fixtures.pre
-  |> fun s -> List.fold_left (Execution.process_block ~verify:false) s fixtures.blocks
+  |> fun s -> List.fold_left (Execution.process_block ~trace ~verify:false) s fixtures.blocks
 
 let check_test_result (name, fixtures, post_state) =
   let success = check_postconditions post_state fixtures.Fixtures.BlockchainTest.post in
