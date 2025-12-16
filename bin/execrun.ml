@@ -3,6 +3,7 @@ open Chain.Ethereum
 open Numeric
 open Byte_string
 open Lens.Infix
+open State
 
 let tests_kind = ref None
 let set_tests_kind kind = Arg.String (fun filename -> tests_kind := Some (kind, filename))
@@ -111,7 +112,7 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
      will go away once all tests are migrated to Monad.
    *)
   let update_block (block : Block.t) =
-    (Block.(header |-- gas_limit) ^= Uint.max block.header.gas_limit block.header.gas_used) block
+    block.^(Block.(header |-- gas_limit)) <- Uint.max block.header.gas_limit block.header.gas_used
   in
   assert (List.length post_state.history = List.length fixtures.blocks) ;
   {fixtures with post = post_state.accounts; blocks = List.rev_map update_block post_state.history}
