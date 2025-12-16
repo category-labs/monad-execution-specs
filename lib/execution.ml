@@ -17,9 +17,8 @@ let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas
         in
         (Evmc.Message.CallKind.Call, to_, data, code, to_)
     | Create {initcode} ->
-        let nonce = block_state.^(BlockState.account sender).nonce in
-        let target = Address.of_contract_creation ~sender ~nonce ~create2:None in
-        (Evmc.Message.CallKind.Create, target, initcode, Bytes.empty, Address.zero)
+        let target = Address.of_contract_creation ~sender ~nonce:(Transaction.nonce tx) ~create2:None in
+        (Evmc.Message.CallKind.Create, target, Bytes.empty, initcode, Address.zero)
   in
   Evmc.Message.
     { kind

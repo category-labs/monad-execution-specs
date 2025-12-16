@@ -198,8 +198,8 @@ module TransactionState = struct
         | None -> Address.Set.singleton to_
         | Some delegated -> Address.Set.of_list [to_; delegated] )
       | Create _ ->
-          let nonce = block_state.^(account sender).nonce in
-          Address.Set.singleton (Address.of_contract_creation ~sender ~nonce ~create2:None)
+          Address.Set.singleton
+            (Address.of_contract_creation ~sender ~nonce:(Transaction.nonce tx) ~create2:None)
     in
     let accessed_addresses =
       List.fold_left Address.Set.union Address.Set.empty
@@ -341,8 +341,9 @@ struct
   let process_create (msg : Evmc.Message.t) =
     let$ sender_nonce = !(account msg.sender |-- nonce) in
     let create_address =
-      (* Note that we use the sender nonce _before_ increasing it *)
-      Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce
+      (* The sender's nonce has already been incremented by this point, so we use nonce-1 to compute the
+         address of the created contract. *)
+      Address.of_contract_creation ~sender:msg.sender ~nonce:U256.(sender_nonce - one)
         ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; code = msg.code} else None)
     in
     let$ pre_existent_account = !(account create_address) in
