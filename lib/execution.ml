@@ -5,11 +5,30 @@ open Numeric
 open Byte_string
 open State
 
-type invalid_block = Invalid_base_fee of {expected : Gas.t; actual : Gas.t}
-type invalid_transaction
+type invalid_block = Invalid_base_fee of {expected : Gas.t; actual : Gas.t} | Nonempty_ommers
+[@@deriving to_yojson]
+type invalid_transaction =
+  | Invalid_nonce
+  | Nonce_overflow
+  | Initcode_too_long of Bytes.t
+  | Insufficient_balance of {balance : U256.t; tx_value : U256.t; max_gas_fee : Gas.t}
+  | Invalid_delegation of {code : Bytes.t}
+  | Cannot_pay_floor_gas of {floor_gas : Gas.t}
+  | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
+[@@deriving to_yojson]
 
-exception Invalid_block of invalid_block
-exception Invalid_transaction of invalid_transaction
+exception Invalid_block of (Block.t * invalid_block)
+exception Invalid_transaction of (Transaction.t * invalid_transaction)
+
+let invalid_block block reason = raise (Invalid_block (block, reason))
+let invalid_transaction tx reason = raise (Invalid_transaction (tx, reason))
+
+let () =
+  Printexc.register_printer (function
+    | Invalid_block (_, reason) -> Some (Yojson.Safe.pretty_to_string (invalid_block_to_yojson reason))
+    | Invalid_transaction (_, reason) ->
+        Some (Yojson.Safe.pretty_to_string (invalid_transaction_to_yojson reason))
+    | _ -> None )
 
 let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
   let kind, current_target, data, code, code_address =
@@ -81,19 +100,20 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
 
   (* Basic validity checks. *)
   (* Nonce *)
-  if U256.(tx_nonce >= of_uint64 Uint64.max_uint) then failwith "Invalid transaction" ;
+  if U256.(tx_nonce >= of_uint64 Uint64.max_uint) then invalid_transaction tx Nonce_overflow ;
   (* Initcode size *)
   ( match Transaction.call_or_create tx with
-  | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size -> failwith "Invalid transaction"
+  | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size ->
+      raise (Invalid_transaction (tx, Initcode_too_long initcode))
   | _ -> () ) ;
 
   (* YP (64) *)
   let intrinsic_gas = Gas.tx_intrinsic_gas tx in
-  if Gas.(intrinsic_gas > tx_gas_limit) then failwith "Invalid transaction" ;
+  if Gas.(intrinsic_gas > tx_gas_limit) then invalid_transaction tx (Cannot_pay_intrinsic_gas {intrinsic_gas}) ;
 
   (* EIP-7623 *)
   let floor_gas = Gas.tx_floor_gas tx in
-  if Gas.(floor_gas > tx_gas_limit) then failwith "Invalid transaction" ;
+  if Gas.(floor_gas > tx_gas_limit) then invalid_transaction tx (Cannot_pay_floor_gas {floor_gas}) ;
 
   let block = block_state.current_block in
   let header = block.header in
@@ -107,15 +127,11 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
 
   let sender = Option.get (Transaction.sender block_state.world_state.chain_id tx) in
   let sender_account = block_state.world_state.^(WorldState.account sender) in
-  if U256.(sender_account.nonce <> tx_nonce) then failwith "Invalid transaction" ;
-  if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then (
-    Format.eprintf "Account %s (%s) cannot afford to pay %s gas fees + %s tx_value\n"
-      (Address.to_hex_string sender)
-      (U256.to_string sender_account.balance)
-      (Gas.to_string max_gas_fee) (U256.to_string tx_value) ;
-    failwith "Invalid transaction" ) ;
+  if U256.(sender_account.nonce <> tx_nonce) then invalid_transaction tx Invalid_nonce ;
+  if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then
+    invalid_transaction tx (Insufficient_balance {balance = sender_account.balance; tx_value; max_gas_fee}) ;
   if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
-    failwith "Invalid transaction" ;
+    invalid_transaction tx (Invalid_delegation {code = sender_account.code}) ;
 
   let total_fee =
     let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
@@ -126,7 +142,7 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
   (* Pay gas fees, increase nonce *)
   let block_state =
     (* The yellow paper does not specify a behaviour for nonce overflows. *)
-    assert (U256.(sender_account.nonce < max_t)) ;
+    if U256.(sender_account.nonce = max_t) then invalid_transaction tx Nonce_overflow ;
     block_state.^(account sender) <-
       { sender_account with
         balance = U256.(sender_account.balance - total_fee)
@@ -190,9 +206,7 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
 let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
   BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
 
-let validate_header (world_state : WorldState.t) (header : Block.Header.t) =
-  let parent = List.hd world_state.history in
-  if Gas.(header.base_fee_per_gas <> updated_base_fee_per_gas parent.header) then failwith "Invalid block" ;
+let validate_header (_world_state : WorldState.t) (_block : Block.t) =
   (* TODO *)
   ()
 
@@ -244,8 +258,8 @@ let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB85
 let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
 
 let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block : Block.t) =
-  validate_header world_state block.header ;
-  if block.ommers <> [] then failwith "Invalid block" ;
+  validate_header world_state block ;
+  if block.ommers <> [] then raise (Invalid_block (block, Nonempty_ommers)) ;
 
   let block_state = BlockState.make world_state block in
 
