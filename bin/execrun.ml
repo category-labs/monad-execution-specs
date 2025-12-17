@@ -32,21 +32,21 @@ let () =
 let trace = !trace
 
 let check_account_state (address : Address.t) (actual : Account.t) (expected : Account.t) =
-  if actual = expected then (
+  if Account.(actual = expected) then (
     Format.eprintf "Account states for %s converge\n" (Address.to_hex_string address) ;
     true )
   else (
     Format.eprintf "Account states for %s diverge\n" (Address.to_hex_string address) ;
-    if actual.code <> expected.code then
+    if Bytes.(actual.code <> expected.code) then
       Format.eprintf "\tCode: %s\n\tExpected: %s\n" (Bytes.to_hex_string actual.code)
         (Bytes.to_hex_string expected.code) ;
-    if actual.balance <> expected.balance then
+    if U256.(actual.balance <> expected.balance) then
       Format.eprintf "\tBalance: %s\n\tExpected: %s\n" (U256.to_string actual.balance)
         (U256.to_string expected.balance) ;
-    if actual.nonce <> expected.nonce then
+    if U256.(actual.nonce <> expected.nonce) then
       Format.eprintf "\tNonce: %s\n\tExpected: %s\n" (U256.to_string actual.nonce)
         (U256.to_string expected.nonce) ;
-    if actual.storage <> expected.storage then (
+    if not B32.Map.(equal B32.equal actual.storage expected.storage) then (
       Format.eprintf "\tStorage differs\n" ;
       let actual_keys = B32.Map.keys actual.storage in
       let expected_keys = B32.Map.keys expected.storage in
@@ -92,8 +92,13 @@ let load_preconditions pre (state : State.WorldState.t) =
   let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
   {state with accounts}
 
+let load_genesis_block (genesis_block_header : Block.Header.t) (state : State.WorldState.t) =
+  { state with
+    history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
+
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   State.WorldState.make fixtures.config.chain_id
+  |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s -> List.fold_left (Execution.process_block ~trace ~verify:false) s fixtures.blocks
 
@@ -109,13 +114,14 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
      some blockchain tests in the Ethereum test battery fail due to blocks consuming gas above their limit.
 
      To fix this, we just adjust the block gas limit as necessary here. This is an interim solution and
-     will go away once all tests are migrated to Monad.
+     will go away once the separation between block execution and validation is made more clear.
    *)
   let update_block (block : Block.t) =
     block.^(Block.(header |-- gas_limit)) <- Uint.max block.header.gas_limit block.header.gas_used
   in
-  assert (List.length post_state.history = List.length fixtures.blocks) ;
-  {fixtures with post = post_state.accounts; blocks = List.rev_map update_block post_state.history}
+  let updated_blocks = List.(tl (rev_map update_block post_state.history)) in
+  assert (List.length updated_blocks = List.length fixtures.blocks) ;
+  {fixtures with post = post_state.accounts; blocks = updated_blocks}
 
 let test_case_to_yojson fixture =
   let open Yojson.Safe.Util in

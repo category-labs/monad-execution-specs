@@ -5,6 +5,12 @@ open Numeric
 open Byte_string
 open State
 
+type invalid_block = Invalid_base_fee of {expected : Gas.t; actual : Gas.t}
+type invalid_transaction
+
+exception Invalid_block of invalid_block
+exception Invalid_transaction of invalid_transaction
+
 let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
   let kind, current_target, data, code, code_address =
     match Transaction.call_or_create tx with
@@ -64,7 +70,7 @@ let process_authorization transaction_state (authorization : Transaction.Authori
           Delegation.delegation_code authorization.address
       else transaction_state
 
-let process_transaction ?(trace=false) (block_state : BlockState.t) (tx : Transaction.t) =
+let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) =
   let open BlockState in
   let tx_gas_limit =
     Transaction.gas_limit tx
@@ -94,19 +100,10 @@ let process_transaction ?(trace=false) (block_state : BlockState.t) (tx : Transa
   let base_fee_per_gas = header.base_fee_per_gas in
   (* Calculate effective gas price and max payable gas fee depending on transaction type. Here we also check
      that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
-  let effective_gas_price, max_gas_fee =
-    match Transaction.fee_mechanism tx with
-    | FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas} ->
-        if Gas.(max_fee_per_gas < max_priority_fee_per_gas) then failwith "Invalid transaction" ;
-        if Gas.(max_fee_per_gas < base_fee_per_gas) then failwith "Invalid transaction" ;
-        let priority_fee_per_gas = Gas.(min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas)) in
-        let effective_gas_price = Gas.(priority_fee_per_gas + base_fee_per_gas) in
-        let max_gas_fee = Gas.(Transaction.gas_limit tx * max_fee_per_gas) in
-        (effective_gas_price, max_gas_fee)
-    | LegacyFee {gas_price} ->
-        if Gas.(gas_price < base_fee_per_gas) then failwith "Invalid transaction" ;
-        (gas_price, Gas.(tx_gas_limit * gas_price))
-  in
+  (* TODO: check transaction's suggested gas fee is above the block's base gas fee. This should go in
+     validate_header. *)
+  let effective_gas_price = Gas.tx_effective_gas_price base_fee_per_gas tx in
+  let max_gas_fee = Gas.tx_max_gas_fee tx in
 
   let sender = Option.get (Transaction.sender block_state.world_state.chain_id tx) in
   let sender_account = block_state.world_state.^(WorldState.account sender) in
@@ -193,12 +190,14 @@ let process_transaction ?(trace=false) (block_state : BlockState.t) (tx : Transa
 let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
   BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
 
-let validate_header (_world_state : WorldState.t) (_header : Block.Header.t) =
+let validate_header (world_state : WorldState.t) (header : Block.Header.t) =
+  let parent = List.hd world_state.history in
+  if Gas.(header.base_fee_per_gas <> updated_base_fee_per_gas parent.header) then failwith "Invalid block" ;
   (* TODO *)
   ()
 
 (* Process a system message call as in EIP-2935, EIP-4788. *)
-let process_system_message ?(trace=false) (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
+let process_system_message ?(trace = false) (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
   let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
   let code = block_state.^(BlockState.account addr).code in
   if code = Bytes.empty then (None, block_state)
@@ -244,7 +243,7 @@ let process_system_message ?(trace=false) (block_state : BlockState.t) (addr : A
 let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
 
-let process_block ?(trace=false) ~verify (world_state : WorldState.t) (block : Block.t) =
+let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block : Block.t) =
   validate_header world_state block.header ;
   if block.ommers <> [] then failwith "Invalid block" ;
 
