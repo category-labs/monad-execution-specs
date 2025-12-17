@@ -219,7 +219,7 @@ module TransactionState = struct
     ; transient_storage = Address.Map.empty
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; tx_origin = sender
-    ; tx_gas_price = block_state.current_block.header.base_fee_per_gas
+    ; tx_gas_price = Gas.tx_effective_gas_price block_state.current_block.header.base_fee_per_gas tx
     ; self_destruct = Address.Set.empty
     ; logs = []
     ; touched = Address.Set.empty
@@ -238,7 +238,7 @@ module Host (Vm : sig
   val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
 end) =
 struct
-  open Account
+  open Account.TLens
   open WorldState
   open TransactionState
   include M
@@ -343,7 +343,8 @@ struct
     let create_address =
       (* The sender's nonce has already been incremented by this point, so we use nonce-1 to compute the
          address of the created contract. *)
-      Address.of_contract_creation ~sender:msg.sender ~nonce:U256.(sender_nonce - one)
+      Address.of_contract_creation ~sender:msg.sender
+        ~nonce:U256.(sender_nonce - one)
         ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; code = msg.code} else None)
     in
     let$ pre_existent_account = !(account create_address) in

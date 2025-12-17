@@ -8,19 +8,29 @@ open Chain.Ethereum
 (* Bring Uint into scope so the operators are all available to users. *)
 include Uint
 
+(* YP (48) *)
+let updated_base_fee_per_gas (parent_header : Block.Header.t) =
+  let elasticity_multiplier (* YP (50) *) = ~$2 in
+  let base_fee_max_change_denominator (* YP (53) *) = ~$8 in
+  let base_fee = parent_header.base_fee_per_gas in
+  let gas_used = parent_header.gas_used in
+  let gas_target (* YP (49) *) = parent_header.gas_limit / elasticity_multiplier in
+  match () with
+  | () when gas_used = gas_target -> base_fee
+  | () when gas_used < gas_target ->
+      let base_fee_decrease_star (* YP (51) *) = base_fee * (gas_target - gas_used) / gas_target in
+      let base_fee_decrease (* YP (52) *) = base_fee_decrease_star / base_fee_max_change_denominator in
+      base_fee - base_fee_decrease
+  | () when gas_used > gas_target ->
+      let base_fee_increase_star (* YP (51) *) = base_fee * (gas_used - gas_target) / gas_target in
+      let base_fee_increase (* YP (52) *) =
+        max (base_fee_increase_star / base_fee_max_change_denominator) one
+      in
+      base_fee + base_fee_increase
+  | () -> assert false (* Unreachable. *)
+
 (* See EIP-2935, EIP-4788. *)
 let system_transaction_gas = ~$30_000_000
-
-let taylor_approximation_exponential ~factor ~numerator ~denominator =
-  let i = ref one in
-  let output = ref zero in
-  let numerator_accumulated = ref (factor * denominator) in
-  while !numerator_accumulated > zero do
-    output := !output + !numerator_accumulated ;
-    numerator_accumulated := !numerator_accumulated * numerator / (denominator * !i) ;
-    i := !i + one
-  done ;
-  !output / denominator
 
 let tx_calldata_token_gas = ~$4
 let tx_calldata_floor_token_gas = ~$10
@@ -64,6 +74,24 @@ let tx_intrinsic_gas (tx : Transaction.t) =
 (* EIP-7623 *)
 let tx_floor_gas (tx : Transaction.t) =
   (~$(tokens_in_calldata tx) * tx_calldata_floor_token_gas) + tx_base_gas
+
+let tx_effective_gas_price (base_fee_per_gas : t) (tx : Transaction.t) =
+  match Transaction.fee_mechanism tx with
+  | FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas} ->
+      assert (max_fee_per_gas >= max_priority_fee_per_gas) ;
+      assert (max_fee_per_gas >= base_fee_per_gas) ;
+      let priority_fee_per_gas = min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas) in
+      let effective_gas_price = priority_fee_per_gas + base_fee_per_gas in
+      effective_gas_price
+  | LegacyFee {gas_price} ->
+      assert (gas_price >= base_fee_per_gas) ;
+      gas_price
+
+let tx_max_gas_fee (tx : Transaction.t) =
+  let tx_gas_limit = Transaction.gas_limit tx in
+  match Transaction.fee_mechanism tx with
+  | FeeMarketFee {max_fee_per_gas; _} -> tx_gas_limit * max_fee_per_gas
+  | LegacyFee {gas_price} -> tx_gas_limit * gas_price
 
 let jumpdest = ~$1
 

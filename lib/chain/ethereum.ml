@@ -549,6 +549,7 @@ module Block = struct
       ; parent_beacon_block_root = B32.zeros
       ; requests_hash = B32.zeros }
   end
+
   (* Bring block header lenses into scope for convenience. *)
   include Header
 
@@ -586,7 +587,8 @@ module Log = struct
     let topics = Seq.map (fun topic -> B32.to_bytes topic) (List.to_seq log.topics) in
     Seq.fold_left
       (fun bloom entry -> Bloom.(logor bloom (hash_bytes entry)))
-      (Bloom.hash_bytes (Address.to_bytes log.address)) topics
+      (Bloom.hash_bytes (Address.to_bytes log.address))
+      topics
 
   let to_rlp {address; topics; data} =
     Rlp.List
@@ -630,10 +632,18 @@ module Account = struct
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
 
+  (* Structural equality on accounts. Necessary because OCaml's polymorphic compare is broken for maps. *)
+  let equal acc_1 acc_2 =
+    U256.(acc_1.nonce = acc_2.nonce)
+    && U256.(acc_1.balance = acc_2.balance)
+    && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
+    && Bytes.(acc_1.code = acc_2.code)
+  let ( = ) = equal
+
   let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U256.zero}
 
   (* YP (14) *)
-  let is_empty {balance; nonce; code; _} = balance = U256.zero && nonce = U256.zero && code = Bytes.empty
+  let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U256.(nonce = zero) && Bytes.(code = empty)
 
   let to_rlp {nonce; balance; storage; code} =
     let storage_root =
