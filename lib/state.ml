@@ -198,8 +198,8 @@ module TransactionState = struct
         | None -> Address.Set.singleton to_
         | Some delegated -> Address.Set.of_list [to_; delegated] )
       | Create _ ->
-          Address.Set.singleton
-            (Address.of_contract_creation ~sender ~nonce:(Transaction.nonce tx) ~create2:None)
+          let sender_nonce = block_state.^(account sender).nonce in
+          Address.Set.singleton (Address.of_contract_creation ~sender ~nonce:sender_nonce ~create2:None)
     in
     let accessed_addresses =
       List.fold_left Address.Set.union Address.Set.empty
@@ -323,7 +323,11 @@ struct
     && (match msg.kind with Call | CallCode | Create | Create2 -> true | DelegateCall -> false)
     && not msg.static
 
+  let increase_nonce (addr : Address.t) =
+    update_field (account addr |-- nonce) (fun nonce -> U256.(nonce + one))
+
   let process_call (msg : Evmc.Message.t) =
+    assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
     let$ () = when_ (should_transfer msg) (move_ether msg.sender msg.recipient msg.value) in
     match Address.Map.find_opt msg.recipient Precompiles.precompiles with
     | Some precompile when not msg.delegated -> return (precompile msg)
@@ -339,12 +343,19 @@ struct
         Vm.execute msg code
 
   let process_create (msg : Evmc.Message.t) =
+    let$ is_eoa_transaction =
+      let$ code = !(account msg.sender |-- code) in
+      return (code = Bytes.empty || (Delegation.is_valid_delegation code && not msg.delegated))
+    in
+    let$ () =
+      (* The execution loop is responsible for updating the nonce when executing a transaction. It is only
+         incremented here if contract creation was triggered by CREATE or CREATE2. *)
+      when_ (not is_eoa_transaction)
+        (update_field (account msg.sender |-- nonce) (fun nonce -> U256.(nonce + one)))
+    in
     let$ sender_nonce = !(account msg.sender |-- nonce) in
     let create_address =
-      (* The sender's nonce has already been incremented by this point, so we use nonce-1 to compute the
-         address of the created contract. *)
-      Address.of_contract_creation ~sender:msg.sender
-        ~nonce:U256.(sender_nonce - one)
+      Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce
         ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; code = msg.code} else None)
     in
     let$ pre_existent_account = !(account create_address) in
@@ -364,9 +375,10 @@ struct
       in
       let$ () = account create_address |-- storage := B32.Map.empty in
       let$ () = account create_address |-- nonce := U256.one in
+      let$ () = move_ether msg.sender create_address msg.value in
 
-      (* Ether, if any, is transferred by process_call *)
-      let$ result : Evmc.Result.t = process_call msg in
+      let$ result = Vm.execute msg msg.input_data in
+
       match result.status_code with
       | Success ->
           let contract_code = result.output_data in

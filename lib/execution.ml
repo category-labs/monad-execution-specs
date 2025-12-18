@@ -41,9 +41,7 @@ let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas
           | Some delegated -> block_state.^(BlockState.account delegated).code
         in
         (Evmc.Message.CallKind.Call, to_, data, code, to_)
-    | Create {initcode} ->
-        let target = Address.of_contract_creation ~sender ~nonce:(Transaction.nonce tx) ~create2:None in
-        (Evmc.Message.CallKind.Create, target, Bytes.empty, initcode, Address.zero)
+    | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, Bytes.empty, initcode, Address.zero)
   in
   Evmc.Message.
     { kind
@@ -139,10 +137,11 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
     U256.of_uint_exn total_fee
   in
 
-  (* Pay gas fees, increase nonce *)
+  (* Irrevocable change: pay gas limits, increment nonce. YP (73), YP (74), YP (75). *)
   let block_state =
     (* The yellow paper does not specify a behaviour for nonce overflows. *)
     if U256.(sender_account.nonce = max_t) then invalid_transaction tx Nonce_overflow ;
+
     block_state.^(account sender) <-
       { sender_account with
         balance = U256.(sender_account.balance - total_fee)
