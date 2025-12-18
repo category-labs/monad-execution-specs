@@ -10,6 +10,7 @@ include Uint
 
 (* YP (48) *)
 let updated_base_fee_per_gas (parent_header : Block.Header.t) =
+  (* TODO: implement Monad Spec 2.6, obsoletes YP (48), YP (49), YP (50), YP (51), YP (52), YP (53) *)
   let elasticity_multiplier (* YP (50) *) = ~$2 in
   let base_fee_max_change_denominator (* YP (53) *) = ~$8 in
   let base_fee = parent_header.base_fee_per_gas in

@@ -22,7 +22,8 @@ module Address = struct
     of_bytes32_truncating
       (Crypto.keccak_256
          ( match create2 with
-         | None -> Rlp.(encode (List [to_rlp sender; U256.to_rlp nonce]))
+         | None ->
+             Rlp.(encode (List [to_rlp sender; U256.(to_rlp (nonce - one))]))
          | Some {salt; code} ->
              Bytes.(
                of_char '\xff'
