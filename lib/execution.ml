@@ -41,7 +41,7 @@ let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas
           | Some delegated -> block_state.^(BlockState.account delegated).code
         in
         (Evmc.Message.CallKind.Call, to_, data, code, to_)
-    | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, Bytes.empty, initcode, Address.zero)
+    | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, initcode, Bytes.empty, Address.zero)
   in
   Evmc.Message.
     { kind

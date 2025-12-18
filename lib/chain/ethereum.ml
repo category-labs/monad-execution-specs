@@ -15,7 +15,7 @@ module Address = struct
   let of_u256_truncating (x : U256.t) : t = of_bytes32_truncating (U256.to_repr x)
   let to_u256 (addr : t) = U256.of_repr (to_bytes32 addr)
 
-  type create2_params = {salt : B32.t; code : Bytes.t}
+  type create2_params = {salt : B32.t; initcode : Bytes.t}
 
   (* YP (95) *)
   let of_contract_creation ~(sender : t) ~nonce ~create2 =
@@ -24,12 +24,12 @@ module Address = struct
          ( match create2 with
          | None ->
              Rlp.(encode (List [to_rlp sender; U256.(to_rlp (nonce - one))]))
-         | Some {salt; code} ->
+         | Some {salt; initcode} ->
              Bytes.(
                of_char '\xff'
                ^ B20.to_bytes sender
                ^ B32.to_bytes salt
-               ^ B32.to_bytes (Crypto.keccak_256 code) ) ) )
+               ^ B32.to_bytes (Crypto.keccak_256 initcode) ) ) )
 
   (* Encoding/decoding address options, used to handle the recipient of a transaction. *)
   type t_opt = t option
