@@ -356,7 +356,7 @@ struct
     let$ sender_nonce = !(account msg.sender |-- nonce) in
     let create_address =
       Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce
-        ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; code = msg.code} else None)
+        ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; initcode = msg.input_data} else None)
     in
     let$ pre_existent_account = !(account create_address) in
     if U256.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
@@ -398,7 +398,8 @@ struct
           else
             let$ () = account create_address |-- code := contract_code in
             return {result with create_address}
-      | _ -> return result
+      | _ ->
+         return result
 
   let call (msg : Evmc.Message.t) =
     let$ initial_state = get in
