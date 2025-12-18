@@ -356,7 +356,8 @@ struct
     let$ sender_nonce = !(account msg.sender |-- nonce) in
     let create_address =
       Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce
-        ~create2:(if msg.kind = Create2 then Some {salt = msg.create2_salt; initcode = msg.input_data} else None)
+        ~create2:
+          (if msg.kind = Create2 then Some {salt = msg.create2_salt; initcode = msg.input_data} else None)
     in
     let$ pre_existent_account = !(account create_address) in
     if U256.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
@@ -377,7 +378,18 @@ struct
       let$ () = account create_address |-- nonce := U256.one in
       let$ () = move_ether msg.sender create_address msg.value in
 
-      let$ result = Vm.execute msg msg.input_data in
+      let$ result =
+        let creation_msg =
+          Evmc.Message.
+            { msg with
+              kind = Call
+            ; recipient = create_address
+            ; input_data = Bytes.empty
+            ; create2_salt = B32.zeros
+            ; code_address = create_address }
+        in
+        Vm.execute creation_msg msg.input_data
+      in
 
       match result.status_code with
       | Success ->
@@ -398,8 +410,7 @@ struct
           else
             let$ () = account create_address |-- code := contract_code in
             return {result with create_address}
-      | _ ->
-         return result
+      | _ -> return result
 
   let call (msg : Evmc.Message.t) =
     let$ initial_state = get in
