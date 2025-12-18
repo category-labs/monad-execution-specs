@@ -968,7 +968,11 @@ struct
     let$ current_block_num = U256.to_uint <$> !(execution_environment |-- header |-- number) in
     let$ hash =
       if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then return U256.zero
-      else U256.of_repr <$> HostAPI.get_block_hash (Uint.to_int64 block_num)
+      else
+        let$ hash = HostAPI.get_block_hash (Uint.to_int64 block_num) in
+        match hash with
+        | Some hash -> return (U256.of_repr hash)
+        | None -> fail Argument_out_of_range
     in
     let$ () = push hash in
 

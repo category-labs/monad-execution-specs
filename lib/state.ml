@@ -445,10 +445,12 @@ struct
         ; blob_hashes = []
         ; initcodes = [] }
 
-  let get_block_hash i =
-    (* This host is not backed by an actual block database, so we return the hash of i which is enough for
-         testing *)
-    return (Crypto.keccak_256 U256.(to_repr_bytes (of_uint64 i)))
+  let get_block_hash (i : Uint64.t) =
+    let$ state = get in
+    state.world_state.history
+    |> List.find_opt (fun (block : Block.t) -> Uint.(block.header.number = of_uint64 i))
+    |> Option.map Block.hash
+    |> return
 
   let emit_log address ~(data : Bytes.t) ~(topics : B32.t list) =
     let log : Log.t = {address; topics; data} in

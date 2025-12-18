@@ -161,7 +161,7 @@ module Host = struct
 
     val get_tx_context : TxContext.t t
 
-    val get_block_hash : Uint64.t -> B32.t t
+    val get_block_hash : Uint64.t -> B32.t option t
 
     val emit_log : Address.t -> data:Bytes.t -> topics:B32.t list -> unit t
 

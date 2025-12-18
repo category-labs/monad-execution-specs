@@ -576,6 +576,9 @@ module Block = struct
       ; Rlp.List (List.map transaction_to_rlp b.transactions)
       ; Rlp.List (List.map Header.to_rlp b.ommers)
       ; Rlp.List (List.map Withdrawal.to_rlp b.withdrawals) ]
+
+  let hash b =
+    Crypto.keccak_256 (Rlp.encode (Header.to_rlp b.header))
 end
 
 module Log = struct
