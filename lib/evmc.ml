@@ -152,7 +152,7 @@ module Host = struct
     val get_balance : Address.t -> U256.t t
 
     val get_code_size : Address.t -> Uint64.t t
-    val get_code_hash : Address.t -> B32.t t
+    val get_code_hash : Address.t -> B32.t option t
     val copy_code : Address.t -> offset:int -> size:int -> Bytes.t t
 
     val selfdestruct : address:Address.t -> beneficiary:Address.t -> bool t
