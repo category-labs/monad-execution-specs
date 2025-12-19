@@ -5,13 +5,27 @@ open Numeric
 open Byte_string
 open State
 
-type invalid_block = Invalid_base_fee of {expected : Gas.t; actual : Gas.t} | Nonempty_ommers
+type invalid_block =
+  | Nonempty_ommers
+  | Nonzero_difficulty
+  | Nonzero_nonce
+  | Wrong_base_fee of {expected : Gas.t}
+  | Invalid_gas_limit
+  | Gas_above_limit
+  | Invalid_timestamp
+  | Invalid_number
+  | Extra_data_too_long
+  | Wrong_parent_hash of {expected : B32.t}
+  | Wrong_merkle_root of {kind : [`Transactions | `Withdrawals | `State | `Receipts]; expected : B32.t}
+  | Wrong_gas_used of {expected : Gas.t}
+  | Wrong_logs_bloom of {expected : Bloom.t}
 [@@deriving to_yojson]
+
 type invalid_transaction =
   | Invalid_nonce
   | Nonce_overflow
-  | Initcode_too_long of Bytes.t
-  | Insufficient_balance of {balance : U256.t; tx_value : U256.t; max_gas_fee : Gas.t}
+  | Initcode_too_long
+  | Insufficient_balance of {balance : U256.t; required : Gas.t}
   | Invalid_delegation of {code : Bytes.t}
   | Cannot_pay_floor_gas of {floor_gas : Gas.t}
   | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
@@ -25,7 +39,10 @@ let invalid_transaction tx reason = raise (Invalid_transaction (tx, reason))
 
 let () =
   Printexc.register_printer (function
-    | Invalid_block (_, reason) -> Some (Yojson.Safe.pretty_to_string (invalid_block_to_yojson reason))
+    | Invalid_block (block, reason) ->
+        Some
+          (Format.sprintf "Block %s: %s\n" (Uint.to_string block.header.number)
+             (Yojson.Safe.pretty_to_string (invalid_block_to_yojson reason)) )
     | Invalid_transaction (_, reason) ->
         Some (Yojson.Safe.pretty_to_string (invalid_transaction_to_yojson reason))
     | _ -> None )
@@ -102,7 +119,7 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
   (* Initcode size *)
   ( match Transaction.call_or_create tx with
   | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size ->
-      raise (Invalid_transaction (tx, Initcode_too_long initcode))
+      invalid_transaction tx Initcode_too_long
   | _ -> () ) ;
 
   (* YP (64) *)
@@ -127,13 +144,16 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
   let sender_account = block_state.world_state.^(WorldState.account sender) in
   if U256.(sender_account.nonce <> tx_nonce) then invalid_transaction tx Invalid_nonce ;
   if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then
-    invalid_transaction tx (Insufficient_balance {balance = sender_account.balance; tx_value; max_gas_fee}) ;
+    invalid_transaction tx
+      (Insufficient_balance
+         {balance = sender_account.balance; required = Uint.(max_gas_fee + U256.to_uint tx_value)} ) ;
   if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
     invalid_transaction tx (Invalid_delegation {code = sender_account.code}) ;
 
   let total_fee =
     let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
-    if total_fee > U256.to_uint sender_account.balance then failwith "Invalid transaction" ;
+    if total_fee > U256.to_uint sender_account.balance then
+      invalid_transaction tx (Insufficient_balance {balance = sender_account.balance; required = total_fee}) ;
     U256.of_uint_exn total_fee
   in
 
@@ -205,8 +225,40 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
 let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
   BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
 
-let validate_header (_world_state : WorldState.t) (_block : Block.t) =
-  (* TODO *)
+(* YP (60) *)
+let validate_block (world_state : WorldState.t) (block : Block.t) =
+  let header = block.header in
+
+  let parent = List.hd world_state.history in
+
+  (* YP (47) *)
+  if Uint.(header.number <> parent.header.number + one) then invalid_block block Invalid_number ;
+
+  (* YP (48) *)
+  (* TODO: adapt to account for Monad base fee update rules. *)
+
+  (* YP (54) (YP (55) does not apply) *)
+  let max_gas_limit_update = Gas.(parent.header.gas_limit / ~$1024) in
+  if
+    Gas.(header.gas_limit < ~$5_000)
+    || Gas.(header.gas_limit >= parent.header.gas_limit + max_gas_limit_update)
+    || Gas.(header.gas_limit <= parent.header.gas_limit - max_gas_limit_update)
+  then invalid_block block Invalid_gas_limit ;
+
+  if Gas.(header.gas_used > header.gas_limit) then invalid_block block Gas_above_limit ;
+
+  (* YP (56) *)
+  if U256.(header.timestamp <= parent.header.timestamp) then invalid_block block Invalid_timestamp ;
+
+  (* YP (57) *)
+  if B32.(header.ommers_hash <> Crypto.keccak_256 Rlp.(encode (List []))) || block.ommers <> [] then
+    invalid_block block Nonempty_ommers ;
+  if Uint.(header.difficulty <> zero) then invalid_block block Nonzero_difficulty ;
+  if B8.(header.nonce <> zeros) then invalid_block block Nonzero_nonce ;
+
+  if Bytes.length block.header.extra_data > 32 then invalid_block block Extra_data_too_long ;
+
+  (* TODO validate prevrandao *)
   ()
 
 (* Process a system message call as in EIP-2935, EIP-4788. *)
@@ -256,9 +308,36 @@ let process_system_message ?(trace = false) (block_state : BlockState.t) (addr :
 let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
 
+let validate_input_block_against_output ~(input_block : Block.t) ~(output_block : Block.t) =
+  let input_header = input_block.header in
+  let output_header = output_block.header in
+
+  if B32.(input_header.state_root <> output_header.state_root) then
+    invalid_block input_block (Wrong_merkle_root {kind = `State; expected = output_header.state_root}) ;
+  if B32.(input_header.receipts_root <> output_header.receipts_root) then
+    invalid_block input_block (Wrong_merkle_root {kind = `Receipts; expected = output_header.receipts_root}) ;
+  if B32.(input_header.withdrawals_root <> output_header.withdrawals_root) then
+    invalid_block input_block
+      (Wrong_merkle_root {kind = `Withdrawals; expected = output_header.withdrawals_root}) ;
+  if B32.(input_header.transactions_root <> output_header.transactions_root) then
+    invalid_block input_block
+      (Wrong_merkle_root {kind = `Transactions; expected = output_header.transactions_root}) ;
+
+  if Bloom.(input_header.logs_bloom <> output_header.logs_bloom) then
+    invalid_block input_block (Wrong_logs_bloom {expected = output_header.logs_bloom}) ;
+
+  if Gas.(input_header.gas_used <> output_header.gas_used) then
+    invalid_block input_block (Wrong_gas_used {expected = output_header.gas_used}) ;
+
+  if B32.(input_header.parent_hash <> output_header.parent_hash) then
+    invalid_block input_block (Wrong_parent_hash {expected = output_header.parent_hash}) ;
+
+  assert (input_block = output_block) ;
+
+  ()
+
 let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block : Block.t) =
-  validate_header world_state block ;
-  if block.ommers <> [] then raise (Invalid_block (block, Nonempty_ommers)) ;
+  validate_block world_state block ;
 
   let block_state = BlockState.make world_state block in
 
@@ -274,7 +353,7 @@ let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block :
 
   (* EIP-2935 *)
   let block_state =
-    let parent_hash = block_state.current_block.header.parent_hash in
+    let parent_hash = Block.hash (List.hd world_state.history) in
     (* Ignore call result as per EIP-2935. *)
     let _, block_state =
       process_system_message ~trace block_state history_storage_address (B32.to_bytes parent_hash)
@@ -292,10 +371,7 @@ let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block :
 
   (* Compute roots and add the finalized block to the blockchain. *)
   let finalized_block = BlockState.finalize_current_block block_state in
-  if verify && block.header <> finalized_block.header then (
-    Format.eprintf "Block verification failed\n" ;
-    Format.eprintf "Expected: %s\n" (Yojson.Safe.pretty_to_string (Block.Header.to_yojson block.header)) ;
-    Format.eprintf "Actual: %s\n"
-      (Yojson.Safe.pretty_to_string (Block.Header.to_yojson finalized_block.header)) ;
-    failwith "Block verification failed" ) ;
+  validate_block world_state finalized_block ;
+
+  if verify then validate_input_block_against_output ~input_block:block ~output_block:finalized_block ;
   {block_state.world_state with history = finalized_block :: world_state.history}

@@ -22,8 +22,7 @@ module Address = struct
     of_bytes32_truncating
       (Crypto.keccak_256
          ( match create2 with
-         | None ->
-             Rlp.(encode (List [to_rlp sender; U256.(to_rlp (nonce - one))]))
+         | None -> Rlp.(encode (List [to_rlp sender; U256.(to_rlp (nonce - one))]))
          | Some {salt; initcode} ->
              Bytes.(
                of_char '\xff'
@@ -577,8 +576,7 @@ module Block = struct
       ; Rlp.List (List.map Header.to_rlp b.ommers)
       ; Rlp.List (List.map Withdrawal.to_rlp b.withdrawals) ]
 
-  let hash b =
-    Crypto.keccak_256 (Rlp.encode (Header.to_rlp b.header))
+  let hash b = Crypto.keccak_256 (Rlp.encode (Header.to_rlp b.header))
 end
 
 module Log = struct

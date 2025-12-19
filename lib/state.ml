@@ -74,6 +74,9 @@ module BlockState = struct
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
   let finalize_current_block (block_state : t) : Block.t =
+    (* YP (46) *)
+    let parent_hash = Block.hash (List.hd block_state.world_state.history) in
+
     (* YP (35) *)
     let state_root = WorldState.state_root block_state.world_state in
     let transactions_root =
@@ -126,7 +129,8 @@ module BlockState = struct
       ; withdrawals_root
       ; requests_hash
       ; gas_used
-      ; blob_gas_used }
+      ; blob_gas_used
+      ; parent_hash }
     in
     {block_state.current_block with header}
 end
@@ -299,8 +303,8 @@ struct
     return (Uint64.of_int (Bytes.length code))
 
   let get_code_hash addr =
-    let$ code = !(account addr |-- code) in
-    return (Crypto.keccak_256 code)
+    let$ account = !(account addr) in
+    return (if Account.is_empty account then None else Some (Crypto.keccak_256 account.code))
 
   let copy_code addr ~offset ~size =
     let$ code = !(account addr |-- code) in

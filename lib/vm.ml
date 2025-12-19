@@ -918,7 +918,7 @@ struct
     let$ () = spend access_gas in
 
     (* Operation *)
-    let$ hash = HostAPI.get_code_hash address in
+    let$ hash = Option.value ~default:B32.zeros <$> HostAPI.get_code_hash address in
     let$ () = push (U256.of_repr hash) in
 
     (* PC *)
@@ -970,9 +970,7 @@ struct
       if Uint.(current_block_num <= block_num || current_block_num > block_num + ~$256) then return U256.zero
       else
         let$ hash = HostAPI.get_block_hash (Uint.to_int64 block_num) in
-        match hash with
-        | Some hash -> return (U256.of_repr hash)
-        | None -> fail Argument_out_of_range
+        match hash with Some hash -> return (U256.of_repr hash) | None -> fail Argument_out_of_range
     in
     let$ () = push hash in
 
@@ -1195,9 +1193,9 @@ struct
        costs. *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
+    let$ access = HostAPI.access_storage self_addr (U256.to_repr key) in
     let$ storage_status = HostAPI.set_storage self_addr (U256.to_repr key) (U256.to_repr value') in
 
-    let$ access = HostAPI.access_storage self_addr (U256.to_repr key) in
     let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
     let update_gas =
       match storage_status with
