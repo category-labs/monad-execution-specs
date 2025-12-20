@@ -33,7 +33,7 @@ module BlockchainTest = struct
     ; repo : string
     ; solidity : string
     ; source : string
-    ; source_hash : string [@key "sourceHash"] }
+    ; source_hash : U256.t [@key "sourceHash"] }
   [@@deriving yojson {strict = false}]
 
   type blob_schedule =
