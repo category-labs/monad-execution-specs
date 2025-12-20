@@ -58,14 +58,13 @@ let tx =
 let block = Block.{header = Header.empty; transactions = [tx]; ommers = []; withdrawals = []}
 
 let result, _state =
-  (*Evm.Vm.execute msg msg.code Evmc.DummyHost.State.empty*)
-  let world_state = State.WorldState.make Uint.zero in
-  let block_state = State.BlockState.make world_state block in
-  let transaction_state = State.TransactionState.make block_state tx in
+  let world_state = Host.WorldState.make Uint.zero in
+  let block_state = Host.BlockState.make world_state block in
+  let transaction_state = Host.TransactionState.make block_state tx in
   let msg =
     {(Execution.prepare_message block_state sender gas_limit tx) with code = bytecode; input_data = calldata}
   in
-  Execution.process_message ~trace msg transaction_state
+  Execution.process_message ~eoa:true ~trace msg transaction_state
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"

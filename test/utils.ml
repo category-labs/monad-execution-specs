@@ -99,11 +99,7 @@ let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Resu
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
 module Evm = struct
-  module Evm0 =
-    Evmc.Instantiate (State.TransactionState.M) (State.Host)
-      (Vm.Make (struct
-        let trace = false
-      end))
+  module Evm0 = Host.Instantiate(Vm.Make(struct let trace = false end))
 
   (* Unfold one level of recursion to get access to the full signature of Vm *)
   module Vm =
@@ -112,7 +108,7 @@ module Evm = struct
         let trace = false
       end)
       (Evm0.Host)
-  module Host = State.Host (Vm)
+  module Host = Host.Make (Vm)
 end
 
 let test_message
@@ -166,7 +162,7 @@ let test_message
               ; output_data = Bytes.empty
               ; create_address = Address.zero } ) )
   in
-  let result, state = action State.TransactionState.empty in
+  let result, state = action Host.TransactionState.empty in
   (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;

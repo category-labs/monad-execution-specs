@@ -66,9 +66,9 @@ module BlockState = struct
   let account_opt addr = world_state |-- WorldState.account_opt addr
 
   let transfer_money_and_delete_if_empty (block_state : t) (amount : U256.t) (recipient : Address.t) =
-    let updated_balance = U256.(block_state.^(account recipient).balance + amount) in
-    if U256.(updated_balance = zero) then block_state.^(account_opt recipient) <- None
-    else block_state.^(account recipient |-- Account.balance) <- updated_balance
+    let account = block_state.^(account recipient) in
+    let account = {account with balance = U256.(account.balance + amount)} in
+    block_state.^(account_opt recipient) <- (if Account.is_empty account then None else Some account)
 
   (** {!finalize_current_block bs} returns {!bs.current_block} with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
@@ -238,7 +238,7 @@ module TransactionState = struct
   end)
 end
 
-module Host (Vm : sig
+module Make (Vm : sig
   val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
 end) =
 struct
@@ -327,7 +327,7 @@ struct
     && (match msg.kind with Call | CallCode | Create | Create2 -> true | DelegateCall -> false)
     && not msg.static
 
-  let increase_nonce (addr : Address.t) =
+  let increment_nonce (addr : Address.t) =
     update_field (account addr |-- nonce) (fun nonce -> U256.(nonce + one))
 
   let process_call (msg : Evmc.Message.t) =
@@ -347,16 +347,6 @@ struct
         Vm.execute msg code
 
   let process_create (msg : Evmc.Message.t) =
-    let$ is_eoa_transaction =
-      let$ code = !(account msg.sender |-- code) in
-      return (code = Bytes.empty || (Delegation.is_valid_delegation code && not msg.delegated))
-    in
-    let$ () =
-      (* The execution loop is responsible for updating the nonce when executing a transaction. It is only
-         incremented here if contract creation was triggered by CREATE or CREATE2. *)
-      when_ (not is_eoa_transaction)
-        (update_field (account msg.sender |-- nonce) (fun nonce -> U256.(nonce + one)))
-    in
     let$ sender_nonce = !(account msg.sender |-- nonce) in
     let create_address =
       Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce
@@ -416,7 +406,9 @@ struct
             return {result with create_address}
       | _ -> return result
 
-  let call (msg : Evmc.Message.t) =
+  let call_impl ~(eoa : bool) (msg : Evmc.Message.t) =
+    (* Irrevocable change: increment nonce. YP (73), YP (75). *)
+    let$ () = when_ (eoa || msg.kind = Create || msg.kind = Create2) (increment_nonce msg.sender) in
     let$ initial_state = get in
     let$ result =
       match msg.kind with
@@ -425,6 +417,10 @@ struct
     in
     let$ () = when_ (result.status_code <> Success) (put initial_state) in
     return result
+
+  let call_from_tx (msg : Evmc.Message.t) = call_impl ~eoa:true msg
+
+  let call (msg : Evmc.Message.t) = call_impl ~eoa:false msg
 
   let get_tx_context =
     let$ state = get in
@@ -491,4 +487,13 @@ struct
   let get_transient_storage addr key = !(transient_storage addr key)
 
   let set_transient_storage addr key value = transient_storage addr key := value
+end
+
+module Instantiate
+    (Vm : functor
+      (Host : Evmc.Host.SIG with type 'a t = 'a TransactionState.M.t)
+      -> Evmc.Vm(TransactionState.M).SIG) =
+struct
+  include Evmc.Instantiate (TransactionState.M) (Make) (Vm)
+  module Host = Make (Vm)
 end

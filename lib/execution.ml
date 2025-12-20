@@ -3,7 +3,7 @@ open Lens.Infix
 open Chain.Ethereum
 open Numeric
 open Byte_string
-open State
+open Host
 
 type invalid_block =
   | Nonempty_ommers
@@ -74,14 +74,11 @@ let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas
     ; depth = 0l
     ; create2_salt = B32.zeros }
 
-let process_message ?(trace = false) (msg : Evmc.Message.t) (transaction_state : TransactionState.t) =
-  let module H =
-    Evmc.Instantiate (TransactionState.M) (Host)
-      (Vm.Make (struct
-        let trace = trace
-      end))
-  in
-  H.Host.call msg transaction_state
+let process_message ~eoa ?(trace = false) (msg : Evmc.Message.t) (transaction_state : TransactionState.t) =
+  let module H = Host.Instantiate (Vm.Make (struct
+    let trace = trace
+  end)) in
+  H.Host.call_impl ~eoa msg transaction_state
 
 let process_authorization transaction_state (authorization : Transaction.Authorization.t) : TransactionState.t
     =
@@ -106,10 +103,8 @@ let process_authorization transaction_state (authorization : Transaction.Authori
 
 let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) =
   let open BlockState in
-  let tx_gas_limit =
-    Transaction.gas_limit tx
-    (* T_g *)
-  in
+  (* T_g *)
+  let tx_gas_limit = Transaction.gas_limit tx in
   let tx_value = Transaction.value tx in
   let tx_nonce = Transaction.nonce tx in
 
@@ -157,15 +152,12 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
     U256.of_uint_exn total_fee
   in
 
-  (* Irrevocable change: pay gas limits, increment nonce. YP (73), YP (74), YP (75). *)
+  (* Irrevocable change: pay gas fees. YP (73), YP (74). *)
   let block_state =
     (* The yellow paper does not specify a behaviour for nonce overflows. *)
     if U256.(sender_account.nonce = max_t) then invalid_transaction tx Nonce_overflow ;
 
-    block_state.^(account sender) <-
-      { sender_account with
-        balance = U256.(sender_account.balance - total_fee)
-      ; nonce = U256.(sender_account.nonce + one) }
+    block_state.^(account sender) <- {sender_account with balance = U256.(sender_account.balance - total_fee)}
   in
 
   (* Execute transaction. *)
@@ -179,7 +171,7 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
 
     let available_gas = Gas.(tx_gas_limit - intrinsic_gas) in
     let message = prepare_message block_state sender available_gas tx in
-    process_message ~trace message transaction_state
+    process_message ~eoa:true ~trace message transaction_state
   in
 
   (* Propagate state changes. *)
@@ -298,11 +290,11 @@ let process_system_message ?(trace = false) (block_state : BlockState.t) (addr :
         ; accessed_addresses = Address.Set.empty
         ; accessed_keys = StorageKey.Set.empty }
     in
-    let result, transaction_state = process_message ~trace message transaction_state in
+    let result, transaction_state = process_message ~eoa:false ~trace message transaction_state in
     assert (result.status_code = Success) ;
     (* Update block state with storage changes. As per the relevant EIPs, a system message call
-     does not warm up accounts or storage slots, and it does not count towards the block gas
-     limit. *)
+       does not warm up accounts or storage slots, and it does not count towards the block gas
+       limit. *)
     (Some result, {block_state with world_state = transaction_state.world_state})
 
 let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
