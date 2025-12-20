@@ -68,7 +68,7 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
           (union actual_keys expected_keys) ) ) ;
     false )
 
-let check_postconditions (state : State.WorldState.t) (post : Account.t Address.Map.t) : bool =
+let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.Map.t) : bool =
   let check_account_existence_and_state addr =
     let actual = Address.Map.find_opt addr state.accounts in
     let expected = Address.Map.find_opt addr post in
@@ -85,17 +85,17 @@ let check_postconditions (state : State.WorldState.t) (post : Account.t Address.
   let all_addresses = Address.(Set.union (Map.keys state.accounts) (Map.keys post)) in
   Address.Set.for_all check_account_existence_and_state all_addresses
 
-let load_preconditions pre (state : State.WorldState.t) =
-  let open State.WorldState in
+let load_preconditions pre (state : Host.WorldState.t) =
+  let open Host.WorldState in
   let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
   {state with accounts}
 
-let load_genesis_block (genesis_block_header : Block.Header.t) (state : State.WorldState.t) =
+let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
   { state with
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
 
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
-  State.WorldState.make fixtures.config.chain_id
+  Host.WorldState.make fixtures.config.chain_id
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s -> List.fold_left (Execution.process_block ~trace ~verify:false) s fixtures.blocks
@@ -107,7 +107,7 @@ let check_test_result (name, fixtures, post_state) =
 
 let check_test_results results = List.for_all check_test_result results
 
-let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : State.WorldState.t) =
+let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : Host.WorldState.t) =
   {fixtures with post = post_state.accounts; blocks = List.(tl (rev post_state.history))}
 
 let test_case_to_yojson fixture =
@@ -133,7 +133,7 @@ let test_case_to_yojson fixture =
   fixture_json
 
 let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) list) =
-  let test_results : (string * Fixtures.BlockchainTest.test_case * State.WorldState.t) list =
+  let test_results : (string * Fixtures.BlockchainTest.test_case * Host.WorldState.t) list =
     List.map (fun (test_name, fixtures) -> (test_name, fixtures, run_blockchain_test fixtures)) tests
   in
   match !execution_mode with

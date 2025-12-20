@@ -18,7 +18,7 @@ module Address = struct
   type create2_params = {salt : B32.t; initcode : Bytes.t}
 
   (* YP (95) *)
-  let of_contract_creation ~(sender : t) ~nonce ~create2 =
+  let of_contract_creation ~(sender : t) ~(nonce : U256.t) ~(create2 : create2_params option) =
     of_bytes32_truncating
       (Crypto.keccak_256
          ( match create2 with

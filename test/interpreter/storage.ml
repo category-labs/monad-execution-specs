@@ -61,5 +61,5 @@ let () =
              (fun () ->
                let _, state = test_message (bytecode_to_call_message bc_write) in
                ignore
-                 (test_message ~prepare_env:(State.TransactionState.M.put state)
+                 (test_message ~prepare_env:(Host.TransactionState.M.put state)
                     ~check_vm_state:(expect_stack [value]) (bytecode_to_call_message bc_read) ) ) ) ] ) ]
