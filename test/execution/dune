@@ -1,0 +1,6 @@
+(test
+ (name blockchain_tests)
+ (modules blockchain_tests)
+ (deps
+  (source_tree fixtures))
+ (libraries monad_lib test_utils alcotest))

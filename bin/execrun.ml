@@ -5,9 +5,11 @@ open Byte_string
 
 let fixtures_file = ref None
 let test_kind = ref None
-let select_fixtures kind = Arg.String (fun filename ->
-                               test_kind := Some kind;
-                               fixtures_file := Some filename)
+let select_fixtures kind =
+  Arg.String
+    (fun filename ->
+      test_kind := Some kind ;
+      fixtures_file := Some filename )
 
 let execution_mode = ref `Verify
 let set_execution_mode_update_fixture = Arg.String (fun filename -> execution_mode := `Update filename)
@@ -27,21 +29,19 @@ let () =
         , "Generate new fixtures from execution, do not verify provided roots" ) ]
       (fun extra_arg ->
         Format.printf "Unknown argument %s\n" extra_arg ;
-        Format.printf "%s" usage_str;
+        Format.printf "%s" usage_str ;
         exit (-1) )
       usage_str )
 
 let trace = !trace
 let execution_mode = !execution_mode
 
-let fixtures_file = match !fixtures_file with
-  | Some filename -> filename
-  | None -> Format.printf "%s" usage_str; exit (-1)
+let fixtures_file =
+  match !fixtures_file with Some filename -> filename | None -> Format.printf "%s" usage_str ; exit (-1)
 
-let test_kind = match !test_kind with
-  | Some kind -> kind
-  | None -> Format.printf "%s" usage_str; exit (-1)
+let test_kind = match !test_kind with Some kind -> kind | None -> Format.printf "%s" usage_str ; exit (-1)
 
+(* TODO: don't hard-code this. *)
 let network = Chain.Monad.Revision.(to_string Eight)
 
 let check_account_state (address : Address.t) (actual : Account.t) (expected : Account.t) =
@@ -138,7 +138,7 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
       ; fixture_format = "blockchain_test" }
   in
   let genesis_rlp = Rlp.encode (Block.Header.to_rlp fixtures.genesis_block_header) in
-  let last_blockhash = (U256.of_repr (Block.hash (List.hd post_state.history))) in
+  let last_blockhash = U256.of_repr (Block.hash (List.hd post_state.history)) in
   {fixtures with post; blocks; config; info; genesis_rlp; last_blockhash}
 
 let test_case_to_yojson fixture =
@@ -148,18 +148,17 @@ let test_case_to_yojson fixture =
   (* TODO: this is a hack to add necessary extra fields *)
   let fixture_json = Fixtures.BlockchainTest.test_case_to_yojson fixture in
   let fixture_json =
-    (* Add its own RLP encoding to each block. *)
+    (* Add its own RLP encoding and hash to each block. *)
     let blocks =
       to_list fixture_json.$("blocks")
-      |> List.map (fun b ->
+      |> List.map (fun (b : Yojson.Safe.t) ->
           let block = match Block.of_yojson b with Ok b -> b | Error err -> failwith err in
-          let rlp = Rlp.encode (Block.to_rlp block) in
-          b.$("rlp") <- Bytes.to_yojson rlp )
-      |> fun bs -> `List bs
+          let b = b.$("rlp") <- Bytes.to_yojson (Rlp.encode (Block.to_rlp block)) in
+          let header_with_hash = b.$("blockHeader").$("hash") <- B32.to_yojson (Block.hash block) in
+          b.$("blockHeader") <- header_with_hash )
     in
-    fixture_json.$("blocks") <- blocks
+    fixture_json.$("blocks") <- `List blocks
   in
-  (* TODO: don't hard-code this. *)
   let fixture_json = fixture_json.$("network") <- `String network in
   fixture_json
 
@@ -187,14 +186,12 @@ let () =
   match test_kind with
   | `Blockchain ->
       let blockchain_tests =
-        match
-          Fixtures.BlockchainTest.of_yojson ~skip_invalid:true (Yojson.Safe.from_file fixtures_file)
-        with
-        | Ok fix -> fix
+        match Fixtures.BlockchainTest.of_yojson ~skip_invalid:true (Yojson.Safe.from_file fixtures_file) with
         | Error place -> failwith (Format.sprintf "Error when decoding %s" place)
+        | Ok tests -> tests
       in
       if List.is_empty blockchain_tests then (
-        Format.printf "No valid tests found in %s!\n" fixtures_file;
-        exit (-1) ) ;
+        Format.printf "No valid tests found in %s!\n" fixtures_file ;
+        Format.printf "No valid tests found in %s!\n" fixtures_file ) ;
       if not (run_blockchain_tests blockchain_tests) then (Format.printf "Some tests failed\n" ; exit (-1))
   | `State -> failwith "TODO"
