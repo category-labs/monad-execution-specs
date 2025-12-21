@@ -1,5 +1,13 @@
 (include_subdirs qualified)
 
+(rule
+ (targets version.ml)
+ (deps (universe))
+ (action
+  (with-stdout-to
+   %{targets}
+   (bash "echo \"let hash = \\\"$(git rev-parse --short HEAD)\\\"\""))))
+
 (library
  (name monad_lib)
  (public_name monad-spec.monad_lib)

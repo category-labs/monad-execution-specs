@@ -95,11 +95,20 @@ let status_code =
   end : Alcotest.TESTABLE
     with type t = Evmc.Result.StatusCode.t )
 
+let account =
+  ( module struct
+    include Chain.Ethereum.Account
+    let pp = Fmt.of_to_string (fun acc -> Yojson.Safe.pretty_to_string (Account.to_yojson acc))
+  end : Alcotest.TESTABLE
+    with type t = Chain.Ethereum.Account.t )
+
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
 module Evm = struct
-  module Evm0 = Host.Instantiate(Vm.Make(struct let trace = false end))
+  module Evm0 = Host.Instantiate (Vm.Make (struct
+    let trace = false
+  end))
 
   (* Unfold one level of recursion to get access to the full signature of Vm *)
   module Vm =
@@ -234,3 +243,5 @@ let test_cases_opcode_2 opcode cases =
 let test_cases_opcode_3 opcode cases =
   ( Opcode.to_string opcode
   , List.map (fun ((x_0, x_1, x_2), y) -> test_case_opcode_3 opcode x_0 x_1 x_2 y) cases )
+
+let ( $/ ) path file = Filename.concat path file
