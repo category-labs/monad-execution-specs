@@ -203,7 +203,8 @@ module Context = struct
 end
 
 let max_stack_depth = 1024
-let max_code_size = 0x6000
+(* Monad §TODO: maximum contract code size is larger than Ethereum. *)
+let max_code_size = 128 * 1024
 let max_init_code_size = 2 * max_code_size
 
 module Make
@@ -221,8 +222,6 @@ struct
       Format.print_string (msg ()) ;
       Format.print_flush () )
     else ()
-
-  let dump obj = trace (fun () -> Format.sprintf "Object 0x%x\n" (Obj.magic obj : int))
 
   module Ethereum = Chain.Ethereum
   module Address = Ethereum.Address
