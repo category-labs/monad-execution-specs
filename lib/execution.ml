@@ -215,7 +215,10 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
   block_state
 
 let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
-  BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
+  let block_state =
+    BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
+  in
+  {block_state with withdrawals_processed = List.append block_state.withdrawals_processed [wd]}
 
 (* YP (60) *)
 let validate_block (world_state : WorldState.t) (block : Block.t) =
