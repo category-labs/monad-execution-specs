@@ -271,7 +271,7 @@ let of_patricia trie =
   in
   {root_hash; inv_hashes}
 
-(** {!of_seq seq} builds an MPT representing the mapping given by the key-value pairs in the input sequence. *)
+(** {!of_seq} builds an MPT representing the mapping given by the key-value pairs in the input sequence. *)
 let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
   entries
   |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, Rlp.Bytes v))
@@ -279,7 +279,7 @@ let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
   |> PatriciaTrie.of_trie
   |> of_patricia
 
-(** {!of_seq_i seq} works as {!of_seq}, but it uses the RLP encoding of the position of every entry in the
+(** {!of_seq_i} works as {!of_seq}, but it uses the RLP encoding of the position of every entry in the
     sequence as the key. This implements the encoding scheme described in YP (36), YP (37) and YP (38). *)
 let of_seq_i (entries : Bytes.t Seq.t) =
   let to_kv i v = (Rlp.encode U64.(to_rlp ~$i), v) in

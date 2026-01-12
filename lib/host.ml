@@ -70,7 +70,7 @@ module BlockState = struct
     let account = {account with balance = U256.(account.balance + amount)} in
     block_state.^(account_opt recipient) <- (if Account.is_empty account then None else Some account)
 
-  (** {!finalize_current_block bs} returns {!bs.current_block} with the roots updated to reflect the
+  (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
   let finalize_current_block (block_state : t) : Block.t =
