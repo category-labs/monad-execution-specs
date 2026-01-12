@@ -235,7 +235,7 @@ module Uint = struct
   let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
 end
 module Integer = struct
-  include Make (Traits.Byte_width.Variable) (Traits.Signedness.Signed)
+  include IntegerBase
 
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
 end
