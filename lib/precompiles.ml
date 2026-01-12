@@ -44,7 +44,7 @@ let sha256_address = Address.of_hex_string "0x02"
 let sha256 (msg : Evmc.Message.t) : Evmc.Result.t =
   check_gas msg
     Gas.(~$60 + (~$12 * bytes_to_whole_words ~$(Bytes.length msg.input_data)))
-    (fun () -> Some (B32.to_bytes (Crypto.keccak_256 msg.input_data)))
+    (fun () -> Some (B32.to_bytes (Crypto.sha_256 msg.input_data)))
 
 let ripemd160_address = Address.of_hex_string "0x03"
 let ripemd160 (msg : Evmc.Message.t) : Evmc.Result.t =

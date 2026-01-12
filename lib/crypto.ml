@@ -54,4 +54,6 @@ let ecrecover {r; s; y_parity} (msg_hash : B32.t) : B20.t option =
       let public_key = Bytes.init 64 public_key_i in
       return (B20.of_bytes32_truncating (keccak_256 public_key)) ) )
 
+let sha_256 (bs : Bytes.t) : B32.t = B32.of_bytes_exn Digestif.SHA256.(to_raw_string (digest_string bs))
+
 let ripemd_160 (bs : Bytes.t) : B20.t = B20.of_bytes_exn Digestif.RMD160.(to_raw_string (digest_string bs))
