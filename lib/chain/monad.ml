@@ -30,6 +30,8 @@ module Revision = struct
     | _ -> None
 end
 
+let wei_per_mon = U256.(~$1_000_000_000_000_000_000)
+
 module type PARAMS = sig
   val chain_id : Uint.t (* β *)
 end
