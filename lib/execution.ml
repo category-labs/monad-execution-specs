@@ -87,16 +87,16 @@ struct
     | _ -> return ()
 
   let process_authorization transaction_state (authorization : Transaction.Authorization.t) :
-      TransactionState.t =
+      Address.t option * TransactionState.t =
     let open TransactionState in
     (* As per EIP-7702, invalid authorizations are skipped. *)
     if
       (U256.(authorization.chain_id <> zero) && Uint.(U256.to_uint authorization.chain_id <> Params.chain_id))
       || U64.(authorization.nonce = max_t)
-    then transaction_state
+    then (None, transaction_state)
     else
       match Transaction.Authorization.authority authorization with
-      | None -> transaction_state
+      | None -> (None, transaction_state)
       | Some authority ->
           let transaction_state =
             { transaction_state with
@@ -108,13 +108,32 @@ struct
             let code = Delegation.delegation_code authorization.address in
             let nonce = U64.(authority_account.nonce + one) in
             let authority_account = {authority_account with code; nonce} in
-            transaction_state
-            |> (fun s -> s.^(account authority) <- authority_account)
-            |> fun s ->
-            if not (Account.is_empty authority_account) then
-              s.^(refund) <- U256.(s.refund + of_uint_exn Gas.tx_authorization_list_refund_per_nonempty)
-            else s
-          else transaction_state
+            let transaction_state =
+              transaction_state
+              |> (fun s -> s.^(account authority) <- authority_account)
+              |> fun s ->
+              if not (Account.is_empty authority_account) then
+                s.^(refund) <- U256.(s.refund + of_uint_exn Gas.tx_authorization_list_refund_per_nonempty)
+              else s
+            in
+            (Some authority, transaction_state)
+          else (None, transaction_state)
+
+  (** Update the emptying transaction counter of each address in [addresses] to be equal to
+      [current_block_number + Reserve_balance.execution_consensus_delay]. This is done immediately after
+      authorizations are processed, to bump the counter of any valid authorities, and after a transaction
+      finishes, to bump the counter of the sender. *)
+  let bump_emptying_transaction_counters (addresses : Address.t list) (transaction_state : TransactionState.t)
+      =
+    let next_emptying_block =
+      Uint.(transaction_state.current_block.header.number + Reserve_balance.execution_consensus_delay)
+    in
+    let world_state =
+      List.fold_left
+        (fun state addr -> state.^(WorldState.next_emptying_transaction_block_for addr) <- next_emptying_block)
+        transaction_state.world_state addresses
+    in
+    {transaction_state with world_state}
 
   type transaction_validation =
     {sender : Address.t; total_fee : U256.t; effective_gas_price : Uint.t; intrinsic_gas : Gas.t}
@@ -217,7 +236,7 @@ struct
 
     (* Execute transaction. *)
     let result, transaction_state =
-      let transaction_state = TransactionState.make Params.chain_id block_state tx in
+      let transaction_state = TransactionState.make block_state sender tx in
 
       (* Irrevocable change: pay gas fees, increment nonce. YP (73), YP (74), YP (75). *)
       let transaction_state =
@@ -231,13 +250,28 @@ struct
       let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
 
       (* Process EIP-7702 authorizations. *)
-      let transaction_state =
-        List.fold_left process_authorization transaction_state (Transaction.authorization_list tx)
+      let authorities, transaction_state =
+        List.fold_left
+          (fun (authorities, transaction_state) authorization ->
+            match process_authorization transaction_state authorization with
+            | None, transaction_state -> (authorities, transaction_state)
+            | Some authority, transaction_state -> (authority :: authorities, transaction_state) )
+          ([], transaction_state) (Transaction.authorization_list tx)
       in
+      (* Bump the emptying transaction counter for valid authorizations. This accounts for auth_condition
+         in Monad §6 Algorithm 4. *)
+      let transaction_state = bump_emptying_transaction_counters authorities transaction_state in
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
       let message = prepare_message sender available_gas tx in
-      Host.call_from_eoa message transaction_state
+      let result, transaction_state = Host.call_from_eoa tx message transaction_state in
+
+      (* Bump the emptying transaction counter of the sender after execution finishes. This accounts
+         for prior_sender_condition in Monad §6 Algorithm 4. Note that the update is idempotent so if
+         the sender already appeared in a valid authorization its counter does not get incremented
+         further. *)
+      let transaction_state = bump_emptying_transaction_counters [sender] transaction_state in
+      (result, transaction_state)
     in
 
     (* Propagate state changes. *)
@@ -282,7 +316,6 @@ struct
       { block_state with
         transactions_processed = List.append block_state.transactions_processed [(tx, receipt)] }
     in
-
     return block_state
 
   let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) : BlockState.t =

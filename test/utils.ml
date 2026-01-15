@@ -69,7 +69,7 @@ let check_prop ~name ?print ?(count = 10000) generator property =
 let u256 =
   ( module struct
     include U256
-    let pp = Fmt.of_to_string U256.to_hex_string
+    let pp = Fmt.of_to_string U256.to_string
   end : Alcotest.TESTABLE
     with type t = U256.t )
 
