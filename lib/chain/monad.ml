@@ -45,3 +45,6 @@ end
 module Mainnet : PARAMS = struct
   let chain_id = Uint.(~$143)
 end
+
+let wei_per_mon = U256.(~$1_000_000_000_000_000_000)
+let mon_to_wei mon = U256.(mon * wei_per_mon)

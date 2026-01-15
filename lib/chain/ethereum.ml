@@ -573,6 +573,8 @@ module Block = struct
     ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] }
   [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens]
 
+  let empty = {header = empty; transactions = []; ommers = []; withdrawals = []}
+
   (* YP 4.4.3 (41) *)
   let to_rlp b =
     (* YP (42) *)
@@ -658,6 +660,8 @@ module Account = struct
 
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
+
+  let is_smart_contract {code; _} = Bytes.(code <> empty) && not (Delegation.is_valid_delegation code)
 
   let to_rlp {nonce; balance; storage; code} =
     let storage_root =

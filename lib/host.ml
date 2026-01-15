@@ -9,13 +9,22 @@ let ( .^$()<- ) x lens f = Lens.modify lens f x
 
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
-      includes the world state as per YP 4.1. *)
-  type t = {history : Block.t list; accounts : Account.t Address.Map.t (* σ[a] *)}
+      includes the world state as per YP 4.1.
+   *)
+  type t =
+    { history : Block.t list
+    ; accounts : Account.t Address.Map.t (* σ[a] *)
+    ; next_emptying_transaction_block : Uint.t Address.Map.t
+          (** [next_emptying_transaction_block] maps every address to the next block number in which a
+        transaction from it would be emptying. The counter for an account is bumped by
+        {!Reserve_balance.execution_consensus_delay} every time the account submits a transaction or appears
+        in a valid delegation. *)
+    }
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
 
-  let empty = {history = []; accounts = Address.Map.empty}
+  let empty = {history = []; accounts = Address.Map.empty; next_emptying_transaction_block = Address.Map.empty}
 
   (* EIP-161 deletion of touched empty accounts is done here, which frees the implementation from keeping
      track of touched accounts. Note that the Ethereum executable spec uses a similar approach by intercepting
@@ -31,6 +40,9 @@ module WorldState = struct
     Lens.{get; set}
   let account ?(keep_empty = false) addr =
     account_opt ~keep_empty addr |-- Option.get_or_default Account.empty
+
+  let next_emptying_transaction_block_for addr =
+    next_emptying_transaction_block |-- Address.Map.at addr |-- Option.get_or_default Uint.zero
 
   let state_root state =
     let mpt =
@@ -191,8 +203,7 @@ module TransactionState = struct
     ; accessed_addresses = Address.Set.empty
     ; accessed_keys = StorageKey.Set.empty }
 
-  let make (chain_id : Uint.t) (block_state : BlockState.t) tx =
-    let sender = Option.get (Transaction.sender chain_id tx) in
+  let make (block_state : BlockState.t) (sender : Address.t) tx =
     let tx_gas_price =
       (* If this option was None, the transaction would have already been discarded as invalid. *)
       Option.get (Gas.tx_effective_gas_price block_state.current_block.header.base_fee_per_gas tx)
@@ -242,7 +253,8 @@ module TransactionState = struct
         ; pre_compiled_contract_addresses
         ; Address.Set.singleton sender
         ; Address.Set.singleton transaction_state.current_block.header.beneficiary
-        ; target_addresses ]
+        ; target_addresses
+        ; transaction_state.accessed_addresses ]
     in
     {transaction_state with accessed_addresses; accessed_keys}
 
@@ -444,11 +456,11 @@ struct
             return {result with create_address}
       | _ -> return result
 
-  let call_impl ~(eoa : bool) (msg : Evmc.Message.t) =
+  let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =
     let$ () =
       (* Increment the nonce for non-EOA CREATE/CREATE2 messages . If the message came from an EOA transaction,
          the nonce was already incremented in the irrevocable change. *)
-      when_ ((msg.kind = Create || msg.kind = Create2) && not eoa) (increment_nonce msg.sender)
+      when_ ((msg.kind = Create || msg.kind = Create2) && Option.is_none from_tx) (increment_nonce msg.sender)
     in
     let$ initial_state = get in
     let$ result =
@@ -456,13 +468,44 @@ struct
       | Call | DelegateCall | CallCode -> process_call msg
       | Create | Create2 -> process_create msg
     in
+    let$ result =
+      match from_tx with
+      | None -> return result
+      | Some t ->
+          (* Check reserve balance condition. Monad §6 Algorithm 2. *)
+          let chain_id = ChainParams.chain_id in
+          let current_block = initial_state.current_block in
+          let delegated_in_state =
+            Delegation.is_valid_delegation initial_state.^(TransactionState.account msg.sender).code
+          in
+          (* Check whether transaction is emptying. Monad §6 Algorithm 4 (IsEmptying).
+             The check of [delegated_in_state] is exactly as in the spec. The comparison with the next emptying
+             transaction counter subsumes both [auth_condition] and [prior_sender_condition]. Note that
+             authority processing bumps the next emptying transaction block counter before the transaction is
+             processed, but the transaction itself only bumps its sender's counter after it finishes.
+           *)
+          let is_emptying =
+            (not delegated_in_state)
+            && Uint.(
+                 initial_state.world_state.^(WorldState.next_emptying_transaction_block_for msg.sender)
+                 <= current_block.header.number )
+          in
+          let base_fee_per_gas = current_block.header.base_fee_per_gas in
+          let original_balances = initial_state.initial_world_state.accounts in
+          let$ new_state = !(world_state |-- accounts) in
+          let reserve_dipped =
+            Reserve_balance.dipped_into_reserve ~chain_id ~base_fee_per_gas ~original_balances ~new_state ~t
+              ~is_emptying
+          in
+          return (if reserve_dipped then {result with status_code = Revert; gas_refund = 0L} else result)
+    in
     let$ () = when_ (result.status_code <> Success) (put initial_state) in
     return result
 
-  let call (msg : Evmc.Message.t) = call_impl ~eoa:false msg
+  let call (msg : Evmc.Message.t) = call_impl ~from_tx:None msg
 
   (* Call from a transaction sent by an EOA, as opposed to a system transaction or a CALL opcode. *)
-  let call_from_eoa (msg : Evmc.Message.t) = call_impl ~eoa:true msg
+  let call_from_eoa (tx : Transaction.t) (msg : Evmc.Message.t) = call_impl ~from_tx:(Some tx) msg
 
   let get_tx_context =
     let$ state = get in
