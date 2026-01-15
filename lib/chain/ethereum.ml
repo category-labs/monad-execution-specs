@@ -659,6 +659,8 @@ module Account = struct
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
 
+  let is_smart_contract {code; _} = Bytes.(code <> empty) && not (Delegation.is_valid_delegation code)
+
   let to_rlp {nonce; balance; storage; code} =
     let storage_root =
       let mpt =

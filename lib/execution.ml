@@ -233,7 +233,7 @@ struct
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
       let message = prepare_message sender available_gas tx in
-      Host.call_from_eoa message transaction_state
+      Host.call_from_eoa tx message transaction_state
     in
 
     (* Propagate state changes. *)
@@ -277,7 +277,6 @@ struct
       { block_state with
         transactions_processed = List.append block_state.transactions_processed [(tx, receipt)] }
     in
-
     return block_state
 
   let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) : BlockState.t =

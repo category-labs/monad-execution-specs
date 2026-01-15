@@ -437,11 +437,11 @@ struct
             return {result with create_address}
       | _ -> return result
 
-  let call_impl ~(eoa : bool) (msg : Evmc.Message.t) =
+  let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =
     let$ () =
       (* Increment the nonce for non-EOA CREATE/CREATE2 messages . If the message came from an EOA transaction,
          the nonce was already incremented in the irrevocable change. *)
-      when_ ((msg.kind = Create || msg.kind = Create2) && not eoa) (increment_nonce msg.sender)
+      when_ ((msg.kind = Create || msg.kind = Create2) && Option.is_none from_tx) (increment_nonce msg.sender)
     in
     let$ initial_state = get in
     let$ result =
@@ -449,13 +449,38 @@ struct
       | Call | DelegateCall | CallCode -> process_call msg
       | Create | Create2 -> process_create msg
     in
+    let$ result =
+      match from_tx with
+      | None -> return result
+      | Some t ->
+          (* Check reserve balance condition. Monad §6 Algorithm 2 *)
+          let chain_id = ChainParams.chain_id in
+          let previous_blocks = initial_state.world_state.history in
+          let current_block = initial_state.current_block in
+          let starting_block_number = current_block.header.number in
+          let delegated_in_state =
+            Delegation.is_valid_delegation initial_state.^(TransactionState.account msg.sender).code
+          in
+          let is_emptying =
+            Reserve_balance.is_tx_emptying ~chain_id ~t ~current_block ~previous_blocks ~starting_block_number
+              ~delegated_in_state
+          in
+          let base_fee_per_gas = current_block.header.base_fee_per_gas in
+          let original_balances = initial_state.world_state.accounts in
+          let$ new_state = !(world_state |-- accounts) in
+          let reserve_dipped =
+            Reserve_balance.dipped_into_reserve ~chain_id ~base_fee_per_gas ~original_balances ~new_state ~t
+              ~is_emptying
+          in
+          return (if reserve_dipped then {result with status_code = Revert; gas_refund = 0L} else result)
+    in
     let$ () = when_ (result.status_code <> Success) (put initial_state) in
     return result
 
-  let call (msg : Evmc.Message.t) = call_impl ~eoa:false msg
+  let call (msg : Evmc.Message.t) = call_impl ~from_tx:None msg
 
   (* Call from a transaction sent by an EOA, as opposed to a system transaction or a CALL opcode. *)
-  let call_from_eoa (msg : Evmc.Message.t) = call_impl ~eoa:true msg
+  let call_from_eoa (tx : Transaction.t) (msg : Evmc.Message.t) = call_impl ~from_tx:(Some tx) msg
 
   let get_tx_context =
     let$ state = get in
