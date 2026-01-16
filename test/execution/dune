@@ -4,3 +4,8 @@
  (deps
   (source_tree fixtures))
  (libraries monad_lib test_utils alcotest))
+
+(test
+ (name procedural_tests)
+ (modules procedural_tests)
+ (libraries monad_lib test_utils alcotest))

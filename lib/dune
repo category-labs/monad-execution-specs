@@ -15,7 +15,7 @@
   zarith
   lens
   digestif
-  secp256k1-internal
+  secp256k1
   yojson
   ppx_deriving_yojson.runtime)
  (preprocess
