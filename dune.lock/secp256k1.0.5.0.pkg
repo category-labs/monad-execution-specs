@@ -1,0 +1,13 @@
+(version 0.5.0)
+
+(build
+ (all_platforms ((action (run dune build -p %{pkg-self:name} -j %{jobs})))))
+
+(depends
+ (all_platforms
+  (ocaml dune base stdio dune-configurator base-bigarray conf-secp256k1)))
+
+(source
+ (fetch
+  (url https://github.com/dakk/secp256k1-ml/archive/refs/tags/v0.5.0.tar.gz)
+  (checksum md5=4e178cc15d4a913382595190c24697a9)))

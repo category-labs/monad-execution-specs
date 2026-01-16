@@ -279,6 +279,8 @@ let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
   |> PatriciaTrie.of_trie
   |> of_patricia
 
+let empty = of_seq Seq.empty
+
 (** {!of_seq_i} works as {!of_seq}, but it uses the RLP encoding of the position of every entry in the
     sequence as the key. This implements the encoding scheme described in YP (36), YP (37) and YP (38). *)
 let of_seq_i (entries : Bytes.t Seq.t) =

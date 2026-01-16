@@ -457,13 +457,11 @@ struct
           let chain_id = ChainParams.chain_id in
           let previous_blocks = initial_state.world_state.history in
           let current_block = initial_state.current_block in
-          let starting_block_number = current_block.header.number in
           let delegated_in_state =
             Delegation.is_valid_delegation initial_state.^(TransactionState.account msg.sender).code
           in
           let is_emptying =
-            Reserve_balance.is_tx_emptying ~chain_id ~t ~current_block ~previous_blocks ~starting_block_number
-              ~delegated_in_state
+            Reserve_balance.is_tx_emptying ~chain_id ~t ~current_block ~previous_blocks ~delegated_in_state
           in
           let base_fee_per_gas = current_block.header.base_fee_per_gas in
           let original_balances = initial_state.world_state.accounts in

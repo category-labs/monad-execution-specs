@@ -5,10 +5,12 @@ open Chain.Monad
 open Numeric
 
 (* Monad §3: default_reserve_balance *)
-let default_reserve_balance = U256.(~$10 * wei_per_mon)
+let default_reserve_balance = mon_to_wei U256.(~$10)
+
+let user_reserve_balance (account : Account.t) = ignore account ; default_reserve_balance
 
 (* Monad §3: k *)
-let execution_consensus_delay = 3
+let execution_consensus_delay = Integer.of_int 3
 
 (** Monad §6 Algorithm 4 (IsEmptying) *)
 let is_tx_emptying
@@ -16,10 +18,14 @@ let is_tx_emptying
     ~(t : Transaction.t)
     ~(current_block : Block.t)
     ~(previous_blocks : Block.t list)
-    ~(starting_block_number : Uint.t)
     ~(delegated_in_state : bool) =
   (* This implementation follows the definition of IsEmptying in the spec as closely as possible. It has not
      been optimized for performance. *)
+  let starting_block_number =
+    Integer.(
+      as_unsigned_exn
+        (max (Uint.as_signed current_block.header.number - execution_consensus_delay + one) zero) )
+  in
   let sender = Option.get (Transaction.sender chain_id t) in
   let transactions_before_t =
     List.to_seq previous_blocks
@@ -46,8 +52,6 @@ let is_tx_emptying
       transactions_before_t
   in
   (not delegation_condition) && (not auth_condition) && not prior_sender_condition
-
-let user_reserve_balance (account : Account.t) = ignore account ; default_reserve_balance
 
 (** Monad §6 Algorithm 3 (DippedIntoReserve) *)
 let dipped_into_reserve
