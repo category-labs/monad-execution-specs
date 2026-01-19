@@ -57,10 +57,13 @@ let tx =
 
 let block = Block.{header = Header.empty; transactions = [tx]; ommers = []; withdrawals = []}
 
+module Params = Chain.Monad.Testnet
+module Execution = Execution.Make (Params)
+
 let result, _state =
-  let world_state = Host.WorldState.make Uint.zero in
+  let world_state = Host.WorldState.empty in
   let block_state = Host.BlockState.make world_state block in
-  let transaction_state = Host.TransactionState.make block_state tx in
+  let transaction_state = Host.TransactionState.make Params.chain_id block_state tx in
   let msg =
     {(Execution.prepare_message block_state sender gas_limit tx) with code = bytecode; input_data = calldata}
   in

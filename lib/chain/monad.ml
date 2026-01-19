@@ -1,4 +1,5 @@
 (** Definitions for Monad-specific types. *)
+open Numeric
 
 module Revision = struct
   type t = Zero | One | Two | Three | Four | Five | Six | Seven | Eight | Next
@@ -27,4 +28,20 @@ module Revision = struct
     | "MONAD_EIGHT" -> Some Eight
     | "MONAD_NEXT" -> Some Next
     | _ -> None
+end
+
+module type PARAMS = sig
+  val chain_id : Uint.t (* β *)
+end
+
+module Devnet : PARAMS = struct
+  let chain_id = Uint.(~$20_143)
+end
+
+module Testnet : PARAMS = struct
+  let chain_id = Uint.(~$10_143)
+end
+
+module Mainnet : PARAMS = struct
+  let chain_id = Uint.(~$143)
 end
