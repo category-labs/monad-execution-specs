@@ -56,6 +56,13 @@ module Make (M : SIG) = struct
           let$ xs = sequence mxs in
           return (x :: xs)
 
+    let rec fold_leftM ~(f : 'acc -> 'a -> 'acc M.t) (acc : 'acc) (l : 'a list) : 'acc M.t =
+      match l with
+      | hd :: tl ->
+          let$ acc = f acc hd in
+          fold_leftM ~f acc tl
+      | [] -> return acc
+
     let rec iterM ~(f : 'a -> unit M.t) (l : 'a list) : unit M.t =
       let open M in
       match l with
@@ -87,6 +94,13 @@ module Make (M : SIG) = struct
           M.return (Seq.cons x xs)
 
     let mapM ~(f : 'a -> 'b M.t) (seq : 'a Seq.t) : 'b Seq.t M.t = sequence (map f seq)
+
+    let rec fold_leftM ~(f : 'acc -> 'a -> 'acc M.t) (acc : 'acc) (seq : 'a t) : 'acc M.t =
+      match Seq.uncons seq with
+      | Some (hd, tl) ->
+          let$ acc = f acc hd in
+          fold_leftM ~f acc tl
+      | None -> M.return acc
 
     let rec iterM ~(f : 'a -> unit M.t) (seq : 'a Seq.t) : unit M.t =
       let open M in
@@ -145,6 +159,13 @@ module Make2 (M : SIG2) = struct
           let$ x = mx in
           let$ xs = sequence mxs in
           return (x :: xs)
+
+    let rec fold_leftM ~(f : 'acc -> 'a -> ('acc, 't) M.t) (acc : 'acc) (l : 'a list) : ('acc, 't) M.t =
+      match l with
+      | hd :: tl ->
+          let$ acc = f acc hd in
+          fold_leftM ~f acc tl
+      | [] -> return acc
 
     let rec iterM ~f l =
       let open M in

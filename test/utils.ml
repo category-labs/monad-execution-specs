@@ -105,6 +105,9 @@ let account =
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
+let expect_ok (result : ('a, string) result) : 'a =
+  match result with Ok value -> value | Error err -> Alcotest.fail err
+
 module Evm = struct
   module Evm0 = Host.Instantiate (Vm.Make (struct
     let trace = false

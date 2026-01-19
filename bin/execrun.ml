@@ -113,7 +113,10 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   Host.WorldState.make fixtures.config.chain_id
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
-  |> fun s -> List.fold_left (Execution.process_block ~trace ~verify:false) s fixtures.blocks
+  |> fun s ->
+  Result.List.fold_leftM ~f:(Execution.process_block ~trace ~verify:false) s fixtures.blocks
+  |> Result.map_error Execution.Error.to_string
+  |> Result.get_ok'
 
 let check_test_result (name, fixtures, post_state) =
   let success = check_postconditions post_state fixtures.Fixtures.BlockchainTest.post in
