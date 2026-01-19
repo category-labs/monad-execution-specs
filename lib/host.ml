@@ -9,12 +9,12 @@ let ( .^()<- ) x lens v' = lens.Lens.set v' x
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
       includes the world state as per YP 4.1. *)
-  type t = {history : Block.t list; accounts : Account.t Address.Map.t (* σ[a] *); chain_id : Uint.t (* β *)}
+  type t = {history : Block.t list; accounts : Account.t Address.Map.t (* σ[a] *)}
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
 
-  let make chain_id = {history = []; accounts = Address.Map.empty; chain_id}
+  let empty = {history = []; accounts = Address.Map.empty}
 
   let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
   let account_opt addr = accounts |-- Address.Map.at addr
@@ -171,7 +171,7 @@ module TransactionState = struct
 
   (* Empty transaction state, useful for running EVM tests against it. *)
   let empty =
-    let world_state = WorldState.make Uint.zero in
+    let world_state = WorldState.empty in
     let current_block = Block.{header = Header.empty; transactions = []; withdrawals = []; ommers = []} in
     { initial_world_state = world_state
     ; world_state
@@ -187,10 +187,10 @@ module TransactionState = struct
     ; accessed_addresses = Address.Set.empty
     ; accessed_keys = StorageKey.Set.empty }
 
-  let make (block_state : BlockState.t) tx =
+  let make (chain_id : Uint.t) (block_state : BlockState.t) tx =
     let open BlockState in
     let open Transaction.Access in
-    let sender = Option.get (Transaction.sender block_state.world_state.chain_id tx) in
+    let sender = Option.get (Transaction.sender chain_id tx) in
     let access_list = Transaction.access_list tx in
     let access_list_addresses =
       List.to_seq access_list |> Seq.map (fun acc -> acc.address) |> Address.Set.of_seq
@@ -238,9 +238,11 @@ module TransactionState = struct
   end)
 end
 
-module Make (Vm : sig
-  val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
-end) =
+module Make
+    (ChainParams : Chain.Monad.PARAMS)
+    (Vm : sig
+      val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
+    end) =
 struct
   open Account.TLens
   open WorldState
@@ -433,7 +435,7 @@ struct
         ; block_timestamp = U256.to_uint64 state.current_block.header.timestamp
         ; block_gas_limit = Gas.to_uint64 state.current_block.header.gas_limit
         ; block_prev_randao = U256.of_repr state.current_block.header.prev_randao
-        ; chain_id = U256.of_uint_exn state.world_state.chain_id
+        ; chain_id = U256.of_uint_exn ChainParams.chain_id
         ; block_base_fee = U256.of_uint_exn state.current_block.header.base_fee_per_gas
         ; blob_base_fee =
             (* The current Monad implementation calculates blob base fee as per EIP-4844, which is
@@ -490,10 +492,11 @@ struct
 end
 
 module Instantiate
+    (ChainParams : Chain.Monad.PARAMS)
     (Vm : functor
       (Host : Evmc.Host.SIG with type 'a t = 'a TransactionState.M.t)
       -> Evmc.Vm(TransactionState.M).SIG) =
 struct
-  include Evmc.Instantiate (TransactionState.M) (Make) (Vm)
-  module Host = Make (Vm)
+  include Evmc.Instantiate (TransactionState.M) (Make (ChainParams)) (Vm)
+  module Host = Make (ChainParams) (Vm)
 end

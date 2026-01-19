@@ -27,7 +27,10 @@ let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.Wor
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
 
 let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
-  Host.WorldState.make fixtures.config.chain_id
+  let module Execution = Execution.Make (struct
+    let chain_id = fixtures.config.chain_id
+  end) in
+  Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->

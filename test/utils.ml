@@ -108,10 +108,15 @@ let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Resu
 let expect_ok (result : ('a, string) result) : 'a =
   match result with Ok value -> value | Error err -> Alcotest.fail err
 
+module Params = Chain.Monad.Testnet
+
 module Evm = struct
-  module Evm0 = Host.Instantiate (Vm.Make (struct
-    let trace = false
-  end))
+  module Evm0 =
+    Host.Instantiate
+      (Params)
+      (Vm.Make (struct
+        let trace = false
+      end))
 
   (* Unfold one level of recursion to get access to the full signature of Vm *)
   module Vm =
@@ -120,7 +125,7 @@ module Evm = struct
         let trace = false
       end)
       (Evm0.Host)
-  module Host = Host.Make (Vm)
+  module Host = Host.Make (Params) (Vm)
 end
 
 let test_message
