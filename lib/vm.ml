@@ -203,6 +203,7 @@ module Context = struct
 end
 
 let max_stack_depth = 1024
+
 (* Monad §TODO: maximum contract code size is larger than Ethereum. *)
 let max_code_size = 128 * 1024
 let max_init_code_size = 2 * max_code_size

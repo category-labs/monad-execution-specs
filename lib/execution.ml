@@ -5,47 +5,45 @@ open Numeric
 open Byte_string
 open Host
 
-type invalid_block =
-  | Nonempty_ommers
-  | Nonzero_difficulty
-  | Nonzero_nonce
-  | Wrong_base_fee of {expected : Gas.t}
-  | Invalid_gas_limit
-  | Gas_above_limit
-  | Invalid_timestamp
-  | Invalid_number
-  | Extra_data_too_long
-  | Wrong_parent_hash of {expected : B32.t}
-  | Wrong_merkle_root of {kind : [`Transactions | `Withdrawals | `State | `Receipts]; expected : B32.t}
-  | Wrong_gas_used of {expected : Gas.t}
-  | Wrong_logs_bloom of {expected : Bloom.t}
-[@@deriving to_yojson]
+module Error = struct
+  type invalid_block =
+    | Nonempty_ommers
+    | Nonzero_difficulty
+    | Nonzero_nonce
+    | Wrong_base_fee of {expected : Gas.t}
+    | Invalid_gas_limit
+    | Gas_above_limit
+    | Invalid_timestamp
+    | Invalid_number
+    | Extra_data_too_long
+    | Wrong_parent_hash of {expected : B32.t}
+    | Wrong_merkle_root of {kind : [`Transactions | `Withdrawals | `State | `Receipts]; expected : B32.t}
+    | Wrong_gas_used of {expected : Gas.t}
+    | Wrong_logs_bloom of {expected : Bloom.t}
+  [@@deriving to_yojson]
 
-type invalid_transaction =
-  | Invalid_nonce
-  | Nonce_overflow
-  | Initcode_too_long
-  | Insufficient_balance of {balance : U256.t; required : Gas.t}
-  | Invalid_delegation of {code : Bytes.t}
-  | Cannot_pay_floor_gas of {floor_gas : Gas.t}
-  | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
-[@@deriving to_yojson]
+  type invalid_transaction =
+    | Invalid_nonce
+    | Nonce_overflow
+    | Initcode_too_long
+    | Insufficient_balance of {balance : U256.t; required : Gas.t}
+    | Invalid_delegation of {code : Bytes.t}
+    | Cannot_pay_floor_gas of {floor_gas : Gas.t}
+    | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
+  [@@deriving to_yojson]
 
-exception Invalid_block of (Block.t * invalid_block)
-exception Invalid_transaction of (Transaction.t * invalid_transaction)
+  type t =
+    | Invalid_block of {block : Block.t; reason : invalid_block}
+    | Invalid_transaction of {block : Block.t; transaction : Transaction.t; reason : invalid_transaction}
+  [@@deriving to_yojson]
 
-let invalid_block block reason = raise (Invalid_block (block, reason))
-let invalid_transaction tx reason = raise (Invalid_transaction (tx, reason))
+  let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
+end
 
-let () =
-  Printexc.register_printer (function
-    | Invalid_block (block, reason) ->
-        Some
-          (Format.sprintf "Block %s: %s\n" (Uint.to_string block.header.number)
-             (Yojson.Safe.pretty_to_string (invalid_block_to_yojson reason)) )
-    | Invalid_transaction (_, reason) ->
-        Some (Yojson.Safe.pretty_to_string (invalid_transaction_to_yojson reason))
-    | _ -> None )
+let invalid_block block reason = Error Error.(Invalid_block {block; reason})
+let invalid_transaction block transaction reason =
+  Error Error.(Invalid_transaction {block; transaction; reason})
+type 'a or_error = ('a, Error.t) result
 
 let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
   let kind, current_target, data, code, code_address =
@@ -101,8 +99,12 @@ let process_authorization transaction_state (authorization : Transaction.Authori
           Delegation.delegation_code authorization.address
       else transaction_state
 
-let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) =
+let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) :
+    BlockState.t or_error =
+  let open Result in
   let open BlockState in
+  let block = block_state.current_block in
+
   (* T_g *)
   let tx_gas_limit = Transaction.gas_limit tx in
   let tx_value = Transaction.value tx in
@@ -110,20 +112,30 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
 
   (* Basic validity checks. *)
   (* Nonce *)
-  if U256.(tx_nonce >= of_uint64 Uint64.max_uint) then invalid_transaction tx Nonce_overflow ;
+  let$ () =
+    when_ U256.(tx_nonce >= of_uint64 Uint64.max_uint) (invalid_transaction block tx Nonce_overflow)
+  in
   (* Initcode size *)
-  ( match Transaction.call_or_create tx with
-  | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size ->
-      invalid_transaction tx Initcode_too_long
-  | _ -> () ) ;
+  let$ () =
+    match Transaction.call_or_create tx with
+    | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size ->
+        invalid_transaction block tx Initcode_too_long
+    | _ -> return ()
+  in
 
   (* YP (64) *)
   let intrinsic_gas = Gas.tx_intrinsic_gas tx in
-  if Gas.(intrinsic_gas > tx_gas_limit) then invalid_transaction tx (Cannot_pay_intrinsic_gas {intrinsic_gas}) ;
+  let$ () =
+    when_
+      Gas.(intrinsic_gas > tx_gas_limit)
+      (invalid_transaction block tx (Cannot_pay_intrinsic_gas {intrinsic_gas}))
+  in
 
   (* EIP-7623 *)
   let floor_gas = Gas.tx_floor_gas tx in
-  if Gas.(floor_gas > tx_gas_limit) then invalid_transaction tx (Cannot_pay_floor_gas {floor_gas}) ;
+  let$ () =
+    when_ Gas.(floor_gas > tx_gas_limit) (invalid_transaction block tx (Cannot_pay_floor_gas {floor_gas}))
+  in
 
   let block = block_state.current_block in
   let header = block.header in
@@ -137,26 +149,33 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
 
   let sender = Option.get (Transaction.sender block_state.world_state.chain_id tx) in
   let sender_account = block_state.world_state.^(WorldState.account sender) in
-  if U256.(sender_account.nonce <> tx_nonce) then invalid_transaction tx Invalid_nonce ;
-  if Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value) then
-    invalid_transaction tx
-      (Insufficient_balance
-         {balance = sender_account.balance; required = Uint.(max_gas_fee + U256.to_uint tx_value)} ) ;
-  if sender_account.code <> Bytes.empty && not (Delegation.is_valid_delegation sender_account.code) then
-    invalid_transaction tx (Invalid_delegation {code = sender_account.code}) ;
-
-  let total_fee =
-    let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
-    if total_fee > U256.to_uint sender_account.balance then
-      invalid_transaction tx (Insufficient_balance {balance = sender_account.balance; required = total_fee}) ;
-    U256.of_uint_exn total_fee
+  let$ () = when_ U256.(sender_account.nonce <> tx_nonce) (invalid_transaction block tx Invalid_nonce) in
+  let$ () =
+    when_
+      Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value)
+      (invalid_transaction block tx
+         (Insufficient_balance
+            {balance = sender_account.balance; required = Uint.(max_gas_fee + U256.to_uint tx_value)} ) )
+  in
+  let$ () =
+    when_
+      (Bytes.(sender_account.code <> empty) && not (Delegation.is_valid_delegation sender_account.code))
+      (invalid_transaction block tx (Invalid_delegation {code = sender_account.code}))
   in
 
+  let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
+  let$ () =
+    when_
+      Uint.(total_fee > U256.to_uint sender_account.balance)
+      (invalid_transaction block tx
+         (Insufficient_balance {balance = sender_account.balance; required = total_fee}) )
+  in
+  let total_fee = U256.of_uint_exn total_fee in
+
+  (* The yellow paper does not specify a behaviour for nonce overflows. *)
+  let$ () = when_ U256.(sender_account.nonce = max_t) (invalid_transaction block tx Nonce_overflow) in
   (* Irrevocable change: pay gas fees. YP (73), YP (74). *)
   let block_state =
-    (* The yellow paper does not specify a behaviour for nonce overflows. *)
-    if U256.(sender_account.nonce = max_t) then invalid_transaction tx Nonce_overflow ;
-
     block_state.^(account sender) <- {sender_account with balance = U256.(sender_account.balance - total_fee)}
   in
 
@@ -212,49 +231,57 @@ let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Tran
     {block_state with transactions_processed = List.append block_state.transactions_processed [(tx, receipt)]}
   in
 
-  block_state
+  return block_state
 
-let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) =
+let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) : BlockState.t =
   let block_state =
     BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
   in
   {block_state with withdrawals_processed = List.append block_state.withdrawals_processed [wd]}
 
 (* YP (60) *)
-let validate_block (world_state : WorldState.t) (block : Block.t) =
+let validate_block (world_state : WorldState.t) (block : Block.t) : unit or_error =
+  let open Result in
   let header = block.header in
 
   let parent = List.hd world_state.history in
 
   (* YP (47) *)
-  if Uint.(header.number <> parent.header.number + one) then invalid_block block Invalid_number ;
+  let$ () = when_ Uint.(header.number <> parent.header.number + one) (invalid_block block Invalid_number) in
 
   (* YP (48) *)
   (* TODO: adapt to account for Monad base fee update rules. *)
 
   (* YP (54) (YP (55) does not apply) *)
   let max_gas_limit_update = Gas.(parent.header.gas_limit / ~$1024) in
-  if
-    Gas.(header.gas_limit < ~$5_000)
-    || Gas.(header.gas_limit >= parent.header.gas_limit + max_gas_limit_update)
-    || Gas.(header.gas_limit <= parent.header.gas_limit - max_gas_limit_update)
-  then invalid_block block Invalid_gas_limit ;
+  let$ () =
+    when_
+      ( Gas.(header.gas_limit < ~$5_000)
+      || Gas.(header.gas_limit >= parent.header.gas_limit + max_gas_limit_update)
+      || Gas.(header.gas_limit <= parent.header.gas_limit - max_gas_limit_update) )
+      (invalid_block block Invalid_gas_limit)
+  in
 
-  if Gas.(header.gas_used > header.gas_limit) then invalid_block block Gas_above_limit ;
+  let$ () = when_ Gas.(header.gas_used > header.gas_limit) (invalid_block block Gas_above_limit) in
 
   (* YP (56) *)
-  if U256.(header.timestamp <= parent.header.timestamp) then invalid_block block Invalid_timestamp ;
+  let$ () =
+    when_ U256.(header.timestamp <= parent.header.timestamp) (invalid_block block Invalid_timestamp)
+  in
 
   (* YP (57) *)
-  if B32.(header.ommers_hash <> Crypto.keccak_256 Rlp.(encode (List []))) || block.ommers <> [] then
-    invalid_block block Nonempty_ommers ;
-  if Uint.(header.difficulty <> zero) then invalid_block block Nonzero_difficulty ;
-  if B8.(header.nonce <> zeros) then invalid_block block Nonzero_nonce ;
+  let$ () =
+    when_
+      (B32.(header.ommers_hash <> Crypto.keccak_256 Rlp.(encode (List []))) || block.ommers <> [])
+      (invalid_block block Nonempty_ommers)
+  in
+  let$ () = when_ Uint.(header.difficulty <> zero) (invalid_block block Nonzero_difficulty) in
+  let$ () = when_ B8.(header.nonce <> zeros) (invalid_block block Nonzero_nonce) in
 
-  if Bytes.length block.header.extra_data > 32 then invalid_block block Extra_data_too_long ;
+  let$ () = when_ (Bytes.length block.header.extra_data > 32) (invalid_block block Extra_data_too_long) in
 
   (* TODO validate prevrandao *)
-  ()
+  return ()
 
 (* Process a system message call as in EIP-2935, EIP-4788. *)
 let process_system_message ?(trace = false) (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
@@ -304,35 +331,60 @@ let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB85
 let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
 
 let validate_input_block_against_output ~(input_block : Block.t) ~(output_block : Block.t) =
+  let open Result in
   let input_header = input_block.header in
   let output_header = output_block.header in
 
-  if B32.(input_header.state_root <> output_header.state_root) then
-    invalid_block input_block (Wrong_merkle_root {kind = `State; expected = output_header.state_root}) ;
-  if B32.(input_header.receipts_root <> output_header.receipts_root) then
-    invalid_block input_block (Wrong_merkle_root {kind = `Receipts; expected = output_header.receipts_root}) ;
-  if B32.(input_header.withdrawals_root <> output_header.withdrawals_root) then
-    invalid_block input_block
-      (Wrong_merkle_root {kind = `Withdrawals; expected = output_header.withdrawals_root}) ;
-  if B32.(input_header.transactions_root <> output_header.transactions_root) then
-    invalid_block input_block
-      (Wrong_merkle_root {kind = `Transactions; expected = output_header.transactions_root}) ;
+  let$ () =
+    when_
+      B32.(input_header.state_root <> output_header.state_root)
+      (invalid_block input_block (Wrong_merkle_root {kind = `State; expected = output_header.state_root}))
+  in
+  let$ () =
+    when_
+      B32.(input_header.receipts_root <> output_header.receipts_root)
+      (invalid_block input_block
+         (Wrong_merkle_root {kind = `Receipts; expected = output_header.receipts_root}) )
+  in
+  let$ () =
+    when_
+      B32.(input_header.withdrawals_root <> output_header.withdrawals_root)
+      (invalid_block input_block
+         (Wrong_merkle_root {kind = `Withdrawals; expected = output_header.withdrawals_root}) )
+  in
+  let$ () =
+    when_
+      B32.(input_header.transactions_root <> output_header.transactions_root)
+      (invalid_block input_block
+         (Wrong_merkle_root {kind = `Transactions; expected = output_header.transactions_root}) )
+  in
 
-  if Bloom.(input_header.logs_bloom <> output_header.logs_bloom) then
-    invalid_block input_block (Wrong_logs_bloom {expected = output_header.logs_bloom}) ;
+  let$ () =
+    when_
+      Bloom.(input_header.logs_bloom <> output_header.logs_bloom)
+      (invalid_block input_block (Wrong_logs_bloom {expected = output_header.logs_bloom}))
+  in
 
-  if Gas.(input_header.gas_used <> output_header.gas_used) then
-    invalid_block input_block (Wrong_gas_used {expected = output_header.gas_used}) ;
+  let$ () =
+    when_
+      Gas.(input_header.gas_used <> output_header.gas_used)
+      (invalid_block input_block (Wrong_gas_used {expected = output_header.gas_used}))
+  in
 
-  if B32.(input_header.parent_hash <> output_header.parent_hash) then
-    invalid_block input_block (Wrong_parent_hash {expected = output_header.parent_hash}) ;
+  let$ () =
+    when_
+      B32.(input_header.parent_hash <> output_header.parent_hash)
+      (invalid_block input_block (Wrong_parent_hash {expected = output_header.parent_hash}))
+  in
 
   assert (input_block = output_block) ;
 
-  ()
+  return ()
 
-let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block : Block.t) =
-  validate_block world_state block ;
+let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block : Block.t) :
+    WorldState.t or_error =
+  let open Result in
+  let$ () = validate_block world_state block in
 
   let block_state = BlockState.make world_state block in
 
@@ -357,7 +409,7 @@ let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block :
   in
 
   (* Process block transactions. *)
-  let block_state = List.fold_left (process_transaction ~trace) block_state block.transactions in
+  let$ block_state = List.fold_leftM ~f:(process_transaction ~trace) block_state block.transactions in
 
   (* Process block withdrawals. *)
   let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
@@ -366,7 +418,10 @@ let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block :
 
   (* Compute roots and add the finalized block to the blockchain. *)
   let finalized_block = BlockState.finalize_current_block block_state in
-  validate_block world_state finalized_block ;
+  let$ () = validate_block world_state finalized_block in
 
-  if verify then validate_input_block_against_output ~input_block:block ~output_block:finalized_block ;
-  {block_state.world_state with history = finalized_block :: world_state.history}
+  let$ () =
+    if verify then validate_input_block_against_output ~input_block:block ~output_block:finalized_block
+    else return ()
+  in
+  return {block_state.world_state with history = finalized_block :: world_state.history}

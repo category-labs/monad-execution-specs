@@ -31,7 +31,9 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  List.fold_left (Execution.process_block ~trace:false ~verify:true) s fixtures.blocks
+  Result.List.fold_leftM ~f:(Execution.process_block ~verify:true) s fixtures.blocks
+  |> Result.map_error Execution.Error.to_string
+  |> expect_ok
   |> check_postconditions fixtures.post
 
 let valid_block_tests =
