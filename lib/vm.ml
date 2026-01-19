@@ -1213,12 +1213,11 @@ struct
             Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost) - Gas.(as_signed sclear_refund)
         | AddedDeleted -> Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost)
         | ModifiedRestored -> Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost)
-        | Assigned | Added | Modified -> zero)
+        | Assigned | Added | Modified -> zero )
     in
     let$ () =
       (* Overall gas refund is non-negative, but we have to do signed addition here *)
-      update_field (machine_state |-- gas_refund) (fun r ->
-          Integer.(r + refund)) 
+      update_field (machine_state |-- gas_refund) (fun r -> Integer.(r + refund))
     in
 
     (* PC *)

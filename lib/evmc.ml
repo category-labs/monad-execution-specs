@@ -484,7 +484,6 @@ module DummyHost = struct
     let get_transient_storage _addr key =
       !(transient_storage |-- U256.Map.at key |-- Option.get_or_default U256.zero)
 
-    let set_transient_storage _addr key value =
-      transient_storage |-- U256.Map.at key := Some value
+    let set_transient_storage _addr key value = transient_storage |-- U256.Map.at key := Some value
   end
 end
