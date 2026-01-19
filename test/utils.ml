@@ -99,9 +99,9 @@ let test_message
     let ctx = Vm.Context.make tx_context msg msg.code in
     let$ res, ctx =
       Evm.Vm.M.(
-          (let$ () = prepare_vm in
-           let$ () = Evm.Vm.run msg.code in
-           match check_vm_state with None -> return () | Some check -> check ) )
+        let$ () = prepare_vm in
+        let$ () = Evm.Vm.run msg.code in
+        match check_vm_state with None -> return () | Some check -> check )
         ctx
     in
     let$ () = check_env_state in
