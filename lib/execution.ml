@@ -31,6 +31,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
       | Invalid_delegation of {code : Bytes.t}
       | Cannot_pay_floor_gas of {floor_gas : Gas.t}
       | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
+      | Empty_authorization_list
     [@@deriving to_yojson]
 
     type t =
@@ -83,26 +84,43 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     in
     H.Host.call_impl ~eoa msg transaction_state
 
+  let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
+    (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her
+       as these are implicit in the bit widths of the corresponding types. *)
+    let open Result in
+    match tx with
+    | Transaction.SetCode {authorization_list = []; _} ->
+        invalid_transaction block tx Empty_authorization_list
+    | _ -> return ()
+
   let process_authorization transaction_state (authorization : Transaction.Authorization.t) :
       TransactionState.t =
     let open TransactionState in
-    match Transaction.Authorization.authority authorization with
-    | None ->
-        (* As per EIP-7702, skip invalid authorizations. *)
-        transaction_state
-    | Some authority ->
-        let transaction_state =
-          { transaction_state with
-            accessed_addresses = Address.Set.add authority transaction_state.accessed_addresses }
-        in
-        let Account.{code; nonce; _} = transaction_state.^(account authority) in
-        if
-          (Bytes.(code = empty) || Delegation.is_valid_delegation code)
-          && Uint.(U64.to_uint authorization.nonce = U256.to_uint nonce)
-        then
-          transaction_state.^(account authority |-- Account.code) <-
-            Delegation.delegation_code authorization.address
-        else transaction_state
+    (* As per EIP-7702, invalid authorizations are skipped. *)
+    if
+      (U256.(authorization.chain_id <> zero) && Uint.( U256.to_uint authorization.chain_id <> Params.chain_id))
+      || U64.(authorization.nonce < max_t)
+    then transaction_state
+    else
+      match Transaction.Authorization.authority authorization with
+      | None -> transaction_state
+      | Some authority ->
+          let transaction_state =
+            { transaction_state with
+              accessed_addresses = Address.Set.add authority transaction_state.accessed_addresses }
+          in
+          let Account.{code; nonce; _} = transaction_state.^(account authority) in
+          if
+            (Bytes.(code = empty) || Delegation.is_valid_delegation code)
+            && Uint.(U64.to_uint authorization.nonce = U256.to_uint nonce)
+          then
+            transaction_state
+            |> account authority
+               ^%= fun (acc : Account.t) ->
+               { acc with
+                 code = Delegation.delegation_code authorization.address
+               ; nonce = U256.(acc.nonce + one) }
+          else transaction_state
 
   let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) :
       BlockState.t or_error =
@@ -185,6 +203,8 @@ module Make (Params : Chain.Monad.PARAMS) = struct
         {sender_account with balance = U256.(sender_account.balance - total_fee)}
     in
 
+    (* Validate EIP-7702 authorization list if relevant. *)
+    let$ () = validate_authorizations block tx in
     (* Execute transaction. *)
     let result, transaction_state =
       let transaction_state = TransactionState.make Params.chain_id block_state tx in
