@@ -1,0 +1,25 @@
+name: Code Quality Checks
+
+on:
+  push:
+
+jobs:
+  formatting-check:
+    name: Check ocamlformat
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5
+
+      - name: Install ocamlformat
+        run: |
+          opam install ocamlformat
+
+      - name: Run ocamlformat
+        run: |
+          opam exec -- dune build @fmt
