@@ -205,11 +205,13 @@ module TransactionState = struct
           let sender_nonce = block_state.^(account sender).nonce in
           Address.Set.singleton (Address.of_contract_creation ~sender ~nonce:sender_nonce ~create2:None)
     in
+    (* YP (80) *)
     let accessed_addresses =
       List.fold_left Address.Set.union Address.Set.empty
         [ access_list_addresses
         ; pre_compiled_contract_addresses
         ; Address.Set.singleton sender
+        ; Address.Set.singleton block_state.current_block.header.beneficiary
         ; target_addresses ]
     in
     let accessed_keys =
