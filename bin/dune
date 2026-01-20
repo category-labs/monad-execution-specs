@@ -9,3 +9,25 @@
  (public_name execrun)
  (modes byte exe)
  (libraries monad_lib))
+
+(executable
+ (name mptbench)
+ (public_name mptbench)
+ (modes exe)
+ (libraries monad_lib))
+
+(executable
+ (name blockbench)
+ (public_name blockbench)
+ (modes exe)
+ (libraries monad_lib)
+ (ocamlopt_flags
+   (:standard -O3 -inlining-report)))
+
+(executable
+ (name monadbench)
+ (public_name monadbench)
+ (modes exe)
+ (libraries monad_lib)
+ (ocamlopt_flags
+   (:standard -O3 -inlining-report)))
