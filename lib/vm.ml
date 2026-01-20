@@ -137,6 +137,15 @@ module ExecutionEnvironment = struct
       ; prev_randao = ctx.block_prev_randao
       ; base_fee = ctx.block_base_fee
       ; chain_id = ctx.chain_id }
+
+    let empty =
+      { coinbase = Address.zero
+      ; number = U256.zero
+      ; timestamp = U256.zero
+      ; gas_limit = U256.zero
+      ; prev_randao = U256.zero
+      ; base_fee = U256.zero
+      ; chain_id = U256.zero }
   end
   include ExecutionBlockHeader
 
@@ -170,6 +179,20 @@ module ExecutionEnvironment = struct
     ; write_permission = not msg.static
     ; blob_versioned_hashes = ctx.blob_hashes
     ; blob_base_fee = ctx.blob_base_fee }
+
+  let empty =
+    { address = Address.zero
+    ; origin = Address.zero
+    ; price = U256.zero
+    ; data = ""
+    ; sender = Address.zero
+    ; value = U256.zero
+    ; bytecode = ""
+    ; header = ExecutionBlockHeader.empty
+    ; depth = 0
+    ; write_permission = false
+    ; blob_versioned_hashes = []
+    ; blob_base_fee = U256.zero }
 end
 
 module Context = struct
@@ -199,6 +222,12 @@ module Context = struct
     { execution_environment = ExecutionEnvironment.make ctx msg code
     ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
     ; jump_destinations = valid_jump_destinations code
+    ; initial_storage = U256.Map.empty }
+
+  let empty =
+    { execution_environment = ExecutionEnvironment.empty
+    ; machine_state = MachineState.initial
+    ; jump_destinations = U256.Set.empty
     ; initial_storage = U256.Map.empty }
 end
 
@@ -1906,7 +1935,7 @@ struct
     let open Monad.Make (Host) in
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg code in
-    let$ res, ctx = run code ctx in
+    let$ res, ctx = M.StHost.run (run code) ctx in
     trace (fun () -> "Finished execution\n") ;
     return
       ( match res with

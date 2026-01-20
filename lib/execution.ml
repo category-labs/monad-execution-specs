@@ -76,7 +76,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
           let trace = trace
         end))
     in
-    H.Host.call_impl ~eoa msg transaction_state
+    H.Host.(run (call_impl ~eoa msg)) transaction_state
 
   let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
     (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her

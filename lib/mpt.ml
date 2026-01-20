@@ -264,9 +264,9 @@ let rec of_patricia trie =
 
 let of_patricia trie =
   let root_hash, inv_hashes =
-    M.(
+    M.(run (
       let$ root = of_patricia trie in
-      hash root )
+      hash root ))
       B32.Map.empty
   in
   {root_hash; inv_hashes}
