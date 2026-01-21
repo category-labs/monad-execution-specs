@@ -1,6 +1,7 @@
 open Numeric
 open Byte_string
 open Lens.Infix
+open Fast_lens
 
 module Memory : sig
   type t
@@ -89,6 +90,7 @@ module MachineState = struct
     { gas : Uint.t (* μ_g *)
     ; pc : U256.t (* μ_pc *)
     ; memory : Memory.t (* μ_m, μ_i *)
+    ; stack_depth : int
     ; stack : U256.t list (* μ_s *)
     ; output_buffer : Bytes.t (* μ_o *)
     ; gas_refund : Integer.t
@@ -104,6 +106,7 @@ module MachineState = struct
     { gas = Uint.zero
     ; pc = U256.zero
     ; memory = Memory.empty
+    ; stack_depth = 0
     ; stack = []
     ; output_buffer = Bytes.empty
     ; gas_refund = Integer.zero }
@@ -360,9 +363,10 @@ struct
   open M
 
   let spend (amount : Uint.t) =
-    let$ gas_remaining = !(machine_state |-- gas) in
+    let$ state = get in
+    let gas_remaining = state.machine_state.gas in
     if Uint.(gas_remaining < amount) then fail Out_of_gas
-    else machine_state |-- gas := Uint.(gas_remaining - amount)
+    else put (state.^(machine_state |-- gas) <- Uint.(gas_remaining - amount))
 
   let check_write_permissions =
     let$ can_write = !(execution_environment |-- write_permission) in
@@ -375,15 +379,27 @@ struct
   let self : Address.t M.t = !(execution_environment |-- address)
 
   let push (x : U256.t) : unit M.t =
-    let$ s = !(machine_state |-- stack) in
-    if List.length s >= max_stack_depth then fail Stack_overflow else machine_state |-- stack := x :: s
+    let$ state = get in
+    if state.machine_state.stack_depth >= max_stack_depth then fail Stack_overflow
+    else
+      put
+        { state with
+          machine_state =
+            { state.machine_state with
+              stack_depth = state.machine_state.stack_depth + 1
+            ; stack = x :: state.machine_state.stack } }
 
   let pop : U256.t M.t =
-    let$ s = !(machine_state |-- stack) in
-    match s with
+    let$ state = get in
+    match state.machine_state.stack with
     | [] -> fail Stack_underflow
     | hd :: tl ->
-        let$ () = machine_state |-- stack := tl in
+        let$ () =
+          put
+            { state with
+              machine_state =
+                {state.machine_state with stack = tl; stack_depth = state.machine_state.stack_depth - 1} }
+        in
         return hd
 
   let finish_execution : bool M.t = return false

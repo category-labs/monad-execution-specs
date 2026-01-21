@@ -83,10 +83,14 @@ let () =
   let ctl = Gc.{ctl with minor_heap_size = 8 * 1024 * 1024 (*; space_overhead = 200*)} in
   Gc.set ctl ;
   ignore ctl ;
-  let profiler = Gc.Memprof.start ~sampling_rate:0.0001 tracker in
+  (*let profiler = Gc.Memprof.start ~sampling_rate:0.0001 tracker in*)
   let _ = valid_block_tests () in
+  (*
   Gc.Memprof.stop () ;
   Gc.Memprof.discard profiler ;
   dump_allocs "Major" !major_allocs ;
   dump_allocs "Minor" !minor_allocs ;
   Format.eprintf "Promotions %d\n" !promotions
+
+   *)
+  ()

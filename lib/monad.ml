@@ -257,15 +257,31 @@ struct
   module type SIG = sig
     include SIG
     type state = T.t
+
+    (*
     val get : state t
     val put : state -> unit t
+     *)
+    val get : state t
+    val update : (state -> state) -> unit t
   end
 
   module Make (S : SIG) = struct
     include S
     include Make (S)
     type state = T.t
+
+    open Lens.Infix
+    let[@inline] put s =
+      update (fun _ -> s)
+    let[@inline] ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
+      let[@inline] upd s = (l.set[@inlined]) x s in
+      (update[@inlined]) upd
+    let[@inline] ( ! ) (l : (state, 'x) Lens.t) : 'x t = l.get <$> get
+    let[@inline] update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t = update (l ^%= f)
+    (*
     let[@inline] update (f : state -> state) : unit t = get >>= fun s -> put (f s)
+
 
     let[@inline] ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
       let$ state = get in
@@ -278,6 +294,7 @@ struct
     let[@inline] update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t =
       let$ v = !l in
       l := f v
+     *)
   end
   [@@inline]
 
@@ -292,7 +309,7 @@ struct
       val ( >>= ) : 'a t -> ('a -> 'b t) -> 'b t
 
       val get : state t
-      val put : state -> unit t
+      val update : (state -> state) -> unit t
 
       val run : 'a t -> state -> ('a * state) Inner.t
 
@@ -316,8 +333,8 @@ struct
       let get : T.t t =
         let run state cont = cont state state in
         {run}
-      let[@inline] put (s : T.t) : unit t =
-        let run _ cont = cont () s in
+      let[@inline] update (f : state -> state) : unit t =
+        let run s cont = cont () (f s) in
         {run}
 
       let[@inline] run (act : 'a t) (s : state) : ('a * state) Inner.t =
@@ -350,8 +367,8 @@ struct
       let get : state t =
         let run state = Inner.return (state, state) in
         {run}
-      let[@inline] put (s : state) : unit t =
-        let run _ = Inner.return ((), s) in
+      let[@inline] update (f : state -> state) : unit t =
+        let run state = Inner.return ((), f state) in
         {run}
 
       let[@inline] run (act : 'a t) (s : state) : ('a * state) Inner.t = act.run s
@@ -364,7 +381,7 @@ struct
         in
         {run}
     end
-    module Impl = Impl_codensity
+    module Impl = Impl_classic
     include Make (Impl)
 
     (*
@@ -380,7 +397,7 @@ struct
       include MT
       type state = T.t
       let get : T.t MT.t = MT.lift M.get
-      let[@inline] put x = MT.lift (M.put x)
+      let[@inline] update f = MT.lift (M.update f)
     end)
   end
   [@@inline]
@@ -464,7 +481,7 @@ module StErr = struct
 
         let fail (err : T.error) : 'a t = fun _s -> Inner.return (Error err)
         let get = fun s -> Inner.return (Ok (s, s))
-        let put s' = fun _s -> Inner.return (Ok ((), s'))
+        let update f = fun s -> Inner.return (Ok ((), f s))
       end
 
       module State = State (struct
