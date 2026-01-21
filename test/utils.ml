@@ -143,10 +143,10 @@ let test_message
     let$ tx_context = get_tx_context in
     let ctx = Vm.Context.make tx_context msg msg.code in
     let$ res, ctx =
-      Evm.Vm.M.(
+      Evm.Vm.M.(StHost.run (
         let$ () = prepare_vm in
         let$ () = Evm.Vm.run msg.code in
-        match check_vm_state with None -> return () | Some check -> check )
+        match check_vm_state with None -> return () | Some check -> check ))
         ctx
     in
     let$ () = check_env_state in
@@ -179,7 +179,7 @@ let test_message
               ; output_data = Bytes.empty
               ; create_address = Address.zero } ) )
   in
-  let result, state = action Host.TransactionState.empty in
+  let result, state = Evm.Host.run action Host.TransactionState.empty in
   (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;

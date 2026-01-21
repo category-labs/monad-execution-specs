@@ -284,7 +284,22 @@ struct
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
 
-    module Impl = struct
+    module type IMPL = sig
+      type 'a t
+      type state = T.t
+
+      val return : 'a -> 'a t
+      val ( >>= ) : 'a t -> ('a -> 'b t) -> 'b t
+
+      val get : state t
+      val put : state -> unit t
+
+      val run : 'a t -> state -> ('a * state) Inner.t
+
+      val lift : 'a Inner.t -> 'a t
+    end
+
+    module Impl_codensity : IMPL = struct
       type 'a t = {run : 's. T.t -> ('a -> T.t -> 's Inner.t) -> 's Inner.t} [@@unboxed]
 
       let[@inline] return (x : 'a) : 'a t =
@@ -298,28 +313,65 @@ struct
         {run}
 
       type state = T.t
-      let[@inline] get : T.t t =
+      let get : T.t t =
         let run state cont = cont state state in
         {run}
       let[@inline] put (s : T.t) : unit t =
         let run _ cont = cont () s in
         {run}
+
+      let[@inline] run (act : 'a t) (s : state) : ('a * state) Inner.t =
+        act.run s (fun v s -> Inner.return (v, s))
+
+      let[@inline] lift (x : 'a Inner.t) : 'a t =
+        let run state cont =
+          Inner.(
+            let$ x = x in
+            cont x state )
+        in
+        {run}
     end
+
+    module Impl_classic : IMPL = struct
+      type state = T.t
+      type 'a t = {run : state -> ('a * state) Inner.t}
+
+      let[@inline] return (x : 'a) : 'a t =
+        let run state = Inner.return (x, state) in
+        {run}
+      let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+        let run state =
+          Inner.(
+            let$ x, state = x.run state in
+            (f x).run state )
+        in
+        {run}
+
+      let get : state t =
+        let run state = Inner.return (state, state) in
+        {run}
+      let[@inline] put (s : state) : unit t =
+        let run _ = Inner.return ((), s) in
+        {run}
+
+      let[@inline] run (act : 'a t) (s : state) : ('a * state) Inner.t = act.run s
+
+      let[@inline] lift (x : 'a Inner.t) : 'a t =
+        let run state : ('a * state) Inner.t =
+          Inner.(
+            let$ x = x in
+            return (x, state) )
+        in
+        {run}
+    end
+    module Impl = Impl_codensity
     include Make (Impl)
 
     (*
     let[@inline] lower (x : state -> 'a * state) : 'a t = fun s -> Inner.return (x s)
      *)
-    let[@inline] lift (x : 'a Inner.t) : 'a t =
-      let run state cont =
-        Inner.(
-          let$ x = x in
-          cont x state )
-      in
-      {run}
-
-    let[@inline] run (act : 'a t) (s : state) : ('a * state) Inner.t =
-      act.run s (fun v s -> Inner.return (v, s))
+    let[@inline] lift (x : 'a Inner.t) : 'a t = Impl.lift x
+    let[@inline] run x s = Impl.run x s
   end
   [@@inline]
 
