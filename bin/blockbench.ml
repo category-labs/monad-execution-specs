@@ -55,12 +55,13 @@ let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.Wor
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
 
 let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
+  Hashtbl.clear Crypto.seen ;
   let module Execution = Execution.Make (struct
     let chain_id = fixtures.config.chain_id
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
-  |> load_preconditions fixtures.pre
+  |> load_preconditions (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.pre)
   |> fun s ->
   Result.List.fold_leftM ~f:(Execution.process_block ~verify:true) s fixtures.blocks
   |> Result.map_error Execution.Error.to_string
@@ -85,6 +86,8 @@ let () =
   ignore ctl ;
   (*let profiler = Gc.Memprof.start ~sampling_rate:0.0001 tracker in*)
   let _ = valid_block_tests () in
+  Format.eprintf "Keccak: %d\n" !Crypto.n_keccak;
+  Format.eprintf "Redundant: %d\n" !Crypto.redundant;
   (*
   Gc.Memprof.stop () ;
   Gc.Memprof.discard profiler ;

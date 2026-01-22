@@ -8,15 +8,16 @@ let n_trials = int_of_string Sys.argv.(3)
 
 let random_path () =
   let length = Random.int_in_range ~min:10 ~max:max_path_length in
-  Mpt.Nibbles.init length (fun _ -> Char.unsafe_chr (Random.int 16))
+  Mpt.Nibbles.init length (fun _ -> (Random.int 16))
 
 let random_root_hash () =
   let length = Random.int_in_range ~min:10 ~max:max_trie_elements in
   Seq.ints 0
   |> Seq.take length
-  |> Seq.map (fun _ -> (random_path (), Rlp.Bytes ""))
-  |> Mpt.Trie.of_seq
-  |> Mpt.PatriciaTrie.of_trie
+  |> Seq.map (fun _ -> (random_path (), Rlp.Bytes "1"))
+  (*|> Mpt.Trie.of_seq
+  |> Mpt.PatriciaTrie.of_trie*)
+|> Mpt.PatriciaTrie.of_seq
   |> Mpt.of_patricia
   |> fun mpt -> mpt.root_hash
 
@@ -63,13 +64,17 @@ let () =
   let ctl = Gc.get () in
   let ctl = Gc.{ctl with minor_heap_size = 8 * 1024 * 1024 (*; space_overhead = 200*)} in
   Gc.set ctl ;
+  (*
   ignore ctl ;
   let profiler = Gc.Memprof.start ~sampling_rate:0.0001 tracker in
+   *)
   for i = 0 to n_trials do
     ignore (random_root_hash ())
   done ;
+  (*
   Gc.Memprof.stop () ;
   Gc.Memprof.discard profiler ;
+   *)
   dump_allocs "Major" !major_allocs ;
   dump_allocs "Minor" !minor_allocs ;
   Format.eprintf "Promotions %d\n" !promotions

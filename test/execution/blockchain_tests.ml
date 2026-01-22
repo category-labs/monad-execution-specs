@@ -32,12 +32,12 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
-  |> load_preconditions fixtures.pre
+  |> load_preconditions (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.pre)
   |> fun s ->
   Result.List.fold_leftM ~f:(Execution.process_block ~verify:true) s fixtures.blocks
   |> Result.map_error Execution.Error.to_string
   |> expect_ok
-  |> check_postconditions fixtures.post
+  |> check_postconditions (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.post)
 
 let valid_block_tests =
   Sys.readdir valid_block_tests_folder

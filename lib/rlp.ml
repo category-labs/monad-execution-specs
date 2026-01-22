@@ -1,6 +1,6 @@
 open Byte_string
 
-type t = Bytes of Bytes.t | List of t list
+type t = Bytes of Byte_string.Bytes.t | List of t list [@@deriving to_yojson]
 
 let of_bytes (bs : Bytes.t) = Bytes bs
 let of_bytes32 (bs : B32.t) = Bytes (B32.to_bytes bs)
