@@ -107,8 +107,9 @@ module Make (Params : Chain.Monad.PARAMS) = struct
           if (Bytes.(code = empty) || Delegation.is_valid_delegation code) && U64.(authorization.nonce = nonce)
           then
             let code = Delegation.delegation_code authorization.address in
+            let code_hash = Crypto.keccak_256 code in
             let nonce = U64.(authority_account.nonce + one) in
-            let authority_account = {authority_account with code; nonce} in
+            let authority_account = {authority_account with code; code_hash; nonce} in
             transaction_state
             |> (fun s -> s.^(account authority) <- authority_account)
             |> fun s ->

@@ -313,7 +313,7 @@ struct
 
   let get_code_hash addr =
     let$ account = !(account addr) in
-    return (if Account.is_empty account then None else Some (Crypto.keccak_256 account.code))
+    return (if Account.is_empty account then None else Some account.code_hash)
 
   let copy_code addr ~offset ~size =
     let$ code = !(account addr |-- code) in
@@ -402,6 +402,7 @@ struct
       match result.status_code with
       | Success ->
           let contract_code = result.output_data in
+          let contract_code_hash = Crypto.keccak_256 contract_code in
           let contract_length = Bytes.length contract_code in
           let contract_code_gas = Uint.(of_int contract_length * Gas.code_deposit_per_byte) in
           if
@@ -417,6 +418,7 @@ struct
                     if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
           else
             let$ () = account create_address |-- code := contract_code in
+            let$ () = account create_address |-- code_hash := contract_code_hash in
             return {result with create_address}
       | _ -> return result
 

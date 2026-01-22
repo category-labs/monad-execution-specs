@@ -642,7 +642,8 @@ module Account = struct
     { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t (* σ[a]_b *)
     ; storage : B32.t B32.Map.t (* σ[a]_s *)
-    ; code : Bytes.t (* σ[a]_c *) }
+    ; code : Bytes.t (* σ[a]_c *)
+    ; code_hash : B32.t }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
 
@@ -651,28 +652,32 @@ module Account = struct
     U64.(acc_1.nonce = acc_2.nonce)
     && U256.(acc_1.balance = acc_2.balance)
     && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
-    && Bytes.(acc_1.code = acc_2.code)
+    && B32.(acc_1.code_hash = acc_2.code_hash)
   let ( = ) = equal
 
-  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U64.zero}
+  let empty =
+    { balance = U256.zero
+    ; storage = B32.Map.empty
+    ; code = Bytes.empty
+    ; nonce = U64.zero
+    ; code_hash = Crypto.keccak_256_empty }
 
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
 
-  let to_rlp {nonce; balance; storage; code} =
+  let to_rlp {nonce; balance; storage; code_hash; _} =
     let storage_root =
-      let mpt =
-        storage
-        |> B32.Map.to_seq
-        |> Seq.map (fun (k, v) ->
-            let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
-            let v = Rlp.encode U256.(to_rlp (of_repr v)) in
-            (* YP (8) *)
-            (k, v) )
-        |> Mpt.of_seq
-      in
-      mpt.root_hash
+        let mpt =
+          storage
+          |> B32.Map.to_seq
+          |> Seq.map (fun (k, v) ->
+              let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
+              let v = Rlp.encode U256.(to_rlp (of_repr v)) in
+              (* YP (8) *)
+              (k, v) )
+          |> Mpt.of_seq
+        in
+        mpt.root_hash
     in
-    let code_hash = Crypto.keccak_256 code in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
 end

@@ -22,6 +22,30 @@ let object_as_alist_to_yojson value_to_yojson (alist : 'v object_as_alist) : Yoj
 let bytes_of_hex_string str = try Ok (Bytes.of_hex_string str) with _ -> Error "Fixtures.hex_or_string"
 let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
 
+module AccountWithoutCodeHash = struct
+  type t =
+    { nonce : U256.t (* σ[a]_n *)
+    ; balance : U256.t (* σ[a]_b *)
+    ; storage : B32.t B32.Map.t (* σ[a]_s *)
+    ; code : Bytes.t (* σ[a]_c *) }
+  [@@deriving lens {submodule = true; prefix = true}, yojson]
+
+  let to_account (acc : t) : Account.t =
+    Account.
+      { nonce = acc.nonce
+      ; balance = acc.balance
+      ; storage = acc.storage
+      ; code = acc.code
+      ; code_hash = Crypto.keccak_256 acc.code }
+
+  let of_account (acc : Account.t) : t =
+      { nonce = acc.nonce
+      ; balance = acc.balance
+      ; storage = acc.storage
+      ; code = acc.code
+      }
+end
+
 module StateTest = struct end
 module BlockchainTest = struct
   type info =
@@ -53,8 +77,8 @@ module BlockchainTest = struct
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
     ; last_blockhash : U256.t [@key "lastblockhash"]
     ; network : string
-    ; pre : Account.t Address.Map.t
-    ; post : Account.t Address.Map.t [@key "postState"] }
+    ; pre : AccountWithoutCodeHash.t Address.Map.t
+    ; post : AccountWithoutCodeHash.t Address.Map.t [@key "postState"] }
   [@@deriving yojson {strict = false}]
 
   type t = (string * test_case) list

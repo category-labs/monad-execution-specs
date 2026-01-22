@@ -115,21 +115,21 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
-  |> load_preconditions fixtures.pre
+  |> load_preconditions (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.pre)
   |> fun s ->
   Result.List.fold_leftM ~f:(Execution.process_block ~trace ~verify:false) s fixtures.blocks
   |> Result.map_error Execution.Error.to_string
   |> Result.get_ok'
 
 let check_test_result (name, fixtures, post_state) =
-  let success = check_postconditions post_state fixtures.Fixtures.BlockchainTest.post in
+  let success = check_postconditions post_state (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.Fixtures.BlockchainTest.post) in
   Format.printf "Test %s: %s\n" name (if success then "PASS" else "FAIL") ;
   success
 
 let check_test_results results = List.for_all check_test_result results
 
 let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : Host.WorldState.t) =
-  let post = post_state.accounts in
+  let post = Address.Map.map Fixtures.AccountWithoutCodeHash.of_account post_state.accounts in
   let blocks = List.(tl (rev post_state.history)) in
   (* TODO: don't hard-code this *)
   let config =
