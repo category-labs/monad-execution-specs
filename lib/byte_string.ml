@@ -25,6 +25,15 @@ module Bytes = struct
     |> List.of_seq
     |> String.concat ""
 
+  let nibble_to_int (c : char) : int =
+    let c = Char.code c lor 0x20 in
+    if c >= Char.code '0' && c <= Char.code '9' then c - Char.code '0'
+    else if c >= Char.code 'a' && c <= Char.code 'f' then 10 + (c - Char.code 'a')
+    else raise (failwith "nibble_to_int")
+
+  let nibble_pair_to_int (c1 : char) (c0 : char) : int =
+    (nibble_to_int c1 lsl 4) lor (nibble_to_int c0)
+
   (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
       '0x', into an array of bytes. If the [width] argument is provided, the resulting byte-string is left-padded
       with zeros up to the desired width. Raises an exception if the given string does not follow the correct format. *)
@@ -42,8 +51,7 @@ module Bytes = struct
         let i = i - padding in
         let c1 = str.[start + (i * 2)] in
         let c0 = str.[start + (i * 2) + 1] in
-        (* TODO: this is very inefficient. It can be replaced with a lookup table. *)
-        Char.chr (int_of_string (Printf.sprintf "0x%c%c" c1 c0))
+        Char.chr (nibble_pair_to_int c1 c0)
     in
     String.init len byte_i
 
