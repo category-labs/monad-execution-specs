@@ -381,7 +381,7 @@ struct
         in
         {run}
     end
-    module Impl = Impl_classic
+    module Impl = Impl_codensity
     include Make (Impl)
 
     (*
