@@ -8,17 +8,17 @@ let n_trials = int_of_string Sys.argv.(3)
 
 let random_path () =
   let length = Random.int_in_range ~min:10 ~max:max_path_length in
-  Mpt.Nibbles.init length (fun _ -> (Random.int 16))
+  Nibbles.init length (fun _ -> (Random.int 16))
 
 let random_root_hash () =
   let length = Random.int_in_range ~min:10 ~max:max_trie_elements in
   Seq.ints 0
   |> Seq.take length
-  |> Seq.map (fun _ -> (random_path (), Rlp.Bytes "1"))
+  |> Seq.map (fun _ -> (let p = random_path () in p.bytes, "1"))
   (*|> Mpt.Trie.of_seq
   |> Mpt.PatriciaTrie.of_trie*)
-|> Mpt.PatriciaTrie.of_seq
-  |> Mpt.of_patricia
+  (*|> Mpt.PatriciaTrie.of_seq*)
+  |> Mpt.of_seq
   |> fun mpt -> mpt.root_hash
 
 let major_allocs = ref []

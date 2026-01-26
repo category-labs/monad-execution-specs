@@ -10,7 +10,7 @@ let rec to_string x =
   | Bytes bs -> Format.sprintf "Bytes(\"%s\")" (Bytes.to_hex_string bs)
   | List elts -> List.map to_string elts |> String.concat ", " |> Format.sprintf "List(%s)"
 
-let equal x y = x = y
+let equal (x : t) (y : t) = x = y
 
 let encode_payload payload ~long_payload_prefix ~short_payload_prefix =
   let len = Bytes.length payload in
@@ -34,15 +34,16 @@ let long_bytes_prefix = 0xb7
 let short_list_prefix = 0xc0
 let long_list_prefix = 0xf7
 
+let encode_bytes (bytes : Bytes.t) : Bytes.t =
+  if Bytes.length bytes = 1 && Char.code bytes.[0] < short_bytes_prefix then bytes
+  else encode_payload bytes ~short_payload_prefix:short_bytes_prefix ~long_payload_prefix:long_bytes_prefix
+let encode_list (encoded_objs : Bytes.t list) : Bytes.t =
+  let bs = Bytes.concat Bytes.empty encoded_objs in
+  encode_payload bs ~short_payload_prefix:short_list_prefix ~long_payload_prefix:long_list_prefix
+
 (* TODO: OCaml's maximum string length is much smaller than 2^64, so we should switch to Bigarray *)
 let rec encode (obj : t) : Bytes.t =
-  match obj with
-  | Bytes bs when Bytes.length bs = 1 && Char.code bs.[0] < short_bytes_prefix -> bs
-  | Bytes bs ->
-      encode_payload bs ~short_payload_prefix:short_bytes_prefix ~long_payload_prefix:long_bytes_prefix
-  | List ls ->
-      let bs = Bytes.concat Bytes.empty (List.map encode ls) in
-      encode_payload bs ~short_payload_prefix:short_list_prefix ~long_payload_prefix:long_list_prefix
+  match obj with Bytes bs -> encode_bytes bs | List ls -> encode_list (List.map encode ls)
 
 (** [decode_first bs] decodes the first RLP-encoded object in the byte array [bs] and returns it and any
     remaining bytes. [bs] must be non-empty. *)

@@ -2,6 +2,7 @@ open Numeric
 open Byte_string
 open Chain.Ethereum
 open Lens.Infix
+module Mpt = Mpt_lazy
 
 let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
@@ -21,7 +22,6 @@ module WorldState = struct
   let account_opt addr = accounts |-- Address.Map.at addr
 
   let state_root state =
-    let mpt =
       state.accounts
       |> Address.Map.to_seq
       |> Seq.filter_map (fun (addr, acc) ->
@@ -31,8 +31,7 @@ module WorldState = struct
             let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
             Some (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
       |> Mpt.of_seq
-    in
-    mpt.root_hash
+    |> Mpt.merkle_root
 
   let dump_accounts ws =
     Address.Map.iter
@@ -71,7 +70,7 @@ module BlockState = struct
     let account = {account with balance = U256.(account.balance + amount)} in
     block_state.^(account_opt recipient) <- (if Account.is_empty account then None else Some account)
 
-  (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
+  (** [rinalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
   let finalize_current_block (block_state : t) : Block.t =
@@ -84,22 +83,19 @@ module BlockState = struct
       ( block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (tx, _) -> Transaction.encode tx)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.of_seq_i |> Mpt.merkle_root)
     in
     let receipts_root =
       ( block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (_, receipt) -> Receipt.encode receipt)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.of_seq_i |> Mpt.merkle_root)
     in
     let withdrawals_root =
       ( block_state.withdrawals_processed
       |> List.to_seq
       |> Seq.map (fun w -> Withdrawal.encode w)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.of_seq_i |> Mpt.merkle_root)
     in
     let logs_bloom =
       block_state.transactions_processed
