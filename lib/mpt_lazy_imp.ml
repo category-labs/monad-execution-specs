@@ -13,7 +13,7 @@ type impl = Empty | Branch of (t Iarray.t * Rlp.t) | Extension of {path : Nibble
 [@@deriving to_yojson]
 and ending = Subtree of t | Value of Rlp.t [@@deriving to_yojson]
 
-and t = {data : impl; merkleized : merkleization option} [@@deriving to_yojson]
+and t = {data : impl; mutable merkleized : merkleization option} [@@deriving to_yojson]
 
 let dump trie = Format.eprintf "%s\n" (Yojson.Safe.pretty_to_string (to_yojson trie))
 
@@ -185,31 +185,29 @@ and ending_equal l r =
 
 let merkleization_to_rlp_encoded = function Hash h -> Rlp.encode_bytes (B32.to_bytes h) | Small s -> s
 
-let rec merkleized (node : t) : merkleization * t =
+let rec merkleized (node : t) : merkleization =
   match node with
-  | {merkleized = Some (Hash h); _} -> (Hash h, node)
-  | {merkleized = Some (Small s); _} -> (Small s, node)
+  | {merkleized = Some (Hash h); _} -> Hash h
+  | {merkleized = Some (Small s); _} -> Small s
   | _ ->
       let data, encoded =
         match node.data with
         | Empty -> (Empty, Rlp.(encode_bytes ""))
         | Branch (branches, value) ->
             let branches_merkleized = Iarray.map merkleized branches in
-            let merkleizations = Iarray.to_seq branches_merkleized |> Seq.map fst in
-            let branches = Iarray.map snd branches_merkleized in
+            let merkleizations = Iarray.to_seq branches_merkleized in
             (Branch (branches, value), branch_to_rlp_encoded merkleizations value)
         | Extension {path; ending} ->
-            let ending =
-              match ending with
-              | Value value -> Value value
-              | Subtree subtree -> Subtree (snd (merkleized subtree))
-            in
+              (match ending with
+              | Value value -> ()
+              | Subtree subtree -> ignore (merkleized subtree));
             (Extension {path; ending}, extension_to_rlp_encoded path ending)
       in
       let merkleized =
         if Bytes.length encoded < 32 then Small encoded else Hash (Crypto.keccak_256 encoded)
       in
-      (merkleized, {data; merkleized = Some merkleized})
+      node.merkleized <- Some merkleized;
+      merkleized
 
 and branch_to_rlp_encoded (branches : merkleization Seq.t) (value : Rlp.t) =
   let encoded_branches = Seq.map merkleization_to_rlp_encoded branches in
@@ -224,11 +222,11 @@ and extension_to_rlp_encoded (path : Nibbles.t) (ending : ending) =
       Rlp.encode_list [encoded_path; encoded_ending]
   | Subtree subtree ->
      let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path false) in
-      let merkleization, _ = merkleized subtree in
+      let merkleization = merkleized subtree in
       let encoded_ending = merkleization_to_rlp_encoded merkleization in
       Rlp.encode_list [encoded_path; encoded_ending]
 
 let merkle_root (trie : t) =
-  let merkleization, trie = merkleized trie in
+  let merkleization = merkleized trie in
   let root = match merkleization with Small encoded -> Crypto.keccak_256 encoded | Hash hash -> hash in
   root
