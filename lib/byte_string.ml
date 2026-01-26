@@ -31,8 +31,7 @@ module Bytes = struct
     else if c >= Char.code 'a' && c <= Char.code 'f' then 10 + (c - Char.code 'a')
     else raise (failwith "nibble_to_int")
 
-  let nibble_pair_to_int (c1 : char) (c0 : char) : int =
-    (nibble_to_int c1 lsl 4) lor (nibble_to_int c0)
+  let nibble_pair_to_int (c1 : char) (c0 : char) : int = (nibble_to_int c1 lsl 4) lor nibble_to_int c0
 
   (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
       '0x', into an array of bytes. If the [width] argument is provided, the resulting byte-string is left-padded
@@ -135,7 +134,9 @@ struct
   let make char = init (fun _ -> char)
   let zeros = make '\x00'
 
-  let of_bytes_exn (bs : Bytes.t) : t = Option.get (of_bytes bs)
+  let of_bytes_exn (bs : Bytes.t) : t =
+    if (of_bytes bs) = None then failwith (Bytes.to_hex_string bs) else
+    Option.get (of_bytes bs)
   let to_bytes (bs : t) : string = (bs :> string)
 
   let to_seq (bs : t) = String.to_seq (bs :> string)
@@ -179,11 +180,12 @@ struct
     let compare (x : t) (y : t) = String.compare (x :> string) (y :> string)
   end)
 
-  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+  let of_yojson : Yojson.Safe.t -> (t, string) result =
     let type_name = Format.sprintf "Byte_string.B%d.t" byte_width in
-    match Bytes.of_yojson ~width:byte_width json with
-    | Ok bs when Int.(equal (Bytes.length bs) byte_width) -> Ok (of_bytes_exn bs)
-    | _ -> Error type_name
+    fun json ->
+      match Bytes.of_yojson ~width:byte_width json with
+      | Ok bs when Int.(equal (Bytes.length bs) byte_width) -> Ok (of_bytes_exn bs)
+      | _ -> Error type_name
 
   let to_yojson (x : t) : Yojson.Safe.t = Bytes.to_yojson (x :> string)
 

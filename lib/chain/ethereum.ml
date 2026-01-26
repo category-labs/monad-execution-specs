@@ -637,11 +637,40 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
+(*
+module Storage =
+  Mpt_lazy.Make
+    (B32)
+    (struct
+      include B32
+      let to_rlp bs = Rlp.Bytes (B32.to_bytes bs)
+    end)
+*)
+module Storage = struct
+  include B32.Map
+  type t = B32.t B32.Map.t
+
+  let of_yojson = of_yojson B32.of_yojson
+  let to_yojson = to_yojson B32.to_yojson
+  let merkleized s = s
+  let merkle_root (s : t) =
+    to_seq s
+    |> Seq.map (fun (k, v) ->
+           let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes v)) in
+           let v = B32.to_bytes v in
+           (k, v))
+  |> Mpt.of_seq_via_trie
+  |> Mpt.merkle_root
+  (*
+    |> Mpt_lazy.Generic.of_seq ~hash_key:true
+    |> Mpt_lazy.Generic.merkle_root ~value_to_rlp:(fun b -> Rlp.Bytes b)
+   *)
+end
 module Account = struct
   type t =
     { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : B32.t B32.Map.t (* σ[a]_s *)
+    ; storage : Storage.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *)
     ; code_hash : B32.t }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
@@ -651,13 +680,13 @@ module Account = struct
   let equal acc_1 acc_2 =
     U64.(acc_1.nonce = acc_2.nonce)
     && U256.(acc_1.balance = acc_2.balance)
-    && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
+    && Storage.(equal B32.equal acc_1.storage acc_2.storage)
     && B32.(acc_1.code_hash = acc_2.code_hash)
   let ( = ) = equal
 
   let empty =
     { balance = U256.zero
-    ; storage = B32.Map.empty
+    ; storage = Storage.empty
     ; code = Bytes.empty
     ; nonce = U64.zero
     ; code_hash = Crypto.keccak_256_empty }
@@ -665,19 +694,9 @@ module Account = struct
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
 
+  let merkleized account = {account with storage = Storage.merkleized account.storage}
+
   let to_rlp {nonce; balance; storage; code_hash; _} =
-    let storage_root =
-        let mpt =
-          storage
-          |> B32.Map.to_seq
-          |> Seq.map (fun (k, v) ->
-              let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
-              let v = Rlp.encode U256.(to_rlp (of_repr v)) in
-              (* YP (8) *)
-              (k, v) )
-          |> Mpt.of_seq
-        in
-        mpt.root_hash
-    in
+    let storage_root = Storage.merkle_root storage in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
 end

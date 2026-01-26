@@ -59,6 +59,7 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
     if U64.(actual.nonce <> expected.nonce) then
       Format.printf "\tNonce: %s\n\tExpected: %s\n" (U64.to_string actual.nonce)
         (U64.to_string expected.nonce) ;
+    (*
     if not B32.Map.(equal B32.equal actual.storage expected.storage) then (
       Format.printf "\tStorage differs\n" ;
       let actual_keys = B32.Map.keys actual.storage in
@@ -81,6 +82,7 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
                 Format.printf "\t\texpected(%s): <EMPTY>\n" key_s
             | _, _ -> () )
           (union actual_keys expected_keys) ) ) ;
+     *)
     false )
 
 let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.Map.t) : bool =

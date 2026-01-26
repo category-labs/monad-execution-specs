@@ -71,7 +71,7 @@ let rec remove key (trie : t) =
         let data =
           match subtree.data with
           | Empty -> Empty
-          | Extension {path = path'; ending} -> Extension {path = Nibbles.concat path path'; ending}
+          | Extension {path = path'; ending} -> Extension {path = Nibbles.(path ^ path'); ending}
           | Branch (_, _) -> Extension {path; ending = Subtree subtree}
         in
         make data
@@ -95,8 +95,7 @@ let rec remove key (trie : t) =
                   match b_i.data with
                   | Empty -> Empty
                   | Branch (_, _) -> Extension {path = Nibbles.of_nibble i; ending = Subtree b_i}
-                  | Extension {path; ending} -> Extension {path = Nibbles.(concat (of_nibble i) path); ending}
-                  )
+                  | Extension {path; ending} -> Extension {path = Nibbles.(of_nibble i ^ path); ending} )
                 | Some (_, _) -> Branch (branches, v)
               else Branch (branches, v)
           | None ->
@@ -198,15 +197,13 @@ let rec merkleized (node : t) : merkleization =
             let merkleizations = Iarray.to_seq branches_merkleized in
             (Branch (branches, value), branch_to_rlp_encoded merkleizations value)
         | Extension {path; ending} ->
-              (match ending with
-              | Value value -> ()
-              | Subtree subtree -> ignore (merkleized subtree));
+            (match ending with Value value -> () | Subtree subtree -> ignore (merkleized subtree)) ;
             (Extension {path; ending}, extension_to_rlp_encoded path ending)
       in
       let merkleized =
         if Bytes.length encoded < 32 then Small encoded else Hash (Crypto.keccak_256 encoded)
       in
-      node.merkleized <- Some merkleized;
+      node.merkleized <- Some merkleized ;
       merkleized
 
 and branch_to_rlp_encoded (branches : merkleization Seq.t) (value : Rlp.t) =
@@ -217,11 +214,11 @@ and branch_to_rlp_encoded (branches : merkleization Seq.t) (value : Rlp.t) =
 and extension_to_rlp_encoded (path : Nibbles.t) (ending : ending) =
   match ending with
   | Value value ->
-     let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path true) in
+      let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path true) in
       let encoded_ending = Rlp.encode value in
       Rlp.encode_list [encoded_path; encoded_ending]
   | Subtree subtree ->
-     let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path false) in
+      let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path false) in
       let merkleization = merkleized subtree in
       let encoded_ending = merkleization_to_rlp_encoded merkleization in
       Rlp.encode_list [encoded_path; encoded_ending]

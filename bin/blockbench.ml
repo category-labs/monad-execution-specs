@@ -41,7 +41,7 @@ let dump_allocs name list =
     list
 
 let ( $/ ) path file = Filename.concat path file
-let fixtures_folder = "/home/malvarez/code/ocaml/monad-execution-specs/test/execution/fixtures"
+let fixtures_folder = "/Users/malvarez/code/ocaml/performance-tuning/test/execution/fixtures"
 
 let valid_block_tests_folder = fixtures_folder $/ "blockchain_tests" $/ "valid_blocks"
 

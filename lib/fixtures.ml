@@ -23,10 +23,11 @@ let bytes_of_hex_string str = try Ok (Bytes.of_hex_string str) with _ -> Error "
 let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
 
 module AccountWithoutCodeHash = struct
+  (* TODO: remove the need for this *)
   type t =
     { nonce : U256.t (* σ[a]_n *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : B32.t B32.Map.t (* σ[a]_s *)
+    ; storage : Storage.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
 

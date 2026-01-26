@@ -3,7 +3,7 @@ open Test_utils.Utils
 open QCheck2
 open Byte_string
 
-module Mpt = Mpt_lazy
+(*module Mpt = Mpt_lazy*)
 
 (* Using only three characters ensures paths have overlaps to test Patricia compression *)
 let gen_path : Nibbles.t Gen.t =
@@ -53,7 +53,7 @@ let round_trip_hp_ok (nibbles, flag) =
 let test_case_of_fixture (name, fixture) =
   let open Fixtures.TrieTest in
   let trie = Mpt.of_seq (List.to_seq fixture.entries) in
-  let root' = Mpt.merkle_root trie in
+  let root' = Mpt.merkle_root  trie in
   Alcotest.(test_case name `Quick (fun () -> check' b32 ~msg:"Root" ~expected:fixture.root ~actual:root'))
 
 let test_fixture_file ?(hash_keys = false) file =
