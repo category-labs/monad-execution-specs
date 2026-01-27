@@ -675,7 +675,7 @@ module Account = struct
               let v = Rlp.encode U256.(to_rlp (of_repr v)) in
               (* YP (8) *)
               (k, v) )
-          |> Mpt.of_seq_via_trie
+          |> Mpt.of_seq
         in
         mpt.root_hash
     in

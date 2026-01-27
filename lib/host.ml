@@ -29,7 +29,7 @@ module WorldState = struct
             (* YP (11) *)
             let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
             Some (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
-      |> Mpt.of_seq_via_trie
+      |> Mpt.of_seq
     |> Mpt.merkle_root
 
   let dump_accounts ws =
