@@ -21,16 +21,16 @@ module WorldState = struct
   let account_opt addr = accounts |-- Address.Map.at addr
 
   let state_root state =
-      state.accounts
-      |> Address.Map.to_seq
-      |> Seq.filter_map (fun (addr, acc) ->
-          if Account.is_empty acc then None
-          else
-            (* YP (11) *)
-            let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
-            Some (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
-      |> Mpt.of_seq
-    |> Mpt.merkle_root
+    state.accounts
+    |> Address.Map.to_seq
+    |> Seq.filter_map (fun (addr, acc) ->
+        if Account.is_empty acc then None
+        else
+          (* YP (11) *)
+          let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
+          Some (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
+    |> Mpt_lazy.Generic.of_seq
+    |> Mpt_lazy.Generic.merkle_root ~value_to_bytes:Fun.id
 
   let dump_accounts ws =
     Address.Map.iter
@@ -79,22 +79,25 @@ module BlockState = struct
     (* YP (35) *)
     let state_root = WorldState.state_root block_state.world_state in
     let transactions_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (tx, _) -> Transaction.encode tx)
-      |> Mpt.of_seq_i |> Mpt.merkle_root)
+      |> Mpt.of_seq_i
+      |> Mpt.merkle_root
     in
     let receipts_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (_, receipt) -> Receipt.encode receipt)
-      |> Mpt.of_seq_i |> Mpt.merkle_root)
+      |> Mpt.of_seq_i
+      |> Mpt.merkle_root
     in
     let withdrawals_root =
-      ( block_state.withdrawals_processed
+      block_state.withdrawals_processed
       |> List.to_seq
       |> Seq.map (fun w -> Withdrawal.encode w)
-      |> Mpt.of_seq_i |> Mpt.merkle_root)
+      |> Mpt.of_seq_i
+      |> Mpt.merkle_root
     in
     let logs_bloom =
       block_state.transactions_processed

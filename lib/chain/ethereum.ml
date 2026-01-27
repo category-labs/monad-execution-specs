@@ -667,17 +667,15 @@ module Account = struct
 
   let to_rlp {nonce; balance; storage; code_hash; _} =
     let storage_root =
-        let mpt =
-          storage
-          |> B32.Map.to_seq
-          |> Seq.map (fun (k, v) ->
-              let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
-              let v = Rlp.encode U256.(to_rlp (of_repr v)) in
-              (* YP (8) *)
-              (k, v) )
-          |> Mpt.of_seq
-        in
-        mpt.root_hash
+      storage
+      |> B32.Map.to_seq
+      |> Seq.map (fun (k, v) ->
+          let k = B32.to_bytes k in
+          let v = Rlp.encode U256.(to_rlp (of_repr v)) in
+          (* YP (8) *)
+          (k, v) )
+      |> Mpt_lazy.Generic.of_seq ~hash_key:true
+      |> Mpt_lazy.Generic.merkle_root ~value_to_bytes:Fun.id
     in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
 end

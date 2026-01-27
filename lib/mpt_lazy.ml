@@ -201,7 +201,7 @@ module Generic = struct
 
   let merkleization_to_rlp_encoded = function Hash h -> Rlp.encode_bytes (B32.to_bytes h) | Small s -> s
 
-  let rec merkleized ~(value_to_rlp : 'a -> Rlp.t) (node : 'a t) : 'a t =
+  let rec merkleized ~(value_to_bytes : 'a -> Bytes.t) (node : 'a t) : 'a t =
     match node with
     | {merkleized = Some _} -> node
     | _ ->
@@ -209,46 +209,46 @@ module Generic = struct
           match node.data with
           | Empty -> (Empty, Rlp.(encode_bytes ""))
           | Branch (branches, value) ->
-              let branches_merkleized = Iarray.map (merkleized ~value_to_rlp) branches in
+              let branches_merkleized = Iarray.map (merkleized ~value_to_bytes) branches in
               let merkleizations =
-                Iarray.to_seq branches_merkleized |> Seq.map (merkleization ~value_to_rlp)
+                Iarray.to_seq branches_merkleized |> Seq.map (merkleization ~value_to_bytes)
               in
-              (Branch (branches, value), branch_to_rlp_encoded ~value_to_rlp merkleizations value)
+              (Branch (branches, value), branch_to_rlp_encoded ~value_to_bytes merkleizations value)
           | Extension {path; ending} ->
               let ending =
                 match ending with
                 | Value value -> Value value
-                | Subtree subtree -> Subtree (merkleized ~value_to_rlp subtree)
+                | Subtree subtree -> Subtree (merkleized ~value_to_bytes subtree)
               in
-              (Extension {path; ending}, extension_to_rlp_encoded ~value_to_rlp path ending)
+              (Extension {path; ending}, extension_to_rlp_encoded ~value_to_bytes path ending)
         in
         let merkleized =
           if Bytes.length encoded < 32 then Small encoded else Hash (Crypto.keccak_256 encoded)
         in
         {data; merkleized = Some merkleized}
 
-  and merkleization ~value_to_rlp (node : 'a t) =
-    match (merkleized ~value_to_rlp node).merkleized with Some m -> m | None -> assert false
+  and merkleization ~value_to_bytes (node : 'a t) =
+    match (merkleized ~value_to_bytes node).merkleized with Some m -> m | None -> assert false
 
-  and branch_to_rlp_encoded ~value_to_rlp (branches : merkleization Seq.t) (value : 'a option) =
+  and branch_to_rlp_encoded ~value_to_bytes (branches : merkleization Seq.t) (value : 'a option) : Bytes.t =
     let encoded_branches = Seq.map merkleization_to_rlp_encoded branches in
-    let encoded_value = Rlp.encode (match value with None -> Rlp.Bytes "" | Some v -> value_to_rlp v) in
+    let encoded_value = Rlp.encode_bytes (match value with None -> "" | Some v -> value_to_bytes v) in
     let encoded_fields = Seq.(append encoded_branches (singleton encoded_value)) in
     Rlp.encode_list (List.of_seq encoded_fields)
 
-  and extension_to_rlp_encoded ~value_to_rlp (path : Nibbles.t) (ending : 'a ending) =
+  and extension_to_rlp_encoded ~value_to_bytes (path : Nibbles.t) (ending : 'a ending) =
     match ending with
     | Value value ->
         let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path true) in
-        let encoded_ending = Rlp.encode (value_to_rlp value) in
+        let encoded_ending = Rlp.encode_bytes (value_to_bytes value) in
         Rlp.encode_list [encoded_path; encoded_ending]
     | Subtree subtree ->
         let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path false) in
-        let encoded_ending = merkleization_to_rlp_encoded (merkleization ~value_to_rlp subtree) in
+        let encoded_ending = merkleization_to_rlp_encoded (merkleization ~value_to_bytes subtree) in
         Rlp.encode_list [encoded_path; encoded_ending]
 
-  let merkle_root ~value_to_rlp (trie : 'a t) =
-    match merkleization ~value_to_rlp trie with
+  let merkle_root ~value_to_bytes (trie : 'a t) =
+    match merkleization ~value_to_bytes trie with
     | Small encoded -> Crypto.keccak_256 encoded
     | Hash hash -> hash
 
@@ -266,7 +266,7 @@ module Make (Key : sig
   val to_bytes : t -> Bytes.t
 end) (Value : sig
   type t
-  val to_rlp : t -> Rlp.t
+  val to_bytes : t -> Bytes.t
 
   val of_yojson : Yojson.Safe.t -> (t, string) result
   val to_yojson : t -> Yojson.Safe.t
@@ -291,9 +291,9 @@ struct
   let remove (k : Key.t) (trie : t) : t = remove (hash_key k) trie
   let add (k : Key.t) (v : Value.t) (trie : t) : t = add (hash_key k) (k, v) trie
 
-  let merkleization : t -> merkleization = merkleization ~value_to_rlp:(fun (_, v) -> Value.to_rlp v)
-  let merkleized : t -> t = merkleized ~value_to_rlp:(fun (_, v) -> Value.to_rlp v)
-  let merkle_root : t -> B32.t = merkle_root ~value_to_rlp:(fun (_, v) -> Value.to_rlp v)
+  let merkleization : t -> merkleization = merkleization ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
+  let merkleized : t -> t = merkleized ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
+  let merkle_root : t -> B32.t = merkle_root ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
 
   exception Value_decoding_error of string
   let of_yojson : Yojson.Safe.t -> (t, string) result = function
