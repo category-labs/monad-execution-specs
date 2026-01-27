@@ -27,7 +27,7 @@ module AccountWithoutCodeHash = struct
   type t =
     { nonce : U256.t (* σ[a]_n *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : Storage.t (* σ[a]_s *)
+    ; storage : B32.t B32.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
 

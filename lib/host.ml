@@ -20,27 +20,17 @@ module WorldState = struct
   let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
   let account_opt addr = accounts |-- Address.Map.at addr
 
-  let state_root (state : t) : B32.t * t =
-    let accounts =
-      Address.Map.filter_map
-        (fun addr acc -> if Account.is_empty acc then None else Some (Account.merkleized acc))
-        state.accounts
-    in
-    let state_root =
-      Address.Map.to_seq accounts
-      |> Seq.map (fun (addr, acc) ->
-          let addr = B32.to_bytes (Crypto.keccak_256 (Address.to_bytes addr)) in
-          let acc = Rlp.encode (Account.to_rlp acc) in
-          (addr, acc))
+  let state_root state =
+      state.accounts
+      |> Address.Map.to_seq
+      |> Seq.filter_map (fun (addr, acc) ->
+          if Account.is_empty acc then None
+          else
+            (* YP (11) *)
+            let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
+            Some (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
       |> Mpt.of_seq_via_trie
-      |> Mpt.merkle_root
-
-  (*
-      |> Mpt.Generic.of_seq ~hash_key:false
-      |> Mpt.Generic.merkle_root ~value_to_rlp:Account.to_rlp
-   *)
-    in
-    (state_root, {state with accounts})
+    |> Mpt.merkle_root
 
   let dump_accounts ws =
     Address.Map.iter
@@ -79,7 +69,7 @@ module BlockState = struct
     let account = {account with balance = U256.(account.balance + amount)} in
     block_state.^(account_opt recipient) <- (if Account.is_empty account then None else Some account)
 
-  (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
+  (** [rinalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
   let finalize_current_block (block_state : t) : Block.t =
@@ -87,27 +77,24 @@ module BlockState = struct
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
     (* YP (35) *)
-    let state_root, world_state = WorldState.state_root block_state.world_state in
+    let state_root = WorldState.state_root block_state.world_state in
     let transactions_root =
-      block_state.transactions_processed
+      ( block_state.transactions_processed
       |> List.to_seq
-      |> Seq.map (fun (tx, _) -> Rlp.Bytes (Transaction.encode tx))
-      |> Mpt_lazy.Generic.of_seq_i
-      |> Mpt_lazy.Generic.merkle_root ~value_to_rlp:Fun.id
+      |> Seq.map (fun (tx, _) -> Transaction.encode tx)
+      |> Mpt.of_seq_i |> Mpt.merkle_root)
     in
     let receipts_root =
-      block_state.transactions_processed
+      ( block_state.transactions_processed
       |> List.to_seq
-      |> Seq.map (fun (_, receipt) -> Rlp.Bytes (Receipt.encode receipt))
-      |> Mpt_lazy.Generic.of_seq_i
-      |> Mpt_lazy.Generic.merkle_root ~value_to_rlp:Fun.id
+      |> Seq.map (fun (_, receipt) -> Receipt.encode receipt)
+      |> Mpt.of_seq_i |> Mpt.merkle_root)
     in
     let withdrawals_root =
-      block_state.withdrawals_processed
+      ( block_state.withdrawals_processed
       |> List.to_seq
-      |> Seq.map (fun w -> Rlp.Bytes (Withdrawal.encode w))
-      |> Mpt_lazy.Generic.of_seq_i
-      |> Mpt_lazy.Generic.merkle_root ~value_to_rlp:Fun.id
+      |> Seq.map (fun w -> Withdrawal.encode w)
+      |> Mpt.of_seq_i |> Mpt.merkle_root)
     in
     let logs_bloom =
       block_state.transactions_processed
@@ -284,18 +271,18 @@ struct
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
   let get_storage addr key =
-    !(account addr |-- Account.storage |-- Storage.at key |-- Option.get_or_default B32.zeros)
+    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
 
   let set_storage addr key v =
     let$ o =
       !( initial_world_state
        |-- WorldState.account addr
        |-- storage
-       |-- Storage.at key
+       |-- B32.Map.at key
        |-- Option.get_or_default B32.zeros )
     in
-    let$ c = !(account addr |-- storage |-- Storage.at key |-- Option.get_or_default B32.zeros) in
-    let$ () = account addr |-- storage |-- Storage.at key := if B32.(v = zeros) then None else Some v in
+    let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
+    let$ () = account addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v in
     let zero u = B32.(u = zeros) in
     let x u = B32.(u <> zeros && u = o) in
     let y u = B32.(u <> zeros && u = c) in
@@ -390,7 +377,7 @@ struct
         update_field accounts_created_in_current_transaction (fun addresses ->
             Address.Set.add create_address addresses )
       in
-      let$ () = account create_address |-- storage := Storage.empty in
+      let$ () = account create_address |-- storage := B32.Map.empty in
       let$ () = account create_address |-- nonce := U64.one in
       let$ () = move_ether msg.sender create_address msg.value in
 
