@@ -149,22 +149,22 @@ module Generic = struct
           in
           make (Branch (branches, branch_value)) )
 
-  let add ?(hash_key=false) (key : Bytes.t) (value : 'a) (trie : 'a t) =
-    let key = if hash_key then B32.to_bytes (Crypto.keccak_256 key) else key in
+  let add ?(hash_keys = false) (key : Bytes.t) (value : 'a) (trie : 'a t) =
+    let key = if hash_keys then B32.to_bytes (Crypto.keccak_256 key) else key in
     add (Nibbles.of_bytes key) value trie
 
-  let remove ?(hash_key=false) key trie =
-    let key = if hash_key then B32.to_bytes (Crypto.keccak_256 key) else key in
+  let remove ?(hash_keys = false) key trie =
+    let key = if hash_keys then B32.to_bytes (Crypto.keccak_256 key) else key in
     remove (Nibbles.of_bytes key) trie
 
-  let of_seq ?(hash_key=false) (entries : (Bytes.t * 'a) Seq.t) : 'a t =
-    entries |> Seq.fold_left (fun trie (k, v) -> add ~hash_key k v trie) empty
+  let of_seq ?(hash_keys = false) (entries : (Bytes.t * 'a) Seq.t) : 'a t =
+    entries |> Seq.fold_left (fun trie (k, v) -> add ~hash_keys k v trie) empty
 
-  let of_seq_i ?(hash_key=false) (entries : 'a Seq.t) =
+  let of_seq_i ?(hash_keys = false) (entries : 'a Seq.t) =
     let to_kv i v = (Rlp.encode U64.(to_rlp ~$i), v) in
-    of_seq ~hash_key (Seq.mapi to_kv entries)
+    of_seq ~hash_keys (Seq.mapi to_kv entries)
 
-  let of_map ?(hash_key=false) (map : 'a Bytes.Map.t) = of_seq ~hash_key (Bytes.Map.to_seq map)
+  let of_map ?(hash_keys = false) (map : 'a Bytes.Map.t) = of_seq ~hash_keys (Bytes.Map.to_seq map)
 
   let rec to_seq ~(prefix : Nibbles.t) (trie : 'a t) : (Bytes.t * 'a) Seq.t =
     match trie.data with
@@ -260,40 +260,53 @@ module Generic = struct
     {get = (fun m -> find_opt k m); set = (fun v m -> update k (fun _ -> v) m)}
 end
 
-module Make (Key : sig
+module Make (Params : sig
+  val hash_keys : bool
+end) (Key : sig
   type t
   val of_bytes_exn : Bytes.t -> t
   val to_bytes : t -> Bytes.t
 end) (Value : sig
   type t
+
+  val equal : t -> t -> bool
+
   val to_bytes : t -> Bytes.t
 
   val of_yojson : Yojson.Safe.t -> (t, string) result
   val to_yojson : t -> Yojson.Safe.t
 end) =
 struct
-  include Generic
-  type nonrec t = (Key.t * Value.t) t
+  type nonrec t = (Key.t * Value.t) Generic.t
+  type merkleization = Generic.merkleization
 
-  let hash_key (k : Key.t) = B32.to_bytes (Crypto.keccak_256 (Key.to_bytes k))
+  let equal : t -> t -> bool = Generic.equal (fun (_, v1) (_, v2) -> Value.equal v1 v2)
 
-  let of_seq (seq : (Key.t * Value.t) Seq.t) : t = of_seq (Seq.map (fun (k, v) -> (hash_key k, (k, v))) seq)
+  let empty : t = Generic.empty
+
+  let hash_key =
+    if Params.hash_keys then fun (k : Key.t) -> B32.to_bytes (Crypto.keccak_256 (Key.to_bytes k))
+    else fun (k : Key.t) -> Key.to_bytes k
+
+  let of_seq (seq : (Key.t * Value.t) Seq.t) : t =
+    Generic.of_seq (Seq.map (fun (k, v) -> (hash_key k, (k, v))) seq)
   let to_seq (trie : t) : (Key.t * Value.t) Seq.t =
     (* TODO: it's unnecessary to reconstruct k_enc here *)
-    to_seq trie |> Seq.map (fun (k_enc, (k, v)) -> (k, v))
+    Generic.to_seq trie |> Seq.map (fun (k_enc, (k, v)) -> (k, v))
 
   let find_hash_opt (k : Key.t) (h : B32.t) (trie : t) : Value.t option =
-    Option.map snd (find_opt (B32.to_bytes h) trie)
-  let remove_hash (k : Key.t) (h : B32.t) (trie : t) : t = remove (B32.to_bytes h) trie
-  let add_hash (k : Key.t) (h : B32.t) (v : Value.t) (trie : t) : t = add (B32.to_bytes h) (k, v) trie
+    Option.map snd (Generic.find_opt (B32.to_bytes h) trie)
+  let remove_hash (k : Key.t) (h : B32.t) (trie : t) : t = Generic.remove (B32.to_bytes h) trie
+  let add_hash (k : Key.t) (h : B32.t) (v : Value.t) (trie : t) : t = Generic.add (B32.to_bytes h) (k, v) trie
 
-  let find_opt (k : Key.t) (trie : t) : Value.t option = Option.map snd (find_opt (hash_key k) trie)
-  let remove (k : Key.t) (trie : t) : t = remove (hash_key k) trie
-  let add (k : Key.t) (v : Value.t) (trie : t) : t = add (hash_key k) (k, v) trie
+  let find_opt (k : Key.t) (trie : t) : Value.t option = Option.map snd (Generic.find_opt (hash_key k) trie)
+  let remove (k : Key.t) (trie : t) : t = Generic.remove (hash_key k) trie
+  let add (k : Key.t) (v : Value.t) (trie : t) : t = Generic.add (hash_key k) (k, v) trie
 
-  let merkleization : t -> merkleization = merkleization ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
-  let merkleized : t -> t = merkleized ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
-  let merkle_root : t -> B32.t = merkle_root ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
+  let merkleization : t -> merkleization =
+    Generic.merkleization ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
+  let merkleized : t -> t = Generic.merkleized ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
+  let merkle_root : t -> B32.t = Generic.merkle_root ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
 
   exception Value_decoding_error of string
   let of_yojson : Yojson.Safe.t -> (t, string) result = function
