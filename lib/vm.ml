@@ -202,7 +202,7 @@ module Context = struct
   type t =
     { execution_environment : ExecutionEnvironment.t (* I *)
     ; machine_state : MachineState.t (* μ *)
-    ; jump_destinations : U256.Set.t (* D(c) *)
+    ; jump_destinations : U256.t list (* D(c) *)
     ; initial_storage : U256.t U256.Map.t
           (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *) }
   [@@deriving lens {submodule = true; prefix = true}]
@@ -213,13 +213,13 @@ module Context = struct
       if i >= Bytes.length code then valid_destinations
       else
         match code.[i] with
-        | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
+        | '\x5b' -> loop (i + 1) (U256.(~$i) :: valid_destinations)
         | '\x60' .. '\x7f' as opcode ->
             let push_bytes = Char.code opcode - 0x60 + 1 in
             loop (i + 1 + push_bytes) valid_destinations
         | _ -> loop (i + 1) valid_destinations
     in
-    loop 0 U256.Set.empty
+    loop 0 []
 
   let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
     { execution_environment = ExecutionEnvironment.make ctx msg code
@@ -230,7 +230,7 @@ module Context = struct
   let empty =
     { execution_environment = ExecutionEnvironment.empty
     ; machine_state = MachineState.initial
-    ; jump_destinations = U256.Set.empty
+    ; jump_destinations = []
     ; initial_storage = U256.Map.empty }
 end
 
@@ -374,7 +374,9 @@ struct
 
   let check_jump_destination (destination : U256.t) =
     let$ valid_destinations = !jump_destinations in
-    if U256.Set.mem destination valid_destinations then return () else fail Bad_jump_destination
+    match List.find_opt (U256.equal destination) valid_destinations with
+    | None -> fail Bad_jump_destination
+    | Some _ -> return ()
 
   let self : Address.t M.t = !(execution_environment |-- address)
 
