@@ -71,15 +71,15 @@ module BlockState = struct
     let account = {account with balance = U256.(account.balance + amount)} in
     block_state.^(account_opt recipient) <- (if Account.is_empty account then None else Some account)
 
-  (** [rinalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
+  (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
       they are overwritten. *)
-  let finalize_current_block (block_state : t) : Block.t =
+  let finalize_current_block (block_state : t) : Block.t * t =
     (* YP (46) *)
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
     (* YP (35) *)
-    let state_root, _ = WorldState.state_root block_state.world_state in
+    let state_root, world_state = WorldState.state_root block_state.world_state in
     let transactions_root =
       block_state.transactions_processed
       |> List.to_seq
@@ -133,7 +133,7 @@ module BlockState = struct
       ; blob_gas_used
       ; parent_hash }
     in
-    {block_state.current_block with header}
+    {block_state.current_block with header}, { block_state with world_state }
 end
 
 module TransactionState = struct
