@@ -1,3 +1,4 @@
+(*
 open Numeric
 open Byte_string
 
@@ -227,3 +228,5 @@ let merkle_root (trie : t) =
   let merkleization = merkleized trie in
   let root = match merkleization with Small encoded -> Crypto.keccak_256 encoded | Hash hash -> hash in
   root
+
+ *)

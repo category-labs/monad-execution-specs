@@ -9,9 +9,9 @@ end
 module Trie = struct
   let branching_factor = 16
 
-  type t = Empty | Branch of t Iarray.t * Rlp.t
+  type t = Empty | Branch of t Iarray.t * Bytes.t
 
-  let rec insert (k : Nibbles.t) ?(depth = 0) (v : Rlp.t) = function
+  let rec insert (k : Nibbles.t) ?(depth = 0) (v :Bytes.t) = function
     | Branch (branches, _) when depth = Nibbles.length k -> Branch (branches, v)
     | Branch (branches, v') ->
         let k_i = Nibbles.(k.$[depth]) in
@@ -25,9 +25,9 @@ module Trie = struct
         Branch
           ( Iarray.init branching_factor (fun i ->
                 if i = k_i then insert k ~depth:(depth + 1) v Empty else Empty )
-          , Rlp.Bytes Bytes.empty )
+          , "" )
 
-  let of_seq (entries : (Nibbles.t * Rlp.t) Seq.t) : t =
+  let of_seq (entries : (Nibbles.t * Bytes.t) Seq.t) : t =
     Seq.fold_left (fun trie (k, v) -> insert k v trie) Empty entries
 
   let rec find (k : Nibbles.t) ?(depth = 0) (trie : t) =
@@ -42,9 +42,9 @@ end
 module PatriciaTrie = struct
   let branching_factor = 16
 
-  type t = Empty | Branch of (t Iarray.t * Rlp.t) | Extension of {path : Nibbles.t; ending : ending}
+  type t = Empty | Branch of (t Iarray.t * Bytes.t) | Extension of {path : Nibbles.t; ending : ending}
   [@@deriving to_yojson]
-  and ending = Subtree of t | Value of Rlp.t [@@deriving to_yojson]
+  and ending = Subtree of t | Value of Bytes.t [@@deriving to_yojson]
 
   let dump t = Format.eprintf "%s\n" (Yojson.Safe.pretty_to_string (to_yojson t))
 
@@ -63,7 +63,7 @@ module PatriciaTrie = struct
           Iarray.fold_left (fun n branch -> n + if branch <> Empty then 1 else 0) 0 branches
         in
         match (first_non_empty_nibble, non_empty_nibbles) with
-        | Some (k_i, b), 1 when v = Bytes "" -> (
+        | Some (k_i, b), 1 when v = "" -> (
           (* Exactly one non-empty branch: we can compress the entry, but only if it didn't contain a value. *)
           match b with
           | Empty -> Empty
@@ -74,7 +74,7 @@ module PatriciaTrie = struct
               Extension {path = Nibbles.prepend k_i path; ending = Subtree subtree} )
         | None, 0 ->
             (* Terminal: we can compress the entry to a Leaf, or Empty if v = "" *)
-            if v = Rlp.Bytes "" then Empty else Extension {path = Nibbles.empty; ending = Value v}
+            if v = "" then Empty else Extension {path = Nibbles.empty; ending = Value v}
         | _ -> Branch (branches, v) )
 
   let rec find (k : Nibbles.t) ?(depth = 0) (trie : t) =
@@ -121,7 +121,7 @@ module PatriciaTrie = struct
         Subtree
           (Branch
              ( two_branches (p_0, extension ~path ~ending) (k_0, extension ~path:key ~ending:(Value value))
-             , Rlp.Bytes "" ) )
+             , "" ) )
 
   and insert (trie : t) key value =
     match trie with
@@ -164,16 +164,16 @@ module Node = struct
   type small_node_or_hash = Small of t | Hash of B32.t
   and t =
     | Empty
-    | Branch of small_node_or_hash Iarray.t * Rlp.t
-    | Leaf of {path : Nibbles.t; value : Rlp.t}
+    | Branch of small_node_or_hash Iarray.t * Bytes.t
+    | Leaf of {path : Nibbles.t; value : Bytes.t}
     | Extension of {path_segment : Nibbles.t; subtree : small_node_or_hash}
 
   let rec to_rlp = function
     | Empty -> Rlp.Bytes "" (* See YP (207) *)
     | Branch (branches, value) ->
         let branches = Iarray.to_seq branches |> Seq.map small_node_or_hash_to_rlp in
-        Rlp.List (List.of_seq Seq.(append branches (singleton value)))
-    | Leaf {path; value} -> Rlp.(List [Bytes (Nibbles.hex_prefix_encode path true); value])
+        Rlp.List (List.of_seq Seq.(append branches (singleton (Rlp.Bytes value))))
+    | Leaf {path; value} -> Rlp.(List [Bytes (Nibbles.hex_prefix_encode path true); Rlp.Bytes value])
     | Extension {path_segment; subtree} ->
         Rlp.(List [Bytes (Nibbles.hex_prefix_encode path_segment false); small_node_or_hash_to_rlp subtree])
 
@@ -186,11 +186,11 @@ module Node = struct
 
   let rec of_rlp = function
     | Rlp.Bytes bs when bs = "" -> Empty
-    | Rlp.List [Bytes p; v] ->
+    | Rlp.List [Bytes p; Bytes v] ->
         let ns, is_leaf = Nibbles.hex_prefix_decode p in
         if is_leaf then Leaf {path = ns; value = v}
-        else Extension {path_segment = ns; subtree = small_node_or_hash_of_rlp v}
-    | Rlp.List [b0; b1; b2; b3; b4; b5; b6; b7; b8; b9; b10; b11; b12; b13; b14; b15; v] ->
+        else Extension {path_segment = ns; subtree = small_node_or_hash_of_rlp (Rlp.Bytes v)}
+    | Rlp.List [b0; b1; b2; b3; b4; b5; b6; b7; b8; b9; b10; b11; b12; b13; b14; b15; Bytes v] ->
         Branch
           ( [| small_node_or_hash_of_rlp b0
              ; small_node_or_hash_of_rlp b1
@@ -270,10 +270,10 @@ let of_patricia trie =
 
 (** {!of_seq} builds an MPT representing the mapping given by the key-value pairs in the input sequence. *)
 let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
-  entries |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, Rlp.Bytes v)) |> PatriciaTrie.of_seq |> of_patricia
+  entries |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, v)) |> PatriciaTrie.of_seq |> of_patricia
 
 let of_seq_via_trie (entries : (Bytes.t * Bytes.t) Seq.t) =
-  entries |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, Rlp.Bytes v)) |> Trie.of_seq |> PatriciaTrie.of_trie |> of_patricia
+  entries |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, v)) |> Trie.of_seq |> PatriciaTrie.of_trie |> of_patricia
 
 let empty = of_seq Seq.empty
 
