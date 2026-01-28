@@ -14,7 +14,7 @@
  (libraries
   zarith
   lens
-  digestif
+  digestif.c
   secp256k1-internal
   yojson
   ppx_deriving_yojson.runtime)

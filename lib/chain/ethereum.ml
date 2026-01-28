@@ -638,14 +638,15 @@ module Receipt = struct
 end
 
 module Mpt_storage =
-  Mpt_lazy.Make
+  Mpt_lazy_imp.Make
     (struct
       let hash_keys = true
     end)
     (B32)
-    (struct include B32
-            let to_bytes (word : B32.t) = Rlp.encode U256.(to_rlp (of_repr word))
-     end)
+    (struct
+      include B32
+      let to_bytes (word : B32.t) = Rlp.encode U256.(to_rlp (of_repr word))
+    end)
 module Map_storage = struct
   include B32.Map
   type t = B32.t B32.Map.t
@@ -676,8 +677,25 @@ module Account = struct
     ; storage : Storage.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *)
     ; code_hash : B32.t }
-  [@@deriving lens {submodule = true; prefix = true}, yojson]
+  [@@deriving lens {submodule = true; prefix = true}]
   include TLens
+
+  module Json = struct
+    type repr =
+      { nonce : U256.t (* σ[a]_n *)
+      ; balance : U256.t (* σ[a]_b *)
+      ; storage : Storage.t (* σ[a]_s *)
+      ; code : Bytes.t (* σ[a]_c *) }
+    [@@deriving lens {submodule = true; prefix = true}, yojson]
+
+    let of_t ({ nonce; balance; storage; code; code_hash }: t) : repr =
+      { nonce; balance; storage; code }
+    let to_t ({ nonce; balance; storage; code} : repr) : t =
+      { nonce; balance; storage; code; code_hash = Crypto.keccak_256 code }
+  end
+
+  let of_yojson json = Result.map Json.to_t (Json.repr_of_yojson json)
+  let to_yojson acc = Json.repr_to_yojson (Json.of_t acc)
 
   (* Structural equality on accounts. Necessary because OCaml's polymorphic compare is broken for maps. *)
   let equal acc_1 acc_2 =

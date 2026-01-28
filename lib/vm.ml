@@ -209,17 +209,17 @@ module Context = struct
   include TLens
 
   let valid_jump_destinations code =
-    let rec loop i valid_destinations =
-      if i >= Bytes.length code then valid_destinations
+    let rec loop code l i valid_destinations =
+      if i >= l then valid_destinations
       else
         match code.[i] with
-        | '\x5b' -> loop (i + 1) (U256.(~$i) :: valid_destinations)
+        | '\x5b' -> (loop[@tailcall]) code l (i + 1) (U256.(~$i) :: valid_destinations)
         | '\x60' .. '\x7f' as opcode ->
             let push_bytes = Char.code opcode - 0x60 + 1 in
-            loop (i + 1 + push_bytes) valid_destinations
-        | _ -> loop (i + 1) valid_destinations
+            (loop[@tailcall]) code l (i + 1 + push_bytes) valid_destinations
+        | _ -> (loop[@tailcall]) code l (i + 1) valid_destinations
     in
-    loop 0 []
+    loop code (Bytes.length code) 0 []
 
   let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
     { execution_environment = ExecutionEnvironment.make ctx msg code

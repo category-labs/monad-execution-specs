@@ -47,12 +47,14 @@ let valid_block_tests_folder = fixtures_folder $/ "blockchain_tests" $/ "valid_b
 
 let load_preconditions pre (state : Host.WorldState.t) =
   let open Host.WorldState in
-  let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
+  let accounts = Host.Accounts.add_seq (Host.Accounts.to_seq pre) state.accounts in
   {state with accounts}
 
 let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
   { state with
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
+
+let total_redundant_bytes_hashed = ref 0
 
 let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
   let module Execution = Execution.Make (struct
@@ -60,11 +62,13 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
-  |> load_preconditions (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.pre)
+  |> load_preconditions fixtures.pre
   |> fun s ->
   Result.List.fold_leftM ~f:(Execution.process_block ~verify:true) s fixtures.blocks
   |> Result.map_error Execution.Error.to_string
-  |> ignore
+  |> fun _ ->
+     let redundant_bytes_hashed = Crypto.reset () in
+     total_redundant_bytes_hashed := !total_redundant_bytes_hashed + redundant_bytes_hashed
 
 let valid_block_tests () =
   Sys.readdir valid_block_tests_folder
@@ -93,4 +97,5 @@ let () =
   Format.eprintf "Promotions %d\n" !promotions
 
    *)
+  Format.printf "%d redundant bytes hashed\n" !total_redundant_bytes_hashed;
   ()

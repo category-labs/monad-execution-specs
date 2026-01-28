@@ -2,6 +2,7 @@ open Monad_lib
 open Chain.Ethereum
 open Numeric
 open Byte_string
+open Host
 
 let fixtures_file = ref None
 let test_kind = ref None
@@ -85,10 +86,10 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
      *)
     false )
 
-let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.Map.t) : bool =
+let check_postconditions (state : Host.WorldState.t) (post : Accounts.t) : bool =
   let check_account_existence_and_state addr =
-    let actual = Address.Map.find_opt addr state.accounts in
-    let expected = Address.Map.find_opt addr post in
+    let actual = Accounts.find_opt addr state.accounts in
+    let expected = Accounts.find_opt addr post in
     match (actual, expected) with
     | Some actual, Some expected -> check_account_state addr actual expected
     | Some _, None ->
@@ -99,12 +100,12 @@ let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.M
         false
     | None, None -> assert false
   in
-  let all_addresses = Address.(Set.union (Map.keys state.accounts) (Map.keys post)) in
+  let all_addresses = Address.Set.of_seq (Seq.append (Accounts.keys state.accounts) (Accounts.keys post)) in
   Address.Set.for_all check_account_existence_and_state all_addresses
 
 let load_preconditions pre (state : Host.WorldState.t) =
   let open Host.WorldState in
-  let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
+  let accounts = Accounts.add_seq (Accounts.to_seq pre) state.accounts in
   {state with accounts}
 
 let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
@@ -117,21 +118,21 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
-  |> load_preconditions (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.pre)
+  |> load_preconditions fixtures.pre
   |> fun s ->
   Result.List.fold_leftM ~f:(Execution.process_block ~trace ~verify:false) s fixtures.blocks
   |> Result.map_error Execution.Error.to_string
   |> Result.get_ok'
 
 let check_test_result (name, fixtures, post_state) =
-  let success = check_postconditions post_state (Address.Map.map Fixtures.AccountWithoutCodeHash.to_account fixtures.Fixtures.BlockchainTest.post) in
+  let success = check_postconditions post_state fixtures.Fixtures.BlockchainTest.post in
   Format.printf "Test %s: %s\n" name (if success then "PASS" else "FAIL") ;
   success
 
 let check_test_results results = List.for_all check_test_result results
 
 let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : Host.WorldState.t) =
-  let post = Address.Map.map Fixtures.AccountWithoutCodeHash.of_account post_state.accounts in
+  let post = post_state.accounts in
   let blocks = List.(tl (rev post_state.history)) in
   (* TODO: don't hard-code this *)
   let config =

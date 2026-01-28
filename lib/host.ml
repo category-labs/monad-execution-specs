@@ -7,39 +7,55 @@ let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
 let ( .^$()<- ) x lens f = Lens.modify lens f x
 
+module Accounts_mpt =
+  Mpt_lazy_imp.Make
+    (struct
+      let hash_keys = true
+    end)
+    (Address)
+    (struct
+      include Account
+      let to_bytes acc = Rlp.encode (to_rlp acc)
+    end)
+module Accounts_map = struct
+  include Address.Map
+  type t = Account.t Address.Map.t
+  let merkle_root accounts =
+    to_seq accounts
+    |> Seq.map (fun (k, v) -> (Address.to_bytes k, v))
+    |> Mpt_lazy_imp.Generic.of_seq ~hash_keys:true
+    |> Mpt_lazy_imp.Generic.merkle_root ~value_to_bytes:(fun acc -> Rlp.encode (Account.to_rlp acc))
+
+  let to_yojson = to_yojson Account.to_yojson
+  let of_yojson = of_yojson Account.of_yojson
+
+  let keys map = Seq.map fst (to_seq map)
+end
+module Accounts = Accounts_map
+
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
       includes the world state as per YP 4.1. *)
-  type t = {history : Block.t list; accounts : Account.t Address.Map.t (* σ[a] *)}
+  type t = {history : Block.t list; accounts : Accounts.t (* σ[a] *)}
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
 
-  let empty = {history = []; accounts = Address.Map.empty}
+  let empty = {history = []; accounts = Accounts.empty}
 
-  let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
-  let account_opt addr = accounts |-- Address.Map.at addr
+  let account addr = accounts |-- Accounts.at addr |-- Option.get_or_default Account.empty
+  let account_opt addr = accounts |-- Accounts.at addr
 
   let state_root (state : t) : B32.t * t =
-    let accounts =
-      Address.Map.filter_map
-        (fun addr acc -> if Account.is_empty acc then None else Some (Account.merkleized acc))
-        state.accounts
-    in
-    let state_root =
-      Address.Map.to_seq accounts
-      |> Seq.map (fun (k, v) -> (Address.to_bytes k, v))
-      |> Mpt_lazy.Generic.of_seq ~hash_keys:true
-      |> Mpt_lazy.Generic.merkle_root ~value_to_bytes:(fun acc -> Rlp.encode (Account.to_rlp acc))
-    in
+    let accounts = Accounts.filter (fun _ acc -> not (Account.is_empty acc)) state.accounts in
+    let state_root = Accounts.merkle_root accounts in
     (state_root, {state with accounts})
 
   let dump_accounts ws =
-    Address.Map.iter
-      (fun addr acc ->
+    Accounts.to_seq ws.accounts
+    |> Seq.iter (fun (addr, acc) ->
         Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
           (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) )
-      ws.accounts
 end
 
 module BlockState = struct
@@ -133,7 +149,7 @@ module BlockState = struct
       ; blob_gas_used
       ; parent_hash }
     in
-    {block_state.current_block with header}, { block_state with world_state }
+    ({block_state.current_block with header}, {block_state with world_state})
 end
 
 module TransactionState = struct
@@ -273,7 +289,7 @@ struct
     let$ () = update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount)) in
     return ()
 
-  let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
+  let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Accounts.at addr)
 
   let get_storage addr key =
     !(account addr |-- Account.storage |-- Storage.at key |-- Option.get_or_default B32.zeros)
@@ -327,7 +343,7 @@ struct
     if created_in_current_tx then
       (* Delete the account as per EIP-6780 *)
       let$ alive_before_selfdestruct = account_exists address in
-      let$ () = world_state |-- accounts |-- Address.Map.at address := None in
+      let$ () = world_state |-- accounts |-- Accounts.at address := None in
       return alive_before_selfdestruct
     else return false
 

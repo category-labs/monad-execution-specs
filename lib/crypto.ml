@@ -3,14 +3,52 @@
 open Numeric
 open Byte_string
 
+let times_hashed: (Bytes.t, bool) Hashtbl.t = Hashtbl.create 100_000
+
+let hashes : B32.t Bytes.Map.t ref = ref Bytes.Map.empty
+
+let redundant_bytes_hashed = ref 0
+
+let reset () =
+  Hashtbl.reset times_hashed;
+  let r = !redundant_bytes_hashed in
+  redundant_bytes_hashed := 0;
+  r
+
+let target_input = Bytes.of_hex_string
+"f869a020ae969e9a3e589d5f55bf39fc2428b31e3ec8ffcb7107dd2d1c5503fa1bdfb8b846f8440180a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a06c029a231254fadb724d63be769f75eedd66362df034a3e663252b49d062a666"
+
 (** [keccak_256 bytes] computes the Keccak-256 digest of a byte array. *)
 let keccak_256 (input : Bytes.t) : B32.t =
+  (*
+  (if Hashtbl.mem times_hashed input
+  then (redundant_bytes_hashed := !redundant_bytes_hashed + Bytes.length input)
+  else Hashtbl.replace times_hashed input true);
+   *)
   let bytes = Digestif.KECCAK_256.(to_raw_string (digest_string input)) in
   (* Never fails as Keccak-256 is guaranteed to produce 32 bytes. *)
   Byte_string.B32.of_bytes_exn bytes
 
 (** The Keccak-256 encoding of the empty byte array. *)
 let keccak_256_empty = keccak_256 Bytes.empty
+
+let keccak_256_char = Iarray.init 256 (fun i -> keccak_256 (Bytes.of_char (Char.chr i)))
+
+let keccak_256 (input : Bytes.t) : B32.t =
+  (*
+  let hash = ref B32.zeros in
+   hashes := Bytes.Map.update input (fun entry -> match entry with
+      | None -> hash := keccak_256 input; Some !hash
+      | Some h -> hash := h; entry) !hashes;
+   !hash
+   *)
+  B32.init (fun i ->
+      if i >= Bytes.length input then '\x00' else input.[i])
+(*
+  if input = "" then keccak_256_empty
+  else if Bytes.length input = 1 then Iarray.get keccak_256_char (Char.code input.[0])
+  else keccak_256 input
+ *)
 
 let secp256k1b = U256.(~$7)
 let secp256k1p = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F")
