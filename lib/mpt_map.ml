@@ -18,7 +18,7 @@ module Generic = struct
   [@@deriving to_yojson]
   and 'a ending = Subtree of 'a t | Value of 'a [@@deriving to_yojson]
 
-  and 'a t = {data : 'a impl; mutable merkleized : merkleization option} [@@deriving to_yojson]
+  and 'a t = {data : 'a impl; merkleized : merkleization option} [@@deriving to_yojson]
 
   let empty_hash = Crypto.keccak_256 (Rlp.encode (Rlp.Bytes ""))
   let empty = {data = Empty; merkleized = Some (Small (Rlp.encode_bytes ""))}
@@ -59,54 +59,6 @@ module Generic = struct
     | Subtree subtree when Nibbles.length path = 0 -> subtree
     | _ -> make (Extension {path; ending})
 
-  let rec filter (predicate : 'a -> bool) (trie : 'a t) =
-    match trie.data with
-    | Empty -> empty
-    | Extension {path; ending = Value v} -> if predicate v then trie else empty
-    | Extension {path; ending = Subtree subtree} ->
-        let subtree' = filter predicate subtree in
-        if Repr.phys_equal subtree subtree' then trie
-        else
-          let data =
-            match subtree'.data with
-            | Empty -> Empty
-            | Extension {path = path'; ending} -> Extension {path = Nibbles.(path ^ path'); ending}
-            | Branch (_, _) -> Extension {path; ending = Subtree subtree'}
-          in
-          make data
-    | Branch (branches, v) ->
-        let branches' = Iarray.map (filter predicate) branches in
-        if
-          Seq.(
-            for_all
-              (fun (b, b') -> Repr.phys_equal b b')
-              (zip (Iarray.to_seq branches) (Iarray.to_seq branches')) )
-        then trie
-        else
-          let non_empty_branches =
-            Iarray.to_seq branches'
-            |> Seq.mapi (fun index branch -> (index, branch))
-            |> Seq.filter (fun (index, branch) -> branch.data <> Empty)
-          in
-          let data =
-            match (Seq.uncons non_empty_branches, v) with
-            | Some ((i, b_i), bs), Some _ -> Branch (branches', v)
-            | Some ((i, b_i), bs), None -> (
-              match Seq.uncons bs with
-              | None -> (
-                (* Exactly one non-empty branch, we can compress the trie. *)
-                match b_i.data with
-                | Empty -> Empty
-                | Branch (_, _) -> Extension {path = Nibbles.of_nibble i; ending = Subtree b_i}
-                | Extension {path; ending} -> Extension {path = Nibbles.(of_nibble i ^ path); ending} )
-              (* Multiple branches, we cannot compress the trie. *)
-              | Some (_, _) -> Branch (branches', v) )
-            (* No branches. Compress to either empty (if value is empty) or extension ending in value. *)
-            | None, Some v -> Extension {path = Nibbles.empty; ending = Value v}
-            | None, None -> Empty
-          in
-          make data
-
   (* Note that we do not optimize very hard for the case where the key is not present. Every node touched will
    be assumed to be dirtied, even if the resulting trie is identical to the original one. *)
   let rec remove key (trie : 'a t) =
@@ -132,7 +84,7 @@ module Generic = struct
       match Nibbles.uncons key with
       | None -> make (Branch (branches, None))
       | Some (k_0, key) ->
-          let branches = Iarray.map (fun trie -> remove key trie) branches in
+          let branches = Iarray.mapi (fun k_i trie -> if k_0 = k_i then remove key trie else trie) branches in
           let non_empty_branches =
             Iarray.to_seq branches
             |> Seq.mapi (fun index branch -> (index, branch))
@@ -201,9 +153,6 @@ module Generic = struct
     let key = if hash_keys then B32.to_bytes (Crypto.keccak_256 key) else key in
     add (Nibbles.of_bytes key) value trie
 
-  let add_seq ?(hash_keys = false) (kvs : (Bytes.t * 'a) Seq.t) (trie : 'a t) =
-    Seq.fold_left (fun trie (k, v) -> add ~hash_keys k v trie) trie kvs
-
   let remove ?(hash_keys = false) key trie =
     let key = if hash_keys then B32.to_bytes (Crypto.keccak_256 key) else key in
     remove (Nibbles.of_bytes key) trie
@@ -255,32 +204,39 @@ module Generic = struct
 
   let merkleization_to_rlp_encoded = function Hash h -> Rlp.encode_bytes (B32.to_bytes h) | Small s -> s
 
+  let merkleization (node : 'a t) = Option.get node.merkleized
+
+  let rec assert_all_merkleized (node : 'a t) =
+    assert (Option.is_some node.merkleized) ;
+    match node.data with
+    | Empty -> ()
+    | Branch (branches, _) -> Iarray.iter assert_all_merkleized branches
+    | Extension {ending = Value _; _} -> ()
+    | Extension {ending = Subtree s; _} -> assert_all_merkleized s
+
   let rec merkleized ~(value_to_bytes : 'a -> Bytes.t) (node : 'a t) : 'a t =
     match node with
     | {merkleized = Some _} -> node
     | _ ->
-        let encoded =
+        let data, encoded =
           match node.data with
-          | Empty -> Rlp.(encode_bytes "")
+          | Empty -> (Empty, Rlp.(encode_bytes ""))
           | Branch (branches, value) ->
-              Iarray.iter (fun b -> ignore (merkleized ~value_to_bytes b)) branches ;
-              let merkleizations = Iarray.to_seq branches |> Seq.map (merkleization ~value_to_bytes) in
-              branch_to_rlp_encoded ~value_to_bytes merkleizations value
+              let branches = Iarray.map (merkleized ~value_to_bytes) branches in
+              let merkleizations = Iarray.to_seq branches |> Seq.map merkleization in
+              (Branch (branches, value), branch_to_rlp_encoded ~value_to_bytes merkleizations value)
           | Extension {path; ending} ->
-              ( match ending with
-              | Value value -> ()
-              | Subtree subtree -> ignore (merkleized ~value_to_bytes subtree) ) ;
-              extension_to_rlp_encoded ~value_to_bytes path ending
+              let ending =
+                match ending with
+                | Value value -> Value value
+                | Subtree subtree -> Subtree (merkleized ~value_to_bytes subtree)
+              in
+              (Extension {path; ending}, extension_to_rlp_encoded ~value_to_bytes path ending)
         in
         let merkleized =
           if Bytes.length encoded < 32 then Small encoded else Hash (Crypto.keccak_256 encoded)
         in
-        node.merkleized <- Some merkleized ;
-        node
-
-  and merkleization ~value_to_bytes (node : 'a t) =
-    ignore (merkleized ~value_to_bytes node) ;
-    match (merkleized ~value_to_bytes node).merkleized with Some m -> m | None -> assert false
+        {data; merkleized = Some merkleized}
 
   and branch_to_rlp_encoded ~value_to_bytes (branches : merkleization Seq.t) (value : 'a option) : Bytes.t =
     let encoded_branches = Seq.map merkleization_to_rlp_encoded branches in
@@ -296,13 +252,11 @@ module Generic = struct
         Rlp.encode_list [encoded_path; encoded_ending]
     | Subtree subtree ->
         let encoded_path = Rlp.encode_bytes (Nibbles.hex_prefix_encode path false) in
-        let encoded_ending = merkleization_to_rlp_encoded (merkleization ~value_to_bytes subtree) in
+        let encoded_ending = merkleization_to_rlp_encoded (merkleization subtree) in
         Rlp.encode_list [encoded_path; encoded_ending]
 
   let merkle_root ~value_to_bytes (trie : 'a t) =
-    match merkleization ~value_to_bytes trie with
-    | Small encoded -> Crypto.keccak_256 encoded
-    | Hash hash -> hash
+    match merkleization trie with Small encoded -> Crypto.keccak_256 encoded | Hash hash -> hash
 
   let update (k : Bytes.t) (update_fn : 'v option -> 'v option) trie =
     let entry = find_opt k trie in
@@ -312,16 +266,19 @@ module Generic = struct
     {get = (fun m -> find_opt k m); set = (fun v m -> update k (fun _ -> v) m)}
 end
 
+let depth = ref 0
 module Make (Params : sig
   val hash_keys : bool
+  val name : string
 end) (Key : sig
-  type t
+  include Map.OrderedType
   val of_bytes_exn : Bytes.t -> t
   val to_bytes : t -> Bytes.t
 end) (Value : sig
   type t
 
   val equal : t -> t -> bool
+  val commit : t -> t
 
   val to_bytes : t -> Bytes.t
 
@@ -329,43 +286,111 @@ end) (Value : sig
   val to_yojson : t -> Yojson.Safe.t
 end) =
 struct
-  type nonrec t = (Key.t * Value.t) Generic.t
+  module Key = struct
+    include Key
+    module Map = Map.Make (Key)
+  end
+
+  type t = {mpt : Value.t Generic.t; clean : (Bytes.t * Value.t) Key.Map.t; dirty : Value.t option Key.Map.t}
+
   type merkleization = Generic.merkleization
 
-  let equal : t -> t -> bool = Generic.equal (fun (_, v1) (_, v2) -> Value.equal v1 v2)
+  let equal (l : t) (r : t) =
+    Generic.equal Value.equal l.mpt r.mpt
+    && Key.Map.equal
+         (fun x y ->
+           match (x, y) with Some x, Some y -> Value.equal x y | None, None -> true | _, _ -> false )
+         l.dirty r.dirty
 
-  let empty : t = Generic.empty
+  let empty : t = {mpt = Generic.empty; clean = Key.Map.empty; dirty = Key.Map.empty}
 
   let hash_key =
     if Params.hash_keys then fun (k : Key.t) -> B32.to_bytes (Crypto.keccak_256 (Key.to_bytes k))
     else fun (k : Key.t) -> Key.to_bytes k
 
-  let of_seq (seq : (Key.t * Value.t) Seq.t) : t =
-    Generic.of_seq (Seq.map (fun (k, v) -> (hash_key k, (k, v))) seq)
+  let find_opt (k : Key.t) (trie : t) : Value.t option =
+    match Key.Map.find_opt k trie.dirty with
+    | Some None -> None
+    | Some (Some value) -> Some value
+    | None -> Option.map snd (Key.Map.find_opt k trie.clean)
+
+  let add (k : Key.t) (v : Value.t) (trie : t) : t =
+    let dirty =
+      match Key.Map.find_opt k trie.clean with
+      | Some (_, v_old) when Value.equal v v_old -> Key.Map.remove k trie.dirty
+      | _ -> Key.Map.add k (Some v) trie.dirty
+    in
+    {trie with dirty}
+
+  let remove (k : Key.t) (trie : t) : t =
+    let dirty =
+      match Key.Map.find_opt k trie.clean with
+      | None -> Key.Map.remove k trie.dirty
+      | Some _ -> Key.Map.add k None trie.dirty
+    in
+    {trie with dirty}
+
+  let add_seq (seq : (Key.t * Value.t) Seq.t) (trie : t) =
+    Seq.fold_left (fun trie (k, v) -> add k v trie) trie seq
+  let of_seq (seq : (Key.t * Value.t) Seq.t) : t = Seq.fold_left (fun trie (k, v) -> add k v trie) empty seq
+
   let to_seq (trie : t) : (Key.t * Value.t) Seq.t =
-    (* TODO: it's unnecessary to reconstruct k_enc here *)
-    Generic.to_seq trie |> Seq.map (fun (k_enc, (k, v)) -> (k, v))
+    let not_removed = function k, Some v -> Some (k, v) | _, None -> None in
+    let not_dirty (k, (_, v)) = Option.is_none (Key.Map.find_opt k trie.dirty) in
+    let dirty_entries : (Key.t * Value.t) Seq.t = Seq.filter_map not_removed (Key.Map.to_seq trie.dirty) in
+    let clean_entries : (Key.t * Value.t) Seq.t =
+      Seq.filter not_dirty (Key.Map.to_seq trie.clean) |> Seq.map (fun (k, (_kh, v)) -> (k, v))
+    in
+    Seq.append dirty_entries clean_entries
 
-  let find_hash_opt (k : Key.t) (h : B32.t) (trie : t) : Value.t option =
-    Option.map snd (Generic.find_opt (B32.to_bytes h) trie)
-  let remove_hash (k : Key.t) (h : B32.t) (trie : t) : t = Generic.remove (B32.to_bytes h) trie
-  let add_hash (k : Key.t) (h : B32.t) (v : Value.t) (trie : t) : t = Generic.add (B32.to_bytes h) (k, v) trie
+  let keys (trie : t) = Seq.map fst (to_seq trie)
 
-  let find_opt (k : Key.t) (trie : t) : Value.t option = Option.map snd (Generic.find_opt (hash_key k) trie)
-  let remove (k : Key.t) (trie : t) : t = Generic.remove (hash_key k) trie
-  let add (k : Key.t) (v : Value.t) (trie : t) : t = Generic.add (hash_key k) (k, v) trie
-  let add_seq (kvs : (Key.t * Value.t) Seq.t) (trie : t) : t =
-    Generic.add_seq (Seq.map (fun (k, v) -> (hash_key k, (k, v))) kvs) trie
+  let filter_dirty (pred : Key.t -> Value.t -> bool) (trie : t) : t =
+    let dirty = Key.Map.filter (fun k -> function None -> true | Some v -> pred k v) trie.dirty in
+    if Repr.phys_equal dirty trie.dirty then trie else {trie with dirty}
 
-  let keys (trie : t) : Key.t Seq.t = Seq.map fst (to_seq trie)
-  let values (trie : t) : Value.t Seq.t = Seq.map snd (to_seq trie)
+  let merkle_root {mpt; dirty; _} =
+    assert (Key.Map.is_empty dirty) ;
+    match mpt.merkleized with
+    | Some (Small bytes) -> Crypto.keccak_256 bytes
+    | Some (Hash hash) -> hash
+    | None -> assert false (* Must call merkleized first. *)
 
-  let filter pred = Generic.filter (fun (k, v) -> pred k v)
+  let dirty_to_yojson (map : Value.t option Key.Map.t) : Yojson.Safe.t =
+    Key.Map.to_seq map
+    |> Seq.map (fun (k, v) ->
+        (Bytes.to_hex_string (Key.to_bytes k), match v with None -> `Null | Some v -> Value.to_yojson v) )
+    |> List.of_seq
+    |> fun entries -> `Assoc entries
 
-  let merkleization : t -> merkleization =
-    Generic.merkleization ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
-  let merkleized (trie : t) : t = Generic.merkleized ~value_to_bytes:(fun (_, v) -> Value.to_bytes v) trie
-  let merkle_root : t -> B32.t = Generic.merkle_root ~value_to_bytes:(fun (_, v) -> Value.to_bytes v)
+  let clean_to_yojson (map : (Bytes.t * Value.t) Key.Map.t) : Yojson.Safe.t =
+    Key.Map.to_seq map
+    |> Seq.map (fun (k, (_, v)) -> (Bytes.to_hex_string (Key.to_bytes k), Value.to_yojson v))
+    |> List.of_seq
+    |> fun entries -> `Assoc entries
+
+  let to_yojson {mpt; clean; dirty} =
+    `Assoc
+      [ ("mpt", Generic.to_yojson Value.to_yojson mpt)
+      ; ("clean", clean_to_yojson clean)
+      ; ("dirty", dirty_to_yojson dirty) ]
+
+  let merkleized {mpt; clean; dirty} =
+    let mpt, clean =
+      Key.Map.to_seq dirty
+      |> Seq.fold_left
+           (fun (mpt, clean) (k, entry) ->
+             let kh = match Key.Map.find_opt k clean with None -> hash_key k | Some (kh, _) -> kh in
+             match entry with
+             | None -> (Generic.remove kh mpt, Key.Map.remove k clean)
+             | Some v ->
+                 let v = Value.commit v in
+                 (Generic.add kh v mpt, Key.Map.add k (kh, v) clean) )
+           (mpt, clean)
+    in
+    let mpt = Generic.merkleized ~value_to_bytes:Value.to_bytes mpt in
+    let dirty = Key.Map.empty in
+    Generic.assert_all_merkleized mpt ; {mpt; clean; dirty}
 
   exception Value_decoding_error of string
   let of_yojson : Yojson.Safe.t -> (t, string) result = function
@@ -395,8 +420,7 @@ struct
     `Assoc fields
 
   let at (k : Key.t) : (t, Value.t option) Lens.t =
-    let h = Crypto.keccak_256 (Key.to_bytes k) in
-    let get m = find_hash_opt k h m in
-    let set v m = match v with None -> remove_hash k h m | Some v -> add_hash k h v m in
+    let get m = find_opt k m in
+    let set v m = match v with None -> remove k m | Some v -> add k v m in
     Lens.{get; set}
 end

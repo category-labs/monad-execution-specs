@@ -668,7 +668,19 @@ module Map_storage = struct
 
   let equal = B32.Map.equal B32.equal
 end
-module Storage = Mpt_storage
+module Mpt_map_storage =
+  Mpt_map.Make
+    (struct
+      let hash_keys = true
+      let name = "Account Storage"
+    end)
+    (B32)
+    (struct
+      include B32
+      let commit word = word
+      let to_bytes (word : B32.t) = Rlp.encode U256.(to_rlp (of_repr word))
+    end)
+module Storage = Mpt_map_storage
 
 module Account = struct
   type t =
@@ -719,5 +731,6 @@ module Account = struct
     let storage_root = Storage.merkle_root storage in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
 
-  let merkleized account = {account with storage = Storage.merkleized account.storage}
+  let merkleized account =
+    {account with storage = Storage.merkleized account.storage }
 end

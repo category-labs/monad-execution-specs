@@ -48,7 +48,7 @@ let valid_block_tests_folder = fixtures_folder $/ "blockchain_tests" $/ "valid_b
 let load_preconditions pre (state : Host.WorldState.t) =
   let open Host.WorldState in
   let accounts = Host.Accounts.add_seq (Host.Accounts.to_seq pre) state.accounts in
-  {state with accounts}
+  snd (Host.WorldState.state_root {state with accounts})
 
 let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
   { state with
@@ -56,31 +56,68 @@ let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.Wor
 
 let total_redundant_bytes_hashed = ref 0
 
-let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
+let run_blockchain_test ((name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
   let module Execution = Execution.Make (struct
     let chain_id = fixtures.config.chain_id
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
+  |> (fun s -> snd (Host.WorldState.state_root s))
   |> fun s ->
-  Result.List.fold_leftM ~f:(Execution.process_block ~verify:true) s fixtures.blocks
-  |> Result.map_error Execution.Error.to_string
-  |> fun _ ->
-     let redundant_bytes_hashed = Crypto.reset () in
-     total_redundant_bytes_hashed := !total_redundant_bytes_hashed + redundant_bytes_hashed
+     Crypto.trace := true;
+     ignore (Result.List.fold_leftM ~f:(Execution.process_block ~verify:false) s fixtures.blocks);
+     total_redundant_bytes_hashed := !total_redundant_bytes_hashed + Crypto.reset ();
+     Crypto.trace := false
+
+let fixture_filename = ref ""
 
 let valid_block_tests () =
   Sys.readdir valid_block_tests_folder
   |> Array.to_seq
   |> Seq.filter (fun filename -> Filename.extension filename = ".json")
+  (*|> Seq.filter (fun filename -> filename = Sys.argv.(1))*)
   |> Seq.map (fun filename ->
-      let path = valid_block_tests_folder $/ filename in
+         fixture_filename := filename;
+         let path = valid_block_tests_folder $/ filename in
       let fixtures =
         Result.get_ok (Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path))
       in
       List.iter run_blockchain_test fixtures )
   |> List.of_seq
+
+module LocMap = Map.Make (struct
+  type t = (string * int * int) list
+
+  let compare = Repr.compare
+end)
+
+let relevant (filename, _, _) = String.starts_with ~prefix:"lib" filename && filename <> "lib/monad.ml"
+
+let keep_first_entry list =
+  let rec loop list acc =
+    match list with
+    | [] -> List.rev acc
+    | x :: xs when List.mem x acc -> loop xs acc
+    | x :: xs -> loop xs (x :: acc)
+  in
+  loop list []
+
+let callstack_to_location (callstack : Printexc.raw_backtrace) : (string * int * int) list =
+  Array.to_seq (Option.get (Printexc.backtrace_slots callstack))
+  |> Seq.map (fun slot ->
+      let loc = Option.get (Printexc.Slot.location slot) in
+      (loc.filename, loc.line_number, loc.end_line) )
+  |> List.of_seq
+  |> List.filter relevant
+  |> keep_first_entry
+
+let print_location loc =
+  Format.eprintf "[" ;
+  List.iter
+    (fun (filename, start_line, end_line) -> Format.eprintf "%s:%d:%d, " filename start_line end_line)
+    loc ;
+  Format.eprintf "]\n"
 
 let () =
   let ctl = Gc.get () in
@@ -95,7 +132,17 @@ let () =
   dump_allocs "Major" !major_allocs ;
   dump_allocs "Minor" !minor_allocs ;
   Format.eprintf "Promotions %d\n" !promotions
-
    *)
-  Format.printf "%d redundant bytes hashed\n" !total_redundant_bytes_hashed;
+  Format.eprintf "%s %d redundant bytes hashed\n" !fixture_filename !total_redundant_bytes_hashed;
+  (*
+  let locs =
+    List.fold_left
+      (fun map (callstack, bytes) ->
+        let loc = callstack_to_location callstack in
+        LocMap.update loc (function None -> Some bytes | Some bytes' -> Some (bytes + bytes')) map )
+      LocMap.empty !Crypto.frames
+  in
+  LocMap.to_seq locs
+  |> Seq.iter (fun (loc, total_bytes) -> Format.eprintf "%d: " total_bytes ; print_location loc)
+   *)
   ()

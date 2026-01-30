@@ -29,9 +29,26 @@ module Accounts_map = struct
   let to_yojson = to_yojson Account.to_yojson
   let of_yojson = of_yojson Account.of_yojson
 
+  let merkleized m = m
+  let filter_dirty pred = filter pred
+
+  let equal (l: t) (r : t) = equal Account.equal l r
+
   let keys map = Seq.map fst (to_seq map)
 end
-module Accounts = Accounts_map
+module Accounts_mpt_map =
+  Mpt_map.Make
+    (struct
+      let hash_keys = true
+      let name = "World State"
+    end)
+    (Address)
+    (struct
+      include Account
+      let commit acc = merkleized acc
+      let to_bytes acc = Rlp.encode (to_rlp acc)
+    end)
+module Accounts = Accounts_mpt_map
 
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
@@ -47,7 +64,9 @@ module WorldState = struct
   let account_opt addr = accounts |-- Accounts.at addr
 
   let state_root (state : t) : B32.t * t =
-    let accounts = Accounts.filter (fun _ acc -> not (Account.is_empty acc)) state.accounts in
+    let accounts =
+      Accounts.filter_dirty (fun _ acc -> not (Account.is_empty acc)) state.accounts |> Accounts.merkleized
+    in
     let state_root = Accounts.merkle_root accounts in
     (state_root, {state with accounts})
 
