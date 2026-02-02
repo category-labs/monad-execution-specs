@@ -12,7 +12,7 @@ module Revision = struct
     | Four -> "MONAD_FOUR"
     | Five -> "MONAD_FIVE"
     | Six -> "MONAD_SIX"
-    | Seven -> "MONAD_SEVEn"
+    | Seven -> "MONAD_SEVEN"
     | Eight -> "MONAD_EIGHT"
     | Next -> "MONAD_NEXT"
 
@@ -24,7 +24,7 @@ module Revision = struct
     | "MONAD_FOUR" -> Some Four
     | "MONAD_FIVE" -> Some Five
     | "MONAD_SIX" -> Some Six
-    | "MONAD_SEVEn" -> Some Seven
+    | "MONAD_SEVEN" -> Some Seven
     | "MONAD_EIGHT" -> Some Eight
     | "MONAD_NEXT" -> Some Next
     | _ -> None

@@ -18,11 +18,11 @@ module Address = struct
   type create2_params = {salt : B32.t; initcode : Bytes.t}
 
   (* YP (95) *)
-  let of_contract_creation ~(sender : t) ~(nonce : U256.t) ~(create2 : create2_params option) =
+  let of_contract_creation ~(sender : t) ~(nonce : U64.t) ~(create2 : create2_params option) =
     of_bytes32_truncating
       (Crypto.keccak_256
          ( match create2 with
-         | None -> Rlp.(encode (List [to_rlp sender; U256.(to_rlp (nonce - one))]))
+         | None -> Rlp.(encode (List [to_rlp sender; U64.(to_rlp (nonce - one))]))
          | Some {salt; initcode} ->
              Bytes.(
                of_char '\xff'
@@ -102,7 +102,13 @@ module Transaction = struct
   end
 
   module Authorization = struct
-    type t = {chain_id : U256.t; nonce : U64.t; address : Address.t; y_parity : U8.t; r : U256.t; s : U256.t}
+    type t =
+      { chain_id : U256.t [@key "chainId"]
+      ; nonce : U64.t
+      ; address : Address.t
+      ; y_parity : U8.t [@key "v"]
+      ; r : U256.t
+      ; s : U256.t }
     [@@deriving yojson]
 
     let to_rlp {chain_id; nonce; address; y_parity; r; s} =
@@ -127,7 +133,7 @@ module Transaction = struct
 
   (* YP 4.2 *)
   type legacy_tx =
-    { nonce : U256.t (* T_n *)
+    { nonce : U64.t (* T_n *)
     ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
@@ -140,7 +146,7 @@ module Transaction = struct
   [@@deriving yojson {strict = false}]
 
   type access_list_tx =
-    { nonce : U256.t (* T_n *)
+    { nonce : U64.t (* T_n *)
     ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
@@ -154,7 +160,7 @@ module Transaction = struct
   [@@deriving yojson {strict = false}]
 
   type fee_market_tx =
-    { nonce : U256.t (* T_n *)
+    { nonce : U64.t (* T_n *)
     ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
@@ -170,7 +176,7 @@ module Transaction = struct
 
   (** EIP-7702 transaction. *)
   type set_code_tx =
-    { nonce : U256.t (* T_n *)
+    { nonce : U64.t (* T_n *)
     ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
@@ -260,7 +266,7 @@ module Transaction = struct
     match tx with
     | Legacy tx ->
         Rlp.List
-          [ U256.to_rlp tx.nonce
+          [ U64.to_rlp tx.nonce
           ; Uint.to_rlp tx.gas_price
           ; Uint.to_rlp tx.gas_limit
           ; Address.t_opt_to_rlp tx.to_
@@ -272,7 +278,7 @@ module Transaction = struct
     | AccessList tx ->
         Rlp.List
           [ Uint.to_rlp tx.chain_id
-          ; U256.to_rlp tx.nonce
+          ; U64.to_rlp tx.nonce
           ; Uint.to_rlp tx.gas_price
           ; Uint.to_rlp tx.gas_limit
           ; Address.t_opt_to_rlp tx.to_
@@ -285,7 +291,7 @@ module Transaction = struct
     | FeeMarket tx ->
         Rlp.List
           [ Uint.to_rlp tx.chain_id
-          ; U256.to_rlp tx.nonce
+          ; U64.to_rlp tx.nonce
           ; Uint.to_rlp tx.max_priority_fee_per_gas
           ; Uint.to_rlp tx.max_fee_per_gas
           ; Uint.to_rlp tx.gas_limit
@@ -299,7 +305,7 @@ module Transaction = struct
     | SetCode tx ->
         Rlp.List
           [ Uint.to_rlp tx.chain_id
-          ; U256.to_rlp tx.nonce
+          ; U64.to_rlp tx.nonce
           ; Uint.to_rlp tx.max_priority_fee_per_gas
           ; Uint.to_rlp tx.max_fee_per_gas
           ; Uint.to_rlp tx.gas_limit
@@ -325,7 +331,7 @@ module Transaction = struct
           (* Pre EIP-155 transaction *)
           Rlp.encode
             (Rlp.List
-               [ U256.to_rlp tx.nonce
+               [ U64.to_rlp tx.nonce
                ; Uint.to_rlp tx.gas_price
                ; Uint.to_rlp tx.gas_limit
                ; Address.t_opt_to_rlp tx.to_
@@ -335,7 +341,7 @@ module Transaction = struct
           (* EIP-155 transaction *)
           Rlp.encode
             (Rlp.List
-               [ U256.to_rlp tx.nonce
+               [ U64.to_rlp tx.nonce
                ; Uint.to_rlp tx.gas_price
                ; Uint.to_rlp tx.gas_limit
                ; Address.t_opt_to_rlp tx.to_
@@ -351,7 +357,7 @@ module Transaction = struct
           ^ Rlp.encode
               (Rlp.List
                  [ Uint.to_rlp chain_id
-                 ; U256.to_rlp tx.nonce
+                 ; U64.to_rlp tx.nonce
                  ; Uint.to_rlp tx.gas_price
                  ; Uint.to_rlp tx.gas_limit
                  ; Address.t_opt_to_rlp tx.to_
@@ -365,7 +371,7 @@ module Transaction = struct
           ^ Rlp.encode
               (Rlp.List
                  [ Uint.to_rlp chain_id
-                 ; U256.to_rlp tx.nonce
+                 ; U64.to_rlp tx.nonce
                  ; Uint.to_rlp tx.max_priority_fee_per_gas
                  ; Uint.to_rlp tx.max_fee_per_gas
                  ; Uint.to_rlp tx.gas_limit
@@ -380,7 +386,7 @@ module Transaction = struct
           ^ Rlp.encode
               (Rlp.List
                  [ Uint.to_rlp chain_id
-                 ; U256.to_rlp tx.nonce
+                 ; U64.to_rlp tx.nonce
                  ; Uint.to_rlp tx.max_priority_fee_per_gas
                  ; Uint.to_rlp tx.max_fee_per_gas
                  ; Uint.to_rlp tx.gas_limit
@@ -627,7 +633,7 @@ end
 
 module Account = struct
   type t =
-    { nonce : U256.t (* σ[a]_n *)
+    { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t (* σ[a]_b *)
     ; storage : B32.t B32.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
@@ -636,16 +642,16 @@ module Account = struct
 
   (* Structural equality on accounts. Necessary because OCaml's polymorphic compare is broken for maps. *)
   let equal acc_1 acc_2 =
-    U256.(acc_1.nonce = acc_2.nonce)
+    U64.(acc_1.nonce = acc_2.nonce)
     && U256.(acc_1.balance = acc_2.balance)
     && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
     && Bytes.(acc_1.code = acc_2.code)
   let ( = ) = equal
 
-  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U256.zero}
+  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U64.zero}
 
   (* YP (14) *)
-  let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U256.(nonce = zero) && Bytes.(code = empty)
+  let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
 
   let to_rlp {nonce; balance; storage; code} =
     let storage_root =
@@ -662,5 +668,5 @@ module Account = struct
       mpt.root_hash
     in
     let code_hash = Crypto.keccak_256 code in
-    Rlp.List [U256.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
+    Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
 end

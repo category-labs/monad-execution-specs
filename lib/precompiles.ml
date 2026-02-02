@@ -38,7 +38,7 @@ let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
 
         let$ addr = Crypto.ecrecover {r; s; y_parity} h in
 
-        return (Address.to_bytes addr) ) )
+        return (B32.to_bytes (Address.to_bytes32 addr)) ) )
 
 let sha256_address = Address.of_hex_string "0x02"
 let sha256 (msg : Evmc.Message.t) : Evmc.Result.t =
@@ -50,7 +50,7 @@ let ripemd160_address = Address.of_hex_string "0x03"
 let ripemd160 (msg : Evmc.Message.t) : Evmc.Result.t =
   check_gas msg
     Gas.(~$600 + (~$120 * bytes_to_whole_words ~$(Bytes.length msg.input_data)))
-    (fun () -> Some (B20.to_bytes (Crypto.ripemd_160 msg.input_data)))
+    (fun () -> Some (B32.to_bytes (B20.to_bytes32 (Crypto.ripemd_160 msg.input_data))))
 
 let identity_address = Address.of_hex_string "0x04"
 let identity (msg : Evmc.Message.t) : Evmc.Result.t =

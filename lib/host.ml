@@ -219,13 +219,17 @@ module TransactionState = struct
       |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.address, k)))
       |> StorageKey.Set.of_seq
     in
+    let tx_gas_price =
+      (* If this option was None, the transaction would have already been discarded as invalid. *)
+      Option.get (Gas.tx_effective_gas_price block_state.current_block.header.base_fee_per_gas tx)
+    in
     { initial_world_state = block_state.world_state
     ; world_state = block_state.world_state
     ; current_block = block_state.current_block
     ; transient_storage = Address.Map.empty
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; tx_origin = sender
-    ; tx_gas_price = Gas.tx_effective_gas_price block_state.current_block.header.base_fee_per_gas tx
+    ; tx_gas_price
     ; self_destruct = Address.Set.empty
     ; logs = []
     ; touched = Address.Set.empty
@@ -332,7 +336,7 @@ struct
     && not msg.static
 
   let increment_nonce (addr : Address.t) =
-    update_field (account addr |-- nonce) (fun nonce -> U256.(nonce + one))
+    update_field (account addr |-- nonce) (fun nonce -> U64.(nonce + one))
 
   let process_call (msg : Evmc.Message.t) =
     assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
@@ -358,7 +362,7 @@ struct
           (if msg.kind = Create2 then Some {salt = msg.create2_salt; initcode = msg.input_data} else None)
     in
     let$ pre_existent_account = !(account create_address) in
-    if U256.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
+    if U64.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
       (* EIP-684 *)
       return
         Evmc.Result.
@@ -373,7 +377,7 @@ struct
             Address.Set.add create_address addresses )
       in
       let$ () = account create_address |-- storage := B32.Map.empty in
-      let$ () = account create_address |-- nonce := U256.one in
+      let$ () = account create_address |-- nonce := U64.one in
       let$ () = move_ether msg.sender create_address msg.value in
 
       let$ result =
