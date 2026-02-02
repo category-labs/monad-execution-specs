@@ -32,6 +32,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
       | Cannot_pay_floor_gas of {floor_gas : Gas.t}
       | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
       | Empty_authorization_list
+      | Transaction_fee_below_base of {base_fee_per_gas : Gas.t}
     [@@deriving to_yojson]
 
     type t =
@@ -98,8 +99,8 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     let open TransactionState in
     (* As per EIP-7702, invalid authorizations are skipped. *)
     if
-      (U256.(authorization.chain_id <> zero) && Uint.( U256.to_uint authorization.chain_id <> Params.chain_id))
-      || U64.(authorization.nonce < max_t)
+      (U256.(authorization.chain_id <> zero) && Uint.(U256.to_uint authorization.chain_id <> Params.chain_id))
+      || U64.(authorization.nonce = max_t)
     then transaction_state
     else
       match Transaction.Authorization.authority authorization with
@@ -110,16 +111,14 @@ module Make (Params : Chain.Monad.PARAMS) = struct
               accessed_addresses = Address.Set.add authority transaction_state.accessed_addresses }
           in
           let Account.{code; nonce; _} = transaction_state.^(account authority) in
-          if
-            (Bytes.(code = empty) || Delegation.is_valid_delegation code)
-            && Uint.(U64.to_uint authorization.nonce = U256.to_uint nonce)
+          if (Bytes.(code = empty) || Delegation.is_valid_delegation code) && U64.(authorization.nonce = nonce)
           then
             transaction_state
             |> account authority
                ^%= fun (acc : Account.t) ->
                { acc with
                  code = Delegation.delegation_code authorization.address
-               ; nonce = U256.(acc.nonce + one) }
+               ; nonce = U64.(acc.nonce + one) }
           else transaction_state
 
   let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) :
@@ -135,9 +134,10 @@ module Make (Params : Chain.Monad.PARAMS) = struct
 
     (* Basic validity checks. *)
     (* Nonce *)
-    let$ () =
-      when_ U256.(tx_nonce >= of_uint64 Uint64.max_uint) (invalid_transaction block tx Nonce_overflow)
-    in
+    let$ () = when_ U64.(tx_nonce = max_t) (invalid_transaction block tx Nonce_overflow) in
+    let sender = Option.get (Transaction.sender Params.chain_id tx) in
+    let sender_account = block_state.world_state.^(WorldState.account sender) in
+    let$ () = when_ U64.(sender_account.nonce <> tx_nonce) (invalid_transaction block tx Invalid_nonce) in
     (* Initcode size *)
     let$ () =
       match Transaction.call_or_create tx with
@@ -167,12 +167,13 @@ module Make (Params : Chain.Monad.PARAMS) = struct
      that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
     (* TODO: check transaction's suggested gas fee is above the block's base gas fee. This should go in
      validate_header. *)
-    let effective_gas_price = Gas.tx_effective_gas_price base_fee_per_gas tx in
+    let$ effective_gas_price =
+      match Gas.tx_effective_gas_price base_fee_per_gas tx with
+      | Some effective_gas_price -> Ok effective_gas_price
+      | None -> invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas})
+    in
     let max_gas_fee = Gas.tx_max_gas_fee tx in
 
-    let sender = Option.get (Transaction.sender Params.chain_id tx) in
-    let sender_account = block_state.world_state.^(WorldState.account sender) in
-    let$ () = when_ U256.(sender_account.nonce <> tx_nonce) (invalid_transaction block tx Invalid_nonce) in
     let$ () =
       when_
         Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value)
@@ -195,8 +196,6 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     in
     let total_fee = U256.of_uint_exn total_fee in
 
-    (* The yellow paper does not specify a behaviour for nonce overflows. *)
-    let$ () = when_ U256.(sender_account.nonce = max_t) (invalid_transaction block tx Nonce_overflow) in
     (* Irrevocable change: pay gas fees. YP (73), YP (74). *)
     let block_state =
       block_state.^(account sender) <-

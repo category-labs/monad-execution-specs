@@ -79,14 +79,12 @@ let tx_floor_gas (tx : Transaction.t) =
 let tx_effective_gas_price (base_fee_per_gas : t) (tx : Transaction.t) =
   match Transaction.fee_mechanism tx with
   | FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas} ->
-      assert (max_fee_per_gas >= max_priority_fee_per_gas) ;
-      assert (max_fee_per_gas >= base_fee_per_gas) ;
-      let priority_fee_per_gas = min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas) in
-      let effective_gas_price = priority_fee_per_gas + base_fee_per_gas in
-      effective_gas_price
-  | LegacyFee {gas_price} ->
-      assert (gas_price >= base_fee_per_gas) ;
-      gas_price
+      if max_fee_per_gas < max_priority_fee_per_gas || max_fee_per_gas < base_fee_per_gas then None
+      else
+        let priority_fee_per_gas = min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas) in
+        let effective_gas_price = priority_fee_per_gas + base_fee_per_gas in
+        Some effective_gas_price
+  | LegacyFee {gas_price} -> if gas_price < base_fee_per_gas then None else Some gas_price
 
 let tx_max_gas_fee (tx : Transaction.t) =
   let tx_gas_limit = Transaction.gas_limit tx in

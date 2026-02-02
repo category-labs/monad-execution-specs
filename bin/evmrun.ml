@@ -45,7 +45,7 @@ let gas_limit = Uint.of_uint64 !gas_limit
 
 let tx =
   Transaction.Legacy
-    { nonce = U256.zero
+    { nonce = U64.zero
     ; gas_limit
     ; value = U256.zero
     ; r = U256.zero
