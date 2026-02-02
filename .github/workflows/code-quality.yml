@@ -2,6 +2,10 @@ name: Code Quality Checks
 
 on:
   push:
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   formatting-check:
@@ -14,11 +18,11 @@ jobs:
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5
+          ocaml-compiler: 5.4.0
 
       - name: Install ocamlformat
         run: |
-          opam install ocamlformat
+          opam install ocamlformat.0.28.1
 
       - name: Run ocamlformat
         run: |
