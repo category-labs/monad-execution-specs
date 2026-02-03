@@ -19,6 +19,6 @@
   yojson
   ppx_deriving_yojson.runtime)
  (ocamlopt_flags
-   (:standard -O3 -inlining-report))
+  (:standard -O3 -inlining-report))
  (preprocess
   (pps lens.ppx_deriving ppx_deriving_yojson)))

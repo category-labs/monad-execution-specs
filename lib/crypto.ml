@@ -20,8 +20,8 @@ let reset () =
 (** [keccak_256 bytes] computes the Keccak-256 digest of a byte array. *)
 let keccak_256 (input : Bytes.t) : B32.t =
   if !trace then
-    if Hashtbl.mem times_hashed input then (
-      redundant_bytes_hashed := !redundant_bytes_hashed + Bytes.length input)
+    if Hashtbl.mem times_hashed input then
+      redundant_bytes_hashed := !redundant_bytes_hashed + Bytes.length input
     else Hashtbl.replace times_hashed input true ;
   let bytes = Digestif.KECCAK_256.(to_raw_string (digest_string input)) in
   (* Never fails as Keccak-256 is guaranteed to produce 32 bytes. *)

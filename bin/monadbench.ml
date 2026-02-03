@@ -193,10 +193,10 @@ let get_put_raw =
 let get_put_raw_lens =
   Evm.Vm.M.(
     let$ state = get in
-    let pc = U256.(one + (state.^(my_machine_state |-- my_pc))) in
+    let pc = U256.(one + state.^(my_machine_state |-- my_pc)) in
     let$ state = get in
     let state = state.^(my_machine_state |-- my_pc) <- pc in
-    put state)
+    put state )
 
 let update_lens =
   Evm.Vm.M.(update_field (Vm.Context.machine_state |-- Vm.MachineState.pc) (fun pc -> U256.(pc + one)))

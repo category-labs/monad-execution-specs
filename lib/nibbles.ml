@@ -35,7 +35,7 @@ let init length n_i =
   let bytes = Bytes.init length_bytes b_i in
   {bytes; start = 0; length}
 
-let (^) (n_1 : t) (n_2 : t) =
+let ( ^ ) (n_1 : t) (n_2 : t) =
   let l_1 = length n_1 in
   let l_2 = length n_2 in
   let n_i i = if i < l_1 then n_1.$[i] else n_2.$[i - l_1] in

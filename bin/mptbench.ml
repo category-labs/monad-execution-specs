@@ -280,12 +280,12 @@ module Experiment_WorldState = struct
     |> Storage.merkleized
 
   let initial_accounts : WorldState.t =
-      List.fold_left
-        (fun state address ->
-          let state = state.^(account address |-- Account.nonce) <- U256.one in
-          state.^(account address |-- Account.storage) <- initial_storage address )
-        WorldState.empty addresses
-      |> WorldState.state_root
+    List.fold_left
+      (fun state address ->
+        let state = state.^(account address |-- Account.nonce) <- U256.one in
+        state.^(account address |-- Account.storage) <- initial_storage address )
+      WorldState.empty addresses
+    |> WorldState.state_root
     |> snd
 
   let account_storage address slot =

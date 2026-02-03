@@ -272,11 +272,10 @@ struct
     type state = T.t
 
     open Lens.Infix
-    let[@inline] put s =
-      update (fun _ -> s)
+    let[@inline] put s = update (fun _ -> s)
     let[@inline] ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
-      let[@inline] upd s = (l.set[@inlined]) x s in
-      (update[@inlined]) upd
+      let[@inline] upd s = (l.set [@inlined]) x s in
+      (update [@inlined]) upd
     let[@inline] ( ! ) (l : (state, 'x) Lens.t) : 'x t = l.get <$> get
     let[@inline] update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t = update (l ^%= f)
     (*

@@ -197,7 +197,10 @@ module Generic = struct
     | _ -> false
 
   and ending_equal elt_equal l r =
-    match (l, r) with Value l, Value r -> elt_equal l r | Subtree l, Subtree r -> equal elt_equal l r | _ -> false
+    match (l, r) with
+    | Value l, Value r -> elt_equal l r
+    | Subtree l, Subtree r -> equal elt_equal l r
+    | _ -> false
 
   let merkleization_to_rlp_encoded = function Hash h -> Rlp.encode_bytes (B32.to_bytes h) | Small s -> s
 

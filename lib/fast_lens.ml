@@ -2,9 +2,8 @@
 
 type ('a, 'b) t = ('a, 'b) Lens.t
 
-
-let[@inline] (.^()) obj (lens : ('a, 'b) t) = (lens.get[@inlined]) obj
-let[@inline] (.^()<-) obj (lens : ('a, 'b) t) v = (lens.set[@inlined]) v obj
+let[@inline] ( .^() ) obj (lens : ('a, 'b) t) = (lens.get [@inlined]) obj
+let[@inline] ( .^()<- ) obj (lens : ('a, 'b) t) v = (lens.set [@inlined]) v obj
 
 let[@inline] ( |- ) f g x = (g [@inlined]) ((f [@inlined]) x)
 

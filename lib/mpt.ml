@@ -11,7 +11,7 @@ module Trie = struct
 
   type t = Empty | Branch of t Iarray.t * Bytes.t
 
-  let rec insert (k : Nibbles.t) ?(depth = 0) (v :Bytes.t) = function
+  let rec insert (k : Nibbles.t) ?(depth = 0) (v : Bytes.t) = function
     | Branch (branches, _) when depth = Nibbles.length k -> Branch (branches, v)
     | Branch (branches, v') ->
         let k_i = Nibbles.(k.$[depth]) in
@@ -104,9 +104,7 @@ module PatriciaTrie = struct
     Iarray.init branching_factor (fun i -> if i = k_0 then trie_0 else if i = k_1 then trie_1 else Empty)
 
   let extension ~path ~ending =
-    match ending with
-    | Subtree subtree when Nibbles.length path = 0 -> subtree
-    | _ -> Extension {path; ending}
+    match ending with Subtree subtree when Nibbles.length path = 0 -> subtree | _ -> Extension {path; ending}
 
   let rec graft_disjoint (path, ending) (key, value) =
     match (Nibbles.uncons path, Nibbles.uncons key, ending) with
@@ -120,8 +118,8 @@ module PatriciaTrie = struct
         assert (p_0 <> k_0) ;
         Subtree
           (Branch
-             ( two_branches (p_0, extension ~path ~ending) (k_0, extension ~path:key ~ending:(Value value))
-             , "" ) )
+             (two_branches (p_0, extension ~path ~ending) (k_0, extension ~path:key ~ending:(Value value)), "")
+          )
 
   and insert (trie : t) key value =
     match trie with
@@ -137,7 +135,7 @@ module PatriciaTrie = struct
           | Value _ ->
               (* This can only happen if p_0 = p_1 = k_0 = k_1 = "". *)
               Extension {path = key; ending = Value value}
-        else extension ~path:p_0 ~ending:ending
+        else extension ~path:p_0 ~ending
     | Branch (branches, branch_value) -> (
       match Nibbles.uncons key with
       | None -> Branch (branches, value)
@@ -273,7 +271,11 @@ let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
   entries |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, v)) |> PatriciaTrie.of_seq |> of_patricia
 
 let of_seq_via_trie (entries : (Bytes.t * Bytes.t) Seq.t) =
-  entries |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, v)) |> Trie.of_seq |> PatriciaTrie.of_trie |> of_patricia
+  entries
+  |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, v))
+  |> Trie.of_seq
+  |> PatriciaTrie.of_trie
+  |> of_patricia
 
 let empty = of_seq Seq.empty
 

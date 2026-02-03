@@ -53,7 +53,7 @@ let round_trip_hp_ok (nibbles, flag) =
 let test_case_of_fixture (name, fixture) =
   let open Fixtures.TrieTest in
   let trie = Mpt.of_seq (List.to_seq fixture.entries) in
-  let root' = Mpt.merkle_root  trie in
+  let root' = Mpt.merkle_root trie in
   Alcotest.(test_case name `Quick (fun () -> check' b32 ~msg:"Root" ~expected:fixture.root ~actual:root'))
 
 let test_fixture_file ?(hash_keys = false) file =
@@ -98,10 +98,16 @@ let patricia_test entries =
       end )
  *)
 
-module Test_storage = Mpt_lazy.Make(struct let hash_keys = true end)(B32)(B32)
+module Test_storage =
+  Mpt_lazy.Make
+    (struct
+      let hash_keys = true
+    end)
+    (B32)
+    (B32)
 
 let compare_root (entries : (B32.t * B32.t) list) : unit -> unit =
-  fun () ->
+ fun () ->
   let entries = List.to_seq entries in
   let generic_entries = Seq.map (fun (k, v) -> (B32.to_bytes k, B32.to_bytes v)) entries in
   let generic = Mpt_lazy.Generic.of_seq ~hash_keys:true generic_entries in
@@ -113,11 +119,9 @@ let compare_root (entries : (B32.t * B32.t) list) : unit -> unit =
 let b32 x = Numeric.U256.(to_repr ~$x)
 
 let misc_tests =
-  [
-    ("Empty", `Quick, compare_root [])
-    ;("Singleton", `Quick, compare_root [ (b32 0, b32 1) ])
-    ;("Three", `Quick, compare_root [ (b32 0, b32 1); (b32 1, b32 2); (b32 9, b32 5) ])
-  ]
+  [ ("Empty", `Quick, compare_root [])
+  ; ("Singleton", `Quick, compare_root [(b32 0, b32 1)])
+  ; ("Three", `Quick, compare_root [(b32 0, b32 1); (b32 1, b32 2); (b32 9, b32 5)]) ]
 
 let () =
   let open Alcotest in
@@ -138,7 +142,7 @@ let () =
       , [ check_prop ~count:1000 ~print:print_entries ~name:"round_trip_mpt_ok entries" gen_entries
             round_trip_mpt_ok ] )
     ;*)
-      ( "Various", misc_tests )
+      ("Various", misc_tests)
     ; test_fixture_file ~hash_keys:true "hex_encoded_securetrie_test.json"
     ; test_fixture_file ~hash_keys:true "trietest_secureTrie.json"
     ; test_fixture_file ~hash_keys:true "trieanyorder_secureTrie.json"

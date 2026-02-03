@@ -15,7 +15,8 @@
  (public_name mptbench)
  (modes exe)
  (libraries monad_lib)
- (preprocess (pps lens.ppx_deriving ppx_deriving_yojson)))
+ (preprocess
+  (pps lens.ppx_deriving ppx_deriving_yojson)))
 
 (executable
  (name blockbench)
@@ -23,7 +24,7 @@
  (modes exe)
  (libraries monad_lib)
  (ocamlopt_flags
-   (:standard -O3 -inlining-report)))
+  (:standard -O3 -inlining-report)))
 
 (executable
  (name monadbench)
@@ -31,4 +32,4 @@
  (modes exe)
  (libraries monad_lib)
  (ocamlopt_flags
-   (:standard -O3 -inlining-report)))
+  (:standard -O3 -inlining-report)))

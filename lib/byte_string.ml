@@ -135,8 +135,7 @@ struct
   let zeros = make '\x00'
 
   let of_bytes_exn (bs : Bytes.t) : t =
-    if (of_bytes bs) = None then failwith (Bytes.to_hex_string bs) else
-    Option.get (of_bytes bs)
+    if of_bytes bs = None then failwith (Bytes.to_hex_string bs) else Option.get (of_bytes bs)
   let to_bytes (bs : t) : string = (bs :> string)
 
   let to_seq (bs : t) = String.to_seq (bs :> string)

@@ -32,7 +32,7 @@ module Accounts_map = struct
   let merkleized m = m
   let filter_dirty pred = filter pred
 
-  let equal (l: t) (r : t) = equal Account.equal l r
+  let equal (l : t) (r : t) = equal Account.equal l r
 
   let keys map = Seq.map fst (to_seq map)
 end

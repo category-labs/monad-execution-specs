@@ -700,10 +700,9 @@ module Account = struct
       ; code : Bytes.t (* σ[a]_c *) }
     [@@deriving lens {submodule = true; prefix = true}, yojson]
 
-    let of_t ({ nonce; balance; storage; code; code_hash }: t) : repr =
-      { nonce; balance; storage; code }
-    let to_t ({ nonce; balance; storage; code} : repr) : t =
-      { nonce; balance; storage; code; code_hash = Crypto.keccak_256 code }
+    let of_t ({nonce; balance; storage; code; code_hash} : t) : repr = {nonce; balance; storage; code}
+    let to_t ({nonce; balance; storage; code} : repr) : t =
+      {nonce; balance; storage; code; code_hash = Crypto.keccak_256 code}
   end
 
   let of_yojson json = Result.map Json.to_t (Json.repr_of_yojson json)
@@ -731,6 +730,5 @@ module Account = struct
     let storage_root = Storage.merkle_root storage in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
 
-  let merkleized account =
-    {account with storage = Storage.merkleized account.storage }
+  let merkleized account = {account with storage = Storage.merkleized account.storage}
 end

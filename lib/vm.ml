@@ -198,6 +198,8 @@ module ExecutionEnvironment = struct
     ; blob_base_fee = U256.zero }
 end
 
+let valid_jump_destinations : U256.t list Bytes.Map.t ref = ref Bytes.Map.empty
+
 module Context = struct
   type t =
     { execution_environment : ExecutionEnvironment.t (* I *)
@@ -209,17 +211,24 @@ module Context = struct
   include TLens
 
   let valid_jump_destinations code =
-    let rec loop code l i valid_destinations =
-      if i >= l then valid_destinations
-      else
-        match code.[i] with
-        | '\x5b' -> (loop[@tailcall]) code l (i + 1) (U256.(~$i) :: valid_destinations)
-        | '\x60' .. '\x7f' as opcode ->
-            let push_bytes = Char.code opcode - 0x60 + 1 in
-            (loop[@tailcall]) code l (i + 1 + push_bytes) valid_destinations
-        | _ -> (loop[@tailcall]) code l (i + 1) valid_destinations
-    in
-    loop code (Bytes.length code) 0 []
+    match Bytes.Map.find_opt code !valid_jump_destinations with
+    | Some jd -> jd
+    | None ->
+        let jd =
+          let rec loop code l i valid_destinations =
+            if i >= l then valid_destinations
+            else
+              match code.[i] with
+              | '\x5b' -> (loop [@tailcall]) code l (i + 1) (U256.(~$i) :: valid_destinations)
+              | '\x60' .. '\x7f' as opcode ->
+                  let push_bytes = Char.code opcode - 0x60 + 1 in
+                  (loop [@tailcall]) code l (i + 1 + push_bytes) valid_destinations
+              | _ -> (loop [@tailcall]) code l (i + 1) valid_destinations
+          in
+          loop code (Bytes.length code) 0 []
+        in
+        valid_jump_destinations := Bytes.Map.add code jd !valid_jump_destinations ;
+        jd
 
   let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
     { execution_environment = ExecutionEnvironment.make ctx msg code

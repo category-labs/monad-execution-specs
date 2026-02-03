@@ -459,7 +459,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     (* TODO coalesce destructing dead accounts here *)
 
     (* Compute roots and add the finalized block to the blockchain. *)
-    let (finalized_block, block_state) = BlockState.finalize_current_block block_state in
+    let finalized_block, block_state = BlockState.finalize_current_block block_state in
     let$ () = validate_block world_state finalized_block in
 
     let$ () =

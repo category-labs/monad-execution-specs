@@ -295,13 +295,6 @@ struct
 
   type merkleization = Generic.merkleization
 
-  let equal (l : t) (r : t) =
-    Generic.equal Value.equal l.mpt r.mpt
-    && Key.Map.equal
-         (fun x y ->
-           match (x, y) with Some x, Some y -> Value.equal x y | None, None -> true | _, _ -> false )
-         l.dirty r.dirty
-
   let empty : t = {mpt = Generic.empty; clean = Key.Map.empty; dirty = Key.Map.empty}
 
   let hash_key =
@@ -391,6 +384,15 @@ struct
     let mpt = Generic.merkleized ~value_to_bytes:Value.to_bytes mpt in
     let dirty = Key.Map.empty in
     Generic.assert_all_merkleized mpt ; {mpt; clean; dirty}
+
+  let contains_all (l : t) (r : t) =
+    to_seq r
+    |> Seq.for_all (fun (k, v_r) ->
+        match find_opt k l with Some v_l -> Value.(equal v_l v_r) | None -> false )
+
+  let equal (l : t) (r : t) =
+    if Key.Map.is_empty l.dirty && Key.Map.is_empty r.dirty then l.mpt.merkleized = r.mpt.merkleized
+    else contains_all l r && contains_all r l
 
   exception Value_decoding_error of string
   let of_yojson : Yojson.Safe.t -> (t, string) result = function

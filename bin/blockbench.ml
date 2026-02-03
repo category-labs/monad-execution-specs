@@ -65,10 +65,10 @@ let run_blockchain_test ((name : string), (fixtures : Fixtures.BlockchainTest.te
   |> load_preconditions fixtures.pre
   |> (fun s -> snd (Host.WorldState.state_root s))
   |> fun s ->
-     Crypto.trace := true;
-     ignore (Result.List.fold_leftM ~f:(Execution.process_block ~verify:false) s fixtures.blocks);
-     total_redundant_bytes_hashed := !total_redundant_bytes_hashed + Crypto.reset ();
-     Crypto.trace := false
+  (*Crypto.trace := true;*)
+  ignore (Result.List.fold_leftM ~f:(Execution.process_block ~verify:false) s fixtures.blocks) ;
+  total_redundant_bytes_hashed := !total_redundant_bytes_hashed + Crypto.reset () ;
+  Crypto.trace := false
 
 let fixture_filename = ref ""
 
@@ -78,8 +78,8 @@ let valid_block_tests () =
   |> Seq.filter (fun filename -> Filename.extension filename = ".json")
   (*|> Seq.filter (fun filename -> filename = Sys.argv.(1))*)
   |> Seq.map (fun filename ->
-         fixture_filename := filename;
-         let path = valid_block_tests_folder $/ filename in
+      fixture_filename := filename ;
+      let path = valid_block_tests_folder $/ filename in
       let fixtures =
         Result.get_ok (Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path))
       in
@@ -133,7 +133,7 @@ let () =
   dump_allocs "Minor" !minor_allocs ;
   Format.eprintf "Promotions %d\n" !promotions
    *)
-  Format.eprintf "%s %d redundant bytes hashed\n" !fixture_filename !total_redundant_bytes_hashed;
+  Format.eprintf "%s %d redundant bytes hashed\n" !fixture_filename !total_redundant_bytes_hashed ;
   (*
   let locs =
     List.fold_left
