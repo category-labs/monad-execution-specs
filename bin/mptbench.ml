@@ -230,7 +230,7 @@ module Experiment_accounts = struct
   let initial_accounts : Accounts.t =
     List.fold_left
       (fun state address ->
-        let state = state.^(account address |-- Account.nonce) <- U256.one in
+        let state = state.^(account address |-- Account.nonce) <- U64.one in
         state.^(account address |-- Account.storage) <- initial_storage address )
       Accounts.empty addresses
     |> Accounts.merkleized
@@ -282,7 +282,7 @@ module Experiment_WorldState = struct
   let initial_accounts : WorldState.t =
     List.fold_left
       (fun state address ->
-        let state = state.^(account address |-- Account.nonce) <- U256.one in
+        let state = state.^(account address |-- Account.nonce) <- U64.one in
         state.^(account address |-- Account.storage) <- initial_storage address )
       WorldState.empty addresses
     |> WorldState.state_root

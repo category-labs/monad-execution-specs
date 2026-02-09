@@ -694,7 +694,7 @@ module Account = struct
 
   module Json = struct
     type repr =
-      { nonce : U256.t (* σ[a]_n *)
+      { nonce : U64.t (* σ[a]_n *)
       ; balance : U256.t (* σ[a]_b *)
       ; storage : Storage.t (* σ[a]_s *)
       ; code : Bytes.t (* σ[a]_c *) }
