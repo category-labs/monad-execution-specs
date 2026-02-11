@@ -24,6 +24,8 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     [@@deriving to_yojson]
 
     type invalid_transaction =
+      | Wrong_chain_id
+      | Invalid_signature
       | Invalid_nonce
       | Nonce_overflow
       | Initcode_too_long
@@ -121,99 +123,115 @@ module Make (Params : Chain.Monad.PARAMS) = struct
                ; nonce = U64.(acc.nonce + one) }
           else transaction_state
 
+  type transaction_validation =
+    {sender : Address.t; total_fee : U256.t; effective_gas_price : Uint.t; intrinsic_gas : Gas.t}
+
+  let validate_transaction (block_state : BlockState.t) (tx : Transaction.t) : transaction_validation or_error
+      =
+    Result.(
+      let block = block_state.current_block in
+
+      let$ () =
+        match Transaction.chain_id tx with
+        | Some chain_id when Uint.(chain_id <> Params.chain_id) -> invalid_transaction block tx Wrong_chain_id
+        | _ -> return ()
+      in
+
+      (* T_g *)
+      let tx_gas_limit = Transaction.gas_limit tx in
+      let tx_nonce = Transaction.nonce tx in
+
+      (* Basic validity checks. *)
+      (* Nonce *)
+      let$ () = when_ U64.(tx_nonce = max_t) (invalid_transaction block tx Nonce_overflow) in
+      let$ sender =
+        match Transaction.sender Params.chain_id tx with
+        | None -> invalid_transaction block tx Invalid_signature
+        | Some sender -> return sender
+      in
+      let sender_account = block_state.world_state.^(WorldState.account sender) in
+      let$ () = when_ U64.(sender_account.nonce <> tx_nonce) (invalid_transaction block tx Invalid_nonce) in
+      (* Initcode size *)
+      let$ () =
+        match Transaction.call_or_create tx with
+        | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size ->
+            invalid_transaction block tx Initcode_too_long
+        | _ -> return ()
+      in
+
+      (* YP (64) *)
+      let intrinsic_gas = Gas.tx_intrinsic_gas tx in
+      let$ () =
+        when_
+          Gas.(intrinsic_gas > tx_gas_limit)
+          (invalid_transaction block tx (Cannot_pay_intrinsic_gas {intrinsic_gas}))
+      in
+
+      (* EIP-7623 *)
+      let floor_gas = Gas.tx_floor_gas tx in
+      let$ () =
+        when_ Gas.(floor_gas > tx_gas_limit) (invalid_transaction block tx (Cannot_pay_floor_gas {floor_gas}))
+      in
+
+      let block = block_state.current_block in
+      let header = block.header in
+      let$ () =
+        when_
+          (Bytes.(sender_account.code <> empty) && not (Delegation.is_valid_delegation sender_account.code))
+          (invalid_transaction block tx (Invalid_delegation {code = sender_account.code}))
+      in
+      (* Validate EIP-7702 authorization list if relevant. *)
+      let$ () = validate_authorizations block tx in
+
+      (* Calculate effective gas price and max payable gas fee depending on transaction type. Here we also check
+     that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
+      (* TODO: check transaction's suggested gas fee is above the block's base gas fee. *)
+      let base_fee_per_gas = header.base_fee_per_gas in
+      let$ effective_gas_price =
+        match Gas.tx_effective_gas_price base_fee_per_gas tx with
+        | Some effective_gas_price -> Ok effective_gas_price
+        | None -> invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas})
+      in
+      let total_fee = Gas.(Transaction.gas_limit tx * effective_gas_price) in
+      (* Note that in Monad, a transaction only needs to be able to pay the gas fee to be considered valid. If
+         the account can pay for the gas fees but not for the value transfer, the transaction will fail but it
+         will not be considered invalid. In particular, irrevocable changes (fees paid, nonce incremented) will
+         take place. *)
+      let$ () =
+        when_
+          Uint.(total_fee > U256.to_uint sender_account.balance)
+          (invalid_transaction block tx
+             (Insufficient_balance {balance = sender_account.balance; required = total_fee}) )
+      in
+      let total_fee =
+        U256.of_uint_exn total_fee
+        (* Cannot fail as the check above ensures total_fee is bounded by balance. *)
+      in
+
+      return {sender; total_fee; effective_gas_price; intrinsic_gas} )
+
   let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) :
       BlockState.t or_error =
     let open Result in
-    let open BlockState in
-    let block = block_state.current_block in
+    let header = block_state.current_block.header in
+    let$ {sender; total_fee; effective_gas_price; intrinsic_gas} = validate_transaction block_state tx in
 
-    (* T_g *)
-    let tx_gas_limit = Transaction.gas_limit tx in
-    let tx_value = Transaction.value tx in
-    let tx_nonce = Transaction.nonce tx in
-
-    (* Basic validity checks. *)
-    (* Nonce *)
-    let$ () = when_ U64.(tx_nonce = max_t) (invalid_transaction block tx Nonce_overflow) in
-    let sender = Option.get (Transaction.sender Params.chain_id tx) in
-    let sender_account = block_state.world_state.^(WorldState.account sender) in
-    let$ () = when_ U64.(sender_account.nonce <> tx_nonce) (invalid_transaction block tx Invalid_nonce) in
-    (* Initcode size *)
-    let$ () =
-      match Transaction.call_or_create tx with
-      | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size ->
-          invalid_transaction block tx Initcode_too_long
-      | _ -> return ()
-    in
-
-    (* YP (64) *)
-    let intrinsic_gas = Gas.tx_intrinsic_gas tx in
-    let$ () =
-      when_
-        Gas.(intrinsic_gas > tx_gas_limit)
-        (invalid_transaction block tx (Cannot_pay_intrinsic_gas {intrinsic_gas}))
-    in
-
-    (* EIP-7623 *)
-    let floor_gas = Gas.tx_floor_gas tx in
-    let$ () =
-      when_ Gas.(floor_gas > tx_gas_limit) (invalid_transaction block tx (Cannot_pay_floor_gas {floor_gas}))
-    in
-
-    let block = block_state.current_block in
-    let header = block.header in
-    let base_fee_per_gas = header.base_fee_per_gas in
-    (* Calculate effective gas price and max payable gas fee depending on transaction type. Here we also check
-     that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
-    (* TODO: check transaction's suggested gas fee is above the block's base gas fee. This should go in
-     validate_header. *)
-    let$ effective_gas_price =
-      match Gas.tx_effective_gas_price base_fee_per_gas tx with
-      | Some effective_gas_price -> Ok effective_gas_price
-      | None -> invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas})
-    in
-    let max_gas_fee = Gas.tx_max_gas_fee tx in
-
-    let$ () =
-      when_
-        Uint.(U256.to_uint sender_account.balance < max_gas_fee + U256.to_uint tx_value)
-        (invalid_transaction block tx
-           (Insufficient_balance
-              {balance = sender_account.balance; required = Uint.(max_gas_fee + U256.to_uint tx_value)} ) )
-    in
-    let$ () =
-      when_
-        (Bytes.(sender_account.code <> empty) && not (Delegation.is_valid_delegation sender_account.code))
-        (invalid_transaction block tx (Invalid_delegation {code = sender_account.code}))
-    in
-
-    let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
-    let$ () =
-      when_
-        Uint.(total_fee > U256.to_uint sender_account.balance)
-        (invalid_transaction block tx
-           (Insufficient_balance {balance = sender_account.balance; required = total_fee}) )
-    in
-    let total_fee = U256.of_uint_exn total_fee in
-
-    (* Irrevocable change: pay gas fees. YP (73), YP (74). *)
-    let block_state =
-      block_state.^(account sender) <-
-        {sender_account with balance = U256.(sender_account.balance - total_fee)}
-    in
-
-    (* Validate EIP-7702 authorization list if relevant. *)
-    let$ () = validate_authorizations block tx in
     (* Execute transaction. *)
     let result, transaction_state =
       let transaction_state = TransactionState.make Params.chain_id block_state tx in
+
+      (* Irrevocable change: pay gas fees. YP (73), YP (74). *)
+      let transaction_state =
+        transaction_state.^$(TransactionState.account sender) <-
+          (fun sender_account -> {sender_account with balance = U256.(sender_account.balance - total_fee)})
+      in
 
       (* Process EIP-7702 authorizations. *)
       let transaction_state =
         List.fold_left process_authorization transaction_state (Transaction.authorization_list tx)
       in
 
-      let available_gas = Gas.(tx_gas_limit - intrinsic_gas) in
+      let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
       let message = prepare_message block_state sender available_gas tx in
       process_message ~eoa:true ~trace message transaction_state
     in
@@ -222,19 +240,21 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     let block_state = {block_state with world_state = transaction_state.world_state} in
 
     (* Monad §2.3: unlike Ethereum, gas is not refunded to the sender. *)
-    let tx_gas_used = tx_gas_limit in
+    let tx_gas_used = Transaction.gas_limit tx in
 
     (* Transfer miner fees. *)
-    let priority_fee_per_gas = Gas.(effective_gas_price - base_fee_per_gas) in
+    let priority_fee_per_gas = Gas.(effective_gas_price - header.base_fee_per_gas) in
     let transaction_fee = U256.of_uint_exn Gas.(tx_gas_used * priority_fee_per_gas) in
-    let block_state = transfer_money_and_delete_if_empty block_state transaction_fee header.beneficiary in
+    let block_state =
+      BlockState.transfer_money_and_delete_if_empty block_state transaction_fee header.beneficiary
+    in
 
     (* Destroy deleted accounts. *)
     let block_state =
       transaction_state.self_destruct
       |> Address.Set.to_seq
       |> Seq.fold_left
-           (fun block_state touched_account -> block_state.^(account_opt touched_account) <- None)
+           (fun block_state touched_account -> block_state.^(BlockState.account_opt touched_account) <- None)
            block_state
     in
 
