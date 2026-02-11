@@ -5,6 +5,7 @@ open Lens.Infix
 
 let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
+let ( .^$()<- ) x lens f = Lens.modify lens f x
 
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This

@@ -104,8 +104,8 @@ module Transaction = struct
   module Authorization = struct
     type t =
       { chain_id : U256.t [@key "chainId"]
-      ; nonce : U64.t
       ; address : Address.t
+      ; nonce : U64.t
       ; y_parity : U8.t [@key "v"]
       ; r : U256.t
       ; s : U256.t }
@@ -114,17 +114,20 @@ module Transaction = struct
     let to_rlp {chain_id; nonce; address; y_parity; r; s} =
       Rlp.List
         [ U256.to_rlp chain_id
-        ; U64.to_rlp nonce
         ; Address.to_rlp address
+        ; U64.to_rlp nonce
         ; U8.to_rlp y_parity
         ; U256.to_rlp r
         ; U256.to_rlp s ]
 
+    let magic = Bytes.of_char '\x05'
+
     (** Recover the authority address from an EIP-7702 authorization entry. *)
     let authority ({y_parity; r; s; chain_id; address; nonce} : t) : Address.t option =
-      let auth_hash =
-        Crypto.keccak_256 Rlp.(encode (List [U256.to_rlp chain_id; Address.to_rlp address; U64.to_rlp nonce]))
+      let msg =
+        magic ^ Rlp.(encode (List [U256.to_rlp chain_id; Address.to_rlp address; U64.to_rlp nonce]))
       in
+      let auth_hash = Crypto.keccak_256 msg in
       Option.(
         let$ () = ensure U256.(zero < r && r < Crypto.secp256k1n) in
         let$ () = ensure U256.(zero < s && s < Crypto.secp256k1n / ~$2) in
@@ -236,6 +239,11 @@ module Transaction = struct
     match tx with
     | Legacy {gas_limit; _} | AccessList {gas_limit; _} | FeeMarket {gas_limit; _} | SetCode {gas_limit; _} ->
         gas_limit
+
+  let chain_id tx =
+    match tx with
+    | AccessList {chain_id; _} | FeeMarket {chain_id; _} | SetCode {chain_id; _} -> Some chain_id
+    | Legacy _ -> None
 
   let signature chain_id tx =
     match tx with
