@@ -125,7 +125,8 @@ let () =
   Gc.set ctl ;
   ignore ctl ;
   (*let profiler = Gc.Memprof.start ~sampling_rate:0.0001 tracker in*)
-  let _ = valid_block_tests () in
+  let results = valid_block_tests () in
+  Format.eprintf "Executed %d tests\n" (List.length results);
   (*
   Gc.Memprof.stop () ;
   Gc.Memprof.discard profiler ;
@@ -133,7 +134,6 @@ let () =
   dump_allocs "Minor" !minor_allocs ;
   Format.eprintf "Promotions %d\n" !promotions
    *)
-  Format.eprintf "%s %d redundant bytes hashed\n" !fixture_filename !total_redundant_bytes_hashed ;
   (*
   let locs =
     List.fold_left
