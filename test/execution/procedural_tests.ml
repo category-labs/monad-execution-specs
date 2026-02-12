@@ -7,7 +7,8 @@ open Chain.Monad
 open Host
 
 module ChainParams = struct
-  let chain_id : Uint.t = Uint.one
+  include Mainnet
+  let trace = false
 end
 
 module Wallet = struct
