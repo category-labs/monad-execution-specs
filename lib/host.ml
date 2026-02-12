@@ -66,7 +66,7 @@ module BlockState = struct
   let account addr = world_state |-- WorldState.account addr
   let account_opt addr = world_state |-- WorldState.account_opt addr
 
-  let transfer_money_and_delete_if_empty (block_state : t) (amount : U256.t) (recipient : Address.t) =
+  let transfer_ether_and_delete_if_empty (block_state : t) (amount : U256.t) (recipient : Address.t) =
     let account = block_state.^(account recipient) in
     let account = {account with balance = U256.(account.balance + amount)} in
     block_state.^(account_opt recipient) <- (if Account.is_empty account then None else Some account)
@@ -262,16 +262,13 @@ struct
       (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) ;
     return ()
 
-  let move_ether sender recipient amount =
-    let$ () =
-      update_field
-        (account sender |-- balance)
-        (fun eth ->
-          assert (U256.(eth >= amount)) ;
-          U256.(eth - amount) )
-    in
-    let$ () = update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount)) in
-    return ()
+  let transfer_ether sender recipient amount =
+    let$ sender_balance = !(account sender |-- balance) in
+    if U256.(sender_balance >= amount) then
+      let$ () = account sender |-- balance := U256.(sender_balance - amount) in
+      let$ () = update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount)) in
+      return true
+    else return false
 
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
@@ -321,7 +318,8 @@ struct
 
   let selfdestruct ~address ~beneficiary =
     let$ account_balance = !(account address |-- balance) in
-    let$ () = move_ether address beneficiary account_balance in
+    let$ transfer_ok = transfer_ether address beneficiary account_balance in
+    assert transfer_ok ;
 
     let$ created_in_current_tx = Address.Set.mem address <$> !accounts_created_in_current_transaction in
     if created_in_current_tx then
@@ -337,28 +335,36 @@ struct
     && not msg.static
 
   let increment_nonce (addr : Address.t) =
-    update_field (account addr |-- nonce) (fun nonce -> U64.(nonce + one))
+    update_field
+      (account addr |-- nonce)
+      (fun nonce ->
+        assert (U64.(nonce < max_t)) ;
+        U64.(nonce + one) )
 
   let process_call (msg : Evmc.Message.t) =
     assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
-    let$ () = when_ (should_transfer msg) (move_ether msg.sender msg.recipient msg.value) in
-    match Address.Map.find_opt msg.recipient Precompiles.precompiles with
-    | Some precompile when not msg.delegated -> return (precompile msg)
-    | Some _ ->
-        (* Delegated calls to precompiles are executed as if the corresponding contract was empty, as per EIP-7702. *)
-        Vm.execute msg Bytes.empty
-    | None ->
-        let$ code =
-          (* If the message provides the code to be called then it's executed, otherwise it's fetched from
+    let$ transfer_ok =
+      if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
+    in
+    if transfer_ok then
+      match Address.Map.find_opt msg.recipient Precompiles.precompiles with
+      | Some precompile when not msg.delegated -> return (precompile msg)
+      | Some _ ->
+          (* Delegated calls to precompiles are executed as if the corresponding contract was empty, as per EIP-7702. *)
+          Vm.execute msg Bytes.empty
+      | None ->
+          let$ code =
+            (* If the message provides the code to be called then it's executed, otherwise it's fetched from
              the provided code_address. *)
-          if Bytes.(msg.code = empty) then
-            let$ account_code = !(account msg.code_address |-- code) in
-            match Delegation.get_delegated_address account_code with
-            | None -> return account_code
-            | Some delegated_addr -> !(account delegated_addr |-- code)
-          else return msg.code
-        in
-        Vm.execute msg code
+            if Bytes.(msg.code = empty) then
+              let$ account_code = !(account msg.code_address |-- code) in
+              match Delegation.get_delegated_address account_code with
+              | None -> return account_code
+              | Some delegated_addr -> !(account delegated_addr |-- code)
+            else return msg.code
+          in
+          Vm.execute msg code
+    else return Evmc.Result.(failure StatusCode.Insufficient_balance)
 
   let process_create (msg : Evmc.Message.t) =
     let$ sender_nonce = !(account msg.sender |-- nonce) in
@@ -384,19 +390,21 @@ struct
       in
       let$ () = account create_address |-- storage := B32.Map.empty in
       let$ () = account create_address |-- nonce := U64.one in
-      let$ () = move_ether msg.sender create_address msg.value in
+      let$ transfer_ok = transfer_ether msg.sender create_address msg.value in
 
       let$ result =
-        let creation_msg =
-          Evmc.Message.
-            { msg with
-              kind = Call
-            ; recipient = create_address
-            ; input_data = Bytes.empty
-            ; create2_salt = B32.zeros
-            ; code_address = create_address }
-        in
-        Vm.execute creation_msg msg.input_data
+        if transfer_ok then
+          let creation_msg =
+            Evmc.Message.
+              { msg with
+                kind = Call
+              ; recipient = create_address
+              ; input_data = Bytes.empty
+              ; create2_salt = B32.zeros
+              ; code_address = create_address }
+          in
+          Vm.execute creation_msg msg.input_data
+        else return Evmc.Result.(failure StatusCode.Insufficient_balance)
       in
 
       match result.status_code with
@@ -421,8 +429,11 @@ struct
       | _ -> return result
 
   let call_impl ~(eoa : bool) (msg : Evmc.Message.t) =
-    (* Irrevocable change: increment nonce. YP (73), YP (75). *)
-    let$ () = when_ (eoa || msg.kind = Create || msg.kind = Create2) (increment_nonce msg.sender) in
+    let$ () =
+      (* Increment the nonce for non-EOA CREATE/CREATE2 messages . If the message came from an EOA transaction,
+         the nonce was already incremented in the irrevocable change. *)
+      when_ ((msg.kind = Create || msg.kind = Create2) && not eoa) (increment_nonce msg.sender)
+    in
     let$ initial_state = get in
     let$ result =
       match msg.kind with
@@ -432,9 +443,10 @@ struct
     let$ () = when_ (result.status_code <> Success) (put initial_state) in
     return result
 
-  let call_from_tx (msg : Evmc.Message.t) = call_impl ~eoa:true msg
-
   let call (msg : Evmc.Message.t) = call_impl ~eoa:false msg
+
+  (* Call from a transaction sent by an EOA, as opposed to a system transaction or a CALL opcode. *)
+  let call_from_eoa (msg : Evmc.Message.t) = call_impl ~eoa:true msg
 
   let get_tx_context =
     let$ state = get in

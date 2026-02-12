@@ -29,6 +29,7 @@ let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.Wor
 let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
   let module Execution = Execution.Make (struct
     let chain_id = fixtures.config.chain_id
+    let trace = false
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
