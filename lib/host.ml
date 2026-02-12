@@ -223,10 +223,9 @@ module TransactionState = struct
     ; accessed_addresses = Address.Set.empty
     ; accessed_keys = StorageKey.Set.empty }
 
-  let make (chain_id : Uint.t) (block_state : BlockState.t) tx =
+  let make (chain_id : Uint.t) (block_state : BlockState.t) sender tx =
     let open BlockState in
     let open Transaction.Access in
-    let sender = Option.get (Transaction.sender chain_id tx) in
     let access_list = Transaction.access_list tx in
     let access_list_addresses =
       List.to_seq access_list |> Seq.map (fun acc -> acc.address) |> Address.Set.of_seq

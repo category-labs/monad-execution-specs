@@ -213,7 +213,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
 
     (* Execute transaction. *)
     let result, transaction_state =
-      let transaction_state = TransactionState.make Params.chain_id block_state tx in
+      let transaction_state = TransactionState.make Params.chain_id block_state sender tx in
 
       (* Irrevocable change: pay gas fees. YP (73), YP (74). *)
       let transaction_state =
