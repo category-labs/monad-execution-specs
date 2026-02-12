@@ -57,7 +57,10 @@ let tx =
 
 let block = Block.{header = Header.empty; transactions = [tx]; ommers = []; withdrawals = []}
 
-module Params = Chain.Monad.Testnet
+module Params = struct
+  include Chain.Monad.Testnet
+  let trace = trace
+end
 module Execution = Execution.Make (Params)
 
 let result, _state =
@@ -65,7 +68,7 @@ let result, _state =
   let block_state = Host.BlockState.make world_state block in
   let transaction_state = Host.TransactionState.make Params.chain_id block_state tx in
   let msg = {(Execution.prepare_message sender gas_limit tx) with code = bytecode; input_data = calldata} in
-  Execution.process_message ~eoa:true ~trace msg transaction_state
+  Execution.Host.call_from_eoa msg transaction_state
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"

@@ -112,12 +112,13 @@ let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.Wor
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   let module Execution = Execution.Make (struct
     let chain_id = fixtures.config.chain_id
+    let trace = trace
   end) in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  Result.List.fold_leftM ~f:(Execution.process_block ~trace ~verify:false) s fixtures.blocks
+  Result.List.fold_leftM ~f:(Execution.process_block ~verify:false) s fixtures.blocks
   |> Result.map_error Execution.Error.to_string
   |> Result.get_ok'
 

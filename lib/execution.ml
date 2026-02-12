@@ -3,7 +3,11 @@ open Numeric
 open Byte_string
 open Host
 
-module Make (Params : Chain.Monad.PARAMS) = struct
+module Make (Params : sig
+  include Chain.Monad.PARAMS
+  val trace : bool
+end) =
+struct
   module Error = struct
     type invalid_block =
       | Nonempty_ommers
@@ -24,7 +28,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     type invalid_transaction =
       | Wrong_chain_id
       | Invalid_signature
-      | Invalid_nonce
+      | Invalid_nonce of {addr : Address.t; expected : U64.t}
       | Nonce_overflow
       | Initcode_too_long
       | Insufficient_balance of {balance : U256.t; required : Gas.t}
@@ -48,6 +52,9 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     Error Error.(Invalid_transaction {block; transaction; reason})
   type 'a or_error = ('a, Error.t) result
 
+  module Instantiation = Host.Instantiate (Params) (Vm.Make (Params))
+  module Host = Instantiation.Host
+
   let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
     let kind, current_target, data, code, code_address =
       match Transaction.call_or_create tx with
@@ -67,16 +74,6 @@ module Make (Params : Chain.Monad.PARAMS) = struct
       ; input_data = data
       ; depth = 0l
       ; create2_salt = B32.zeros }
-
-  let process_message ~eoa ?(trace = false) (msg : Evmc.Message.t) (transaction_state : TransactionState.t) =
-    let module H =
-      Host.Instantiate
-        (Params)
-        (Vm.Make (struct
-          let trace = trace
-        end))
-    in
-    H.Host.call_impl ~eoa msg transaction_state
 
   let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
     (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her
@@ -144,7 +141,11 @@ module Make (Params : Chain.Monad.PARAMS) = struct
         | Some sender -> return sender
       in
       let sender_account = block_state.world_state.^(WorldState.account sender) in
-      let$ () = when_ U64.(sender_account.nonce <> tx_nonce) (invalid_transaction block tx Invalid_nonce) in
+      let$ () =
+        when_
+          U64.(sender_account.nonce <> tx_nonce)
+          (invalid_transaction block tx (Invalid_nonce {addr = sender; expected = sender_account.nonce}))
+      in
       (* Initcode size *)
       let$ () =
         match Transaction.call_or_create tx with
@@ -204,8 +205,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
 
       return {sender; total_fee; effective_gas_price; intrinsic_gas} )
 
-  let process_transaction ?(trace = false) (block_state : BlockState.t) (tx : Transaction.t) :
-      BlockState.t or_error =
+  let process_transaction (block_state : BlockState.t) (tx : Transaction.t) : BlockState.t or_error =
     let open Result in
     let header = block_state.current_block.header in
     let$ {sender; total_fee; effective_gas_price; intrinsic_gas} = validate_transaction block_state tx in
@@ -214,10 +214,13 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     let result, transaction_state =
       let transaction_state = TransactionState.make Params.chain_id block_state tx in
 
-      (* Irrevocable change: pay gas fees. YP (73), YP (74). *)
+      (* Irrevocable change: pay gas fees, increment nonce. YP (73), YP (74), YP (75). *)
       let transaction_state =
         transaction_state.^$(TransactionState.account sender) <-
-          (fun sender_account -> {sender_account with balance = U256.(sender_account.balance - total_fee)})
+          (fun sender_account ->
+            { sender_account with
+              balance = U256.(sender_account.balance - total_fee)
+            ; nonce = U64.(sender_account.nonce + one) } )
       in
 
       (* Process EIP-7702 authorizations. *)
@@ -227,7 +230,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
       let message = prepare_message sender available_gas tx in
-      process_message ~eoa:true ~trace message transaction_state
+      Host.call_from_eoa message transaction_state
     in
 
     (* Propagate state changes. *)
@@ -240,7 +243,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     let priority_fee_per_gas = Gas.(effective_gas_price - header.base_fee_per_gas) in
     let transaction_fee = U256.of_uint_exn Gas.(tx_gas_used * priority_fee_per_gas) in
     let block_state =
-      BlockState.transfer_money_and_delete_if_empty block_state transaction_fee header.beneficiary
+      BlockState.transfer_ether_and_delete_if_empty block_state transaction_fee header.beneficiary
     in
 
     (* Destroy deleted accounts. *)
@@ -275,7 +278,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
 
   let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) : BlockState.t =
     let block_state =
-      BlockState.transfer_money_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
+      BlockState.transfer_ether_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
     in
     {block_state with withdrawals_processed = List.append block_state.withdrawals_processed [wd]}
 
@@ -304,9 +307,9 @@ module Make (Params : Chain.Monad.PARAMS) = struct
 
     let$ () = when_ Gas.(header.gas_used > header.gas_limit) (invalid_block block Gas_above_limit) in
 
-    (* YP (56) *)
+    (* YP (56), however note that Monad's shorter interval between blocks requires a weaker comparison. *)
     let$ () =
-      when_ U256.(header.timestamp <= parent.header.timestamp) (invalid_block block Invalid_timestamp)
+      when_ U256.(header.timestamp < parent.header.timestamp) (invalid_block block Invalid_timestamp)
     in
 
     (* YP (57) *)
@@ -315,7 +318,11 @@ module Make (Params : Chain.Monad.PARAMS) = struct
         (B32.(header.ommers_hash <> Crypto.keccak_256 Rlp.(encode (List []))) || block.ommers <> [])
         (invalid_block block Nonempty_ommers)
     in
+
+    (* YP (58) *)
     let$ () = when_ Uint.(header.difficulty <> zero) (invalid_block block Nonzero_difficulty) in
+
+    (* YP (59) *)
     let$ () = when_ B8.(header.nonce <> zeros) (invalid_block block Nonzero_nonce) in
 
     let$ () = when_ (Bytes.length block.header.extra_data > 32) (invalid_block block Extra_data_too_long) in
@@ -324,8 +331,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     return ()
 
   (* Process a system message call as in EIP-2935, EIP-4788. *)
-  let process_system_message ?(trace = false) (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t)
-      =
+  let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
     let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
     let code = block_state.^(BlockState.account addr).code in
     if code = Bytes.empty then (None, block_state)
@@ -361,7 +367,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
           ; accessed_addresses = Address.Set.empty
           ; accessed_keys = StorageKey.Set.empty }
       in
-      let result, transaction_state = process_message ~eoa:false ~trace message transaction_state in
+      let result, transaction_state = Host.call message transaction_state in
       assert (result.status_code = Success) ;
       (* Update block state with storage changes. As per the relevant EIPs, a system message call
        does not warm up accounts or storage slots, and it does not count towards the block gas
@@ -422,8 +428,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
 
     return ()
 
-  let process_block ?(trace = false) ~verify (world_state : WorldState.t) (block : Block.t) :
-      WorldState.t or_error =
+  let process_block ~verify (world_state : WorldState.t) (block : Block.t) : WorldState.t or_error =
     let open Result in
     let$ () = validate_block world_state block in
 
@@ -434,7 +439,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
       let parent_beacon_block_root = block_state.current_block.header.parent_beacon_block_root in
       (* Ignore call result as per EIP-4788. *)
       let _, block_state =
-        process_system_message ~trace block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
+        process_system_message block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
       in
       block_state
     in
@@ -444,13 +449,13 @@ module Make (Params : Chain.Monad.PARAMS) = struct
       let parent_hash = Block.hash (List.hd world_state.history) in
       (* Ignore call result as per EIP-2935. *)
       let _, block_state =
-        process_system_message ~trace block_state history_storage_address (B32.to_bytes parent_hash)
+        process_system_message block_state history_storage_address (B32.to_bytes parent_hash)
       in
       block_state
     in
 
     (* Process block transactions. *)
-    let$ block_state = List.fold_leftM ~f:(process_transaction ~trace) block_state block.transactions in
+    let$ block_state = List.fold_leftM ~f:process_transaction block_state block.transactions in
 
     (* Process block withdrawals. *)
     let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
