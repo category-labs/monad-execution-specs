@@ -10,7 +10,7 @@ let default_reserve_balance = mon_to_wei U256.(~$10)
 let user_reserve_balance (account : Account.t) = ignore account ; default_reserve_balance
 
 (* Monad §3: k *)
-let execution_consensus_delay = Integer.of_int 3
+let execution_consensus_delay = Uint.of_int 3
 
 (** Monad §6 Algorithm 4 (IsEmptying) *)
 let is_tx_emptying
@@ -24,7 +24,9 @@ let is_tx_emptying
   let starting_block_number =
     Integer.(
       as_unsigned_exn
-        (max (Uint.as_signed current_block.header.number - execution_consensus_delay + one) zero) )
+        (max
+           (Uint.as_signed current_block.header.number - Uint.as_signed execution_consensus_delay + one)
+           zero ) )
   in
   let sender = Option.get (Transaction.sender chain_id t) in
   let transactions_before_t =

@@ -10,12 +10,15 @@ let ( .^$()<- ) x lens f = Lens.modify lens f x
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
       includes the world state as per YP 4.1. *)
-  type t = {history : Block.t list; accounts : Account.t Address.Map.t (* σ[a] *)}
+  type t =
+    { history : Block.t list
+    ; accounts : Account.t Address.Map.t (* σ[a] *)
+    ; next_emptying_transaction_block : Uint.t Address.Map.t }
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
 
-  let empty = {history = []; accounts = Address.Map.empty}
+  let empty = {history = []; accounts = Address.Map.empty; next_emptying_transaction_block = Address.Map.empty}
 
   (* EIP-161 deletion of touched empty accounts is done here, which frees the implementation from keeping
      track of touched accounts. Note that the Ethereum executable spec uses a similar approach by intercepting
@@ -31,6 +34,11 @@ module WorldState = struct
     Lens.{get; set}
   let account ?(keep_empty = false) addr =
     account_opt ~keep_empty addr |-- Option.get_or_default Account.empty
+
+  let next_emptying_transaction_block_for addr =
+    next_emptying_transaction_block |-- Address.Map.at addr |-- Option.get_or_default Uint.zero
+  let bump_emptying_transaction_block_for addr block_number =
+    next_emptying_transaction_block_for addr ^= block_number
 
   let state_root state =
     let mpt =
@@ -191,8 +199,7 @@ module TransactionState = struct
     ; accessed_addresses = Address.Set.empty
     ; accessed_keys = StorageKey.Set.empty }
 
-  let make (chain_id : Uint.t) (block_state : BlockState.t) tx =
-    let sender = Option.get (Transaction.sender chain_id tx) in
+  let make (block_state : BlockState.t) (sender : Address.t) tx =
     let tx_gas_price =
       (* If this option was None, the transaction would have already been discarded as invalid. *)
       Option.get (Gas.tx_effective_gas_price block_state.current_block.header.base_fee_per_gas tx)
@@ -455,16 +462,22 @@ struct
       | Some t ->
           (* Check reserve balance condition. Monad §6 Algorithm 2 *)
           let chain_id = ChainParams.chain_id in
-          let previous_blocks = initial_state.world_state.history in
           let current_block = initial_state.current_block in
           let delegated_in_state =
             Delegation.is_valid_delegation initial_state.^(TransactionState.account msg.sender).code
           in
+          (* This should always be equivalent to
+             (Reserve_balance.is_tx_emptying ~chain_id ~t ~current_block ~previous_blocks ~delegated_in_state)
+             However, the straightforward implementation is prohibitively expensive.
+           *)
           let is_emptying =
-            Reserve_balance.is_tx_emptying ~chain_id ~t ~current_block ~previous_blocks ~delegated_in_state
+            (not delegated_in_state)
+            && Uint.(
+                 initial_state.world_state.^(WorldState.next_emptying_transaction_block_for msg.sender)
+                 <= current_block.header.number )
           in
           let base_fee_per_gas = current_block.header.base_fee_per_gas in
-          let original_balances = initial_state.world_state.accounts in
+          let original_balances = initial_state.initial_world_state.accounts in
           let$ new_state = !(world_state |-- accounts) in
           let reserve_dipped =
             Reserve_balance.dipped_into_reserve ~chain_id ~base_fee_per_gas ~original_balances ~new_state ~t
@@ -512,7 +525,7 @@ struct
 
   let emit_log address ~(data : Bytes.t) ~(topics : B32.t list) =
     let log : Log.t = {address; topics; data} in
-    update_field logs (fun logs -> log :: logs)
+    update_field logs (fun logs -> logs @ [log])
 
   let touch_account addr = M.update_field accessed_addresses (Address.Set.add addr)
 
