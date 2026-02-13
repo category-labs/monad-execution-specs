@@ -112,15 +112,20 @@ module Make (Params : Chain.Monad.PARAMS) = struct
             { transaction_state with
               accessed_addresses = Address.Set.add authority transaction_state.accessed_addresses }
           in
-          let Account.{code; nonce; _} = transaction_state.^(account authority) in
+          let (Account.{code; nonce; _} as authority_account) = transaction_state.^(account authority) in
           if (Bytes.(code = empty) || Delegation.is_valid_delegation code) && U64.(authorization.nonce = nonce)
           then
             transaction_state
-            |> account authority
+            |> ( account authority
                ^%= fun (acc : Account.t) ->
                { acc with
                  code = Delegation.delegation_code authorization.address
-               ; nonce = U64.(acc.nonce + one) }
+               ; nonce = U64.(acc.nonce + one) } )
+            |> refund
+               ^%= fun (refund : U256.t) ->
+               if Account.is_empty authority_account then
+                 U256.(refund + U256.of_uint_exn Gas.tx_authorization_list_refund_per_nonempty)
+               else refund
           else transaction_state
 
   type transaction_validation =

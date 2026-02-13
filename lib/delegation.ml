@@ -1,15 +1,13 @@
 (** Utilities for handling EOA delegation as per EIP-7702. *)
-
-module Authorization = Chain.Ethereum.Transaction.Authorization
-module Address = Chain.Ethereum.Address
 open Numeric
 open Byte_string
+module Address = B20
 
-let set_code_tx_magic = "\x05"
 let eoa_delegation_prefix : Bytes.t = "\xef\x01\x00"
 let eoa_delegated_code_length = Bytes.length eoa_delegation_prefix + Address.byte_width
 let () = assert (eoa_delegated_code_length = 23)
 
+let magic = "\x05"
 let per_empty_account_cost = Uint.(~$25_000)
 let per_auth_base_cost = Uint.(~$12_500)
 
