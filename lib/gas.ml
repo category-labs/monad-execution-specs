@@ -49,7 +49,8 @@ let tokens_in_calldata (tx : Transaction.t) =
   Stdlib.(zero_bytes + (4 * nonzero_bytes))
 
 (* EIP-7702 *)
-let tx_authorization_list_gas_per_address = ~$25_000
+let tx_authorization_list_gas_per_address = Delegation.per_empty_account_cost
+let tx_authorization_list_refund_per_nonempty = Delegation.(per_empty_account_cost - per_auth_base_cost)
 
 (* YP (64) *)
 let tx_intrinsic_gas (tx : Transaction.t) =

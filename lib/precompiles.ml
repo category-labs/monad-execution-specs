@@ -21,7 +21,7 @@ let check_gas (msg : Evmc.Message.t) (gas : Gas.t) (exec : unit -> Bytes.t optio
 let ecrecover_address = Address.of_hex_string "0x01"
 let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
   check_gas msg
-    Gas.(of_int 3_000)
+    Gas.(of_int 6_000)
     (fun () ->
       let d = msg.input_data in
       let h = B32.sub_with_zero_padding d 0 in

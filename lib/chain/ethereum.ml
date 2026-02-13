@@ -125,7 +125,7 @@ module Transaction = struct
     (** Recover the authority address from an EIP-7702 authorization entry. *)
     let authority ({y_parity; r; s; chain_id; address; nonce} : t) : Address.t option =
       let msg =
-        magic ^ Rlp.(encode (List [U256.to_rlp chain_id; Address.to_rlp address; U64.to_rlp nonce]))
+        Delegation.magic ^ Rlp.(encode (List [U256.to_rlp chain_id; Address.to_rlp address; U64.to_rlp nonce]))
       in
       let auth_hash = Crypto.keccak_256 msg in
       Option.(
@@ -389,7 +389,7 @@ module Transaction = struct
                  ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
       | SetCode tx ->
           assert (Uint.(tx.chain_id = chain_id)) ;
-          (* EIP-1559 *)
+          (* EIP-7702 *)
           kind_tag_to_bytes `SetCode
           ^ Rlp.encode
               (Rlp.List
