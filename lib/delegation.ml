@@ -1,4 +1,5 @@
 (** Utilities for handling EOA delegation as per EIP-7702. *)
+
 open Numeric
 open Byte_string
 module Address = B20
