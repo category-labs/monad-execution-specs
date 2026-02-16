@@ -351,7 +351,12 @@ struct
         let$ code =
           (* If the message provides the code to be called then it's executed, otherwise it's fetched from
              the provided code_address. *)
-          if Bytes.(msg.code = empty) then !(account msg.code_address |-- code) else return msg.code
+          if Bytes.(msg.code = empty) then
+            let$ account_code = !(account msg.code_address |-- code) in
+            match Delegation.get_delegated_address account_code with
+            | None -> return account_code
+            | Some delegated_addr -> !(account delegated_addr |-- code)
+          else return msg.code
         in
         Vm.execute msg code
 

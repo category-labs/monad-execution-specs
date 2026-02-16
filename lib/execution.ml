@@ -1,5 +1,3 @@
-open Lens.Infix
-
 open Chain.Ethereum
 open Numeric
 open Byte_string
@@ -50,17 +48,10 @@ module Make (Params : Chain.Monad.PARAMS) = struct
     Error Error.(Invalid_transaction {block; transaction; reason})
   type 'a or_error = ('a, Error.t) result
 
-  let prepare_message (block_state : BlockState.t) (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
+  let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
     let kind, current_target, data, code, code_address =
       match Transaction.call_or_create tx with
-      | Call {to_; data} ->
-          let code =
-            let account_code = block_state.^(BlockState.account to_).code in
-            match Delegation.get_delegated_address account_code with
-            | None -> account_code
-            | Some delegated -> block_state.^(BlockState.account delegated).code
-          in
-          (Evmc.Message.CallKind.Call, to_, data, code, to_)
+      | Call {to_; data} -> (Evmc.Message.CallKind.Call, to_, data, Bytes.empty, to_)
       | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, initcode, Bytes.empty, Address.zero)
     in
     Evmc.Message.
@@ -115,17 +106,15 @@ module Make (Params : Chain.Monad.PARAMS) = struct
           let (Account.{code; nonce; _} as authority_account) = transaction_state.^(account authority) in
           if (Bytes.(code = empty) || Delegation.is_valid_delegation code) && U64.(authorization.nonce = nonce)
           then
+            let code = Delegation.delegation_code authorization.address in
+            let nonce = U64.(authority_account.nonce + one) in
+            let authority_account = {authority_account with code; nonce} in
             transaction_state
-            |> ( account authority
-               ^%= fun (acc : Account.t) ->
-               { acc with
-                 code = Delegation.delegation_code authorization.address
-               ; nonce = U64.(acc.nonce + one) } )
-            |> refund
-               ^%= fun (refund : U256.t) ->
-               if Account.is_empty authority_account then
-                 U256.(refund + U256.of_uint_exn Gas.tx_authorization_list_refund_per_nonempty)
-               else refund
+            |> (fun s -> s.^(account authority) <- authority_account)
+            |> fun s ->
+            if not (Account.is_empty authority_account) then
+              s.^(refund) <- U256.(s.refund + of_uint_exn Gas.tx_authorization_list_refund_per_nonempty)
+            else s
           else transaction_state
 
   type transaction_validation =
@@ -237,7 +226,7 @@ module Make (Params : Chain.Monad.PARAMS) = struct
       in
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
-      let message = prepare_message block_state sender available_gas tx in
+      let message = prepare_message sender available_gas tx in
       process_message ~eoa:true ~trace message transaction_state
     in
 
