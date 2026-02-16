@@ -120,8 +120,6 @@ module Transaction = struct
         ; U256.to_rlp r
         ; U256.to_rlp s ]
 
-    let magic = Bytes.of_char '\x05'
-
     (** Recover the authority address from an EIP-7702 authorization entry. *)
     let authority ({y_parity; r; s; chain_id; address; nonce} : t) : Address.t option =
       let msg =
