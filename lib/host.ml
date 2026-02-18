@@ -17,19 +17,29 @@ module WorldState = struct
 
   let empty = {history = []; accounts = Address.Map.empty}
 
-  let account addr = accounts |-- Address.Map.at addr |-- Option.get_or_default Account.empty
-  let account_opt addr = accounts |-- Address.Map.at addr
+  (* EIP-161 deletion of touched empty accounts is done here, which frees the implementation from keeping
+     track of touched accounts. Note that the Ethereum executable spec uses a similar approach by intercepting
+     any state updates to an account and deleting it if it is empty after the update. *)
+  let account_opt ?(keep_empty = false) addr =
+    let Lens.{get; set} = accounts |-- Address.Map.at addr in
+    let set =
+      if keep_empty then set
+      else fun acct state ->
+        let acct = match acct with Some acct when Account.is_empty acct -> None | _ -> acct in
+        set acct state
+    in
+    Lens.{get; set}
+  let account ?(keep_empty = false) addr =
+    account_opt ~keep_empty addr |-- Option.get_or_default Account.empty
 
   let state_root state =
     let mpt =
       state.accounts
       |> Address.Map.to_seq
-      |> Seq.filter_map (fun (addr, acc) ->
-          if Account.is_empty acc then None
-          else
-            (* YP (11) *)
-            let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
-            Some (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
+      |> Seq.map (fun (addr, acc) ->
+          (* YP (11) *)
+          let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
+          (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
       |> Mpt.of_seq
     in
     mpt.root_hash
@@ -63,13 +73,8 @@ module BlockState = struct
     ; withdrawals_processed = []
     ; requests = [] }
 
-  let account addr = world_state |-- WorldState.account addr
-  let account_opt addr = world_state |-- WorldState.account_opt addr
-
-  let transfer_ether_and_delete_if_empty (block_state : t) (amount : U256.t) (recipient : Address.t) =
-    let account = block_state.^(account recipient) in
-    let account = {account with balance = U256.(account.balance + amount)} in
-    block_state.^(account_opt recipient) <- (if Account.is_empty account then None else Some account)
+  let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
+  let account_opt ?(keep_empty = false) addr = world_state |-- WorldState.account_opt ~keep_empty addr
 
   (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
@@ -160,7 +165,6 @@ module TransactionState = struct
     ; tx_gas_price : Gas.t
     ; self_destruct : Address.Set.t  (** A_s *)
     ; logs : Log.t list  (** A_l *)
-    ; touched : Address.Set.t  (** A_t *)
     ; refund : U256.t  (** A_r *)
     ; accessed_addresses : Address.Set.t  (** A_a *)
     ; accessed_keys : StorageKey.Set.t  (** A_K *) }
@@ -183,7 +187,6 @@ module TransactionState = struct
     ; tx_gas_price = Gas.zero
     ; self_destruct = Address.Set.empty
     ; logs = []
-    ; touched = Address.Set.empty
     ; refund = U256.zero
     ; accessed_addresses = Address.Set.empty
     ; accessed_keys = StorageKey.Set.empty }
@@ -233,12 +236,11 @@ module TransactionState = struct
     ; tx_gas_price
     ; self_destruct = Address.Set.empty
     ; logs = []
-    ; touched = Address.Set.empty
     ; refund = U256.zero
     ; accessed_addresses
     ; accessed_keys }
 
-  let account addr = world_state |-- WorldState.account addr
+  let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
 
   module M = Monad.State (struct
     type nonrec t = t
@@ -284,7 +286,12 @@ struct
        |-- Option.get_or_default B32.zeros )
     in
     let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
-    let$ () = account addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v in
+    (* In practice there is no way to modify the storage of an account with zero nonce, so there is no
+       need to keep empty accounts here. However, for testing purposes cases, it is useful to allow storage
+       operations to work on empty accounts without clearing them up automatically. *)
+    let$ () =
+      account ~keep_empty:true addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v
+    in
     let zero u = B32.(u = zeros) in
     let x u = B32.(u <> zeros && u = o) in
     let y u = B32.(u <> zeros && u = c) in
@@ -330,9 +337,7 @@ struct
     else return false
 
   let should_transfer (msg : Evmc.Message.t) =
-    U256.(msg.value > zero)
-    && (match msg.kind with Call | CallCode | Create | Create2 -> true | DelegateCall -> false)
-    && not msg.static
+    match msg.kind with Call | CallCode | Create | Create2 -> not msg.static | DelegateCall -> false
 
   let increment_nonce (addr : Address.t) =
     update_field
