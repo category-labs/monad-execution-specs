@@ -2,6 +2,7 @@ open Chain.Ethereum
 open Numeric
 open Byte_string
 open Host
+open Lens.Infix
 
 module Make (Params : sig
   include Chain.Monad.PARAMS
@@ -243,7 +244,8 @@ struct
     let priority_fee_per_gas = Gas.(effective_gas_price - header.base_fee_per_gas) in
     let transaction_fee = U256.of_uint_exn Gas.(tx_gas_used * priority_fee_per_gas) in
     let block_state =
-      BlockState.transfer_ether_and_delete_if_empty block_state transaction_fee header.beneficiary
+      block_state.^$(BlockState.account header.beneficiary |-- Account.balance) <-
+        (fun balance -> U256.(balance + transaction_fee))
     in
 
     (* Destroy deleted accounts. *)
@@ -277,8 +279,10 @@ struct
     return block_state
 
   let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) : BlockState.t =
+    let amount = U256.(wd.amount * exp ~$10 ~$9) in
     let block_state =
-      BlockState.transfer_ether_and_delete_if_empty block_state U256.(wd.amount * exp ~$10 ~$9) wd.recipient
+      block_state.^$(BlockState.account wd.recipient |-- Account.balance) <-
+        (fun balance -> U256.(balance + amount))
     in
     {block_state with withdrawals_processed = List.append block_state.withdrawals_processed [wd]}
 
@@ -362,7 +366,6 @@ struct
           ; tx_gas_price = Uint.zero
           ; self_destruct = Address.Set.empty
           ; logs = []
-          ; touched = Address.Set.empty
           ; refund = U256.zero
           ; accessed_addresses = Address.Set.empty
           ; accessed_keys = StorageKey.Set.empty }
@@ -459,8 +462,6 @@ struct
 
     (* Process block withdrawals. *)
     let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
-
-    (* TODO coalesce destructing dead accounts here *)
 
     (* Compute roots and add the finalized block to the blockchain. *)
     let finalized_block = BlockState.finalize_current_block block_state in
