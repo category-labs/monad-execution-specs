@@ -1,0 +1,13 @@
+(version 0.27)
+
+(build
+ (all_platforms ((action (run dune build -p %{pkg-self:name} -j %{jobs})))))
+
+(depends
+ (all_platforms
+  (dune base-unix ocaml)))
+
+(source
+ (fetch
+  (url https://github.com/c-cube/qcheck/archive/v0.27.tar.gz)
+  (checksum md5=dd6df3f9b934567e4b1292a183af0554)))
