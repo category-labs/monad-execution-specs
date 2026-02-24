@@ -166,6 +166,13 @@ let test_case_to_yojson fixture =
     in
     fixture_json.$("blocks") <- `List blocks
   in
+  let fixture_json =
+    let genesis_header_hash =
+      Block.Header.to_rlp fixture.genesis_block_header |> Rlp.encode |> Crypto.keccak_256 |> B32.to_yojson
+    in
+    let genesis_header = fixture_json.$("genesisBlockHeader").$("hash") <- genesis_header_hash in
+    fixture_json.$("genesisBlockHeader") <- genesis_header
+  in
   let fixture_json = fixture_json.$("network") <- `String network in
   fixture_json
 
