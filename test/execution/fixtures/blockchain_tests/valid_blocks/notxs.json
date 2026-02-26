@@ -724,7 +724,7 @@
       }
     ],
     "_info": {
-      "filling-rpc-server": "execrun e2650bd",
+      "filling-rpc-server": "execrun d26831c",
       "filling-tool-version": "",
       "fixture-format": "blockchain_test",
       "hash": "0xac70e3786fe4d00629a6cf0091401d5df57406b19b7f9390fb4a938c43fec05d",
@@ -742,10 +742,11 @@
           "target": "0x6"
         }
       },
-      "chainid": "0x1",
+      "chainid": "0x8f",
       "network": "MONAD_EIGHT"
     },
     "genesisBlockHeader": {
+      "hash": "0xefdebb052187df2f6d187ab41deb5a741579e58aad482fa841d1c4ef9d83c42a",
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "uncleHash": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
       "coinbase": "0x8888f1f195afa192cfee860698584c030f4c9db1",

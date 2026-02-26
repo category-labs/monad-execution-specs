@@ -573,7 +573,7 @@ module Block = struct
     ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] }
   [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens]
 
-  let empty = { header = empty; transactions = []; ommers = []; withdrawals = [] }
+  let empty = {header = empty; transactions = []; ommers = []; withdrawals = []}
 
   (* YP 4.4.3 (41) *)
   let to_rlp b =
