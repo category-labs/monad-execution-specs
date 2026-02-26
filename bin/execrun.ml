@@ -147,34 +147,6 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
   let last_blockhash = U256.of_repr (Block.hash (List.hd post_state.history)) in
   {fixtures with post; blocks; config; info; genesis_rlp; last_blockhash}
 
-let test_case_to_yojson fixture =
-  let open Yojson.Safe.Util in
-  let ( .$() ) obj k = member k obj in
-  let ( .$()<- ) obj k v = to_assoc obj |> List.remove_assoc k |> fun l -> (k, v) :: l |> fun l -> `Assoc l in
-  (* TODO: this is a hack to add necessary extra fields *)
-  let fixture_json = Fixtures.BlockchainTest.test_case_to_yojson fixture in
-  let fixture_json =
-    (* Add its own RLP encoding and hash to each block. *)
-    let blocks =
-      to_list fixture_json.$("blocks")
-      |> List.map (fun (b : Yojson.Safe.t) ->
-          let block = match Block.of_yojson b with Ok b -> b | Error err -> failwith err in
-          let b = b.$("rlp") <- Bytes.to_yojson (Rlp.encode (Block.to_rlp block)) in
-          let header_with_hash = b.$("blockHeader").$("hash") <- B32.to_yojson (Block.hash block) in
-          b.$("blockHeader") <- header_with_hash )
-    in
-    fixture_json.$("blocks") <- `List blocks
-  in
-  let fixture_json =
-    let genesis_header_hash =
-      Block.Header.to_rlp fixture.genesis_block_header |> Rlp.encode |> Crypto.keccak_256 |> B32.to_yojson
-    in
-    let genesis_header = fixture_json.$("genesisBlockHeader").$("hash") <- genesis_header_hash in
-    fixture_json.$("genesisBlockHeader") <- genesis_header
-  in
-  let fixture_json = fixture_json.$("network") <- `String network in
-  fixture_json
-
 let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) list) =
   let test_results : (string * Fixtures.BlockchainTest.test_case * Host.WorldState.t) list =
     List.map (fun (test_name, fixtures) -> (test_name, fixtures, run_blockchain_test fixtures)) tests
@@ -188,7 +160,7 @@ let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) l
             let test_name = Filename.(remove_extension (basename fixtures_file)) in
             let name = Format.sprintf "%s::%s_%s" fixtures_file test_name network in
             let fixtures = update_fixtures fixtures post_state in
-            (name, test_case_to_yojson fixtures) )
+            (name, Fixtures.BlockchainTest.test_case_to_yojson fixtures) )
           test_results
       in
       Out_channel.with_open_text output_file (fun out_channel ->

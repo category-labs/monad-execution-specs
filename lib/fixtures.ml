@@ -5,6 +5,8 @@ open Yojson.Safe.Util
 
 (* Helper functions for reading JSON *)
 let ( .$() ) json key = member key json
+let ( .$()<- ) json key value =
+  to_assoc json |> List.remove_assoc key |> fun l -> (key, value) :: l |> fun l -> `Assoc l
 
 type 'v object_as_alist = (string * 'v) list
 let object_as_alist_of_yojson value_of_yojson (json : Yojson.Safe.t) : ('v object_as_alist, string) result =
@@ -45,14 +47,32 @@ module BlockchainTest = struct
     ; network : string }
   [@@deriving yojson]
 
+  let test_case_block_to_yojson (block : Block.t) =
+    (* In test case fixtures, blocks also carry their own RLP encoding and block headers also carry the
+       block hash, so we reintroduce them here when deserializing the test case.
+       In the future, we should consider introducing fixture-specific of Block.t and Block.Header.t. *)
+    let rlp = Bytes.to_yojson (Rlp.encode (Block.to_rlp block)) in
+    let hash = B32.to_yojson (Block.hash block) in
+    let block = Block.to_yojson block in
+    let block = block.$("rlp") <- rlp in
+    let header_with_hash = block.$("blockHeader").$("hash") <- hash in
+    block.$("blockHeader") <- header_with_hash
+
+  let test_case_blocks_to_yojson (blocks : Block.t list) = `List (List.map test_case_block_to_yojson blocks)
+
+  let test_case_genesis_header_to_yojson (header : Block.Header.t) =
+    let genesis_block = {Block.empty with header} in
+    (test_case_block_to_yojson genesis_block).$("blockHeader")
+
   type test_case =
-    { info : info [@key "_info"]
-    ; blocks : Block.t list
+    { network : string
+    ; blocks : Block.t list [@to_yojson test_case_blocks_to_yojson]
+    ; info : info [@key "_info"]
     ; config : config
-    ; genesis_block_header : Block.Header.t [@key "genesisBlockHeader"]
+    ; genesis_block_header : Block.Header.t
+          [@key "genesisBlockHeader"] [@to_yojson test_case_genesis_header_to_yojson]
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
     ; last_blockhash : U256.t [@key "lastblockhash"]
-    ; network : string
     ; pre : Account.t Address.Map.t
     ; post : Account.t Address.Map.t [@key "postState"] }
   [@@deriving yojson {strict = false}]
