@@ -192,42 +192,13 @@ module TransactionState = struct
     ; accessed_keys = StorageKey.Set.empty }
 
   let make (chain_id : Uint.t) (block_state : BlockState.t) tx =
-    let open BlockState in
-    let open Transaction.Access in
     let sender = Option.get (Transaction.sender chain_id tx) in
-    let access_list = Transaction.access_list tx in
-    let access_list_addresses =
-      List.to_seq access_list |> Seq.map (fun acc -> acc.address) |> Address.Set.of_seq
-    in
-    let target_addresses =
-      match Transaction.call_or_create tx with
-      | Call {to_; _} -> (
-        match Delegation.get_delegated_address block_state.^(account sender).code with
-        | None -> Address.Set.singleton to_
-        | Some delegated -> Address.Set.of_list [to_; delegated] )
-      | Create _ ->
-          let sender_nonce = block_state.^(account sender).nonce in
-          Address.Set.singleton (Address.of_contract_creation ~sender ~nonce:sender_nonce ~create2:None)
-    in
-    (* YP (80) *)
-    let accessed_addresses =
-      List.fold_left Address.Set.union Address.Set.empty
-        [ access_list_addresses
-        ; pre_compiled_contract_addresses
-        ; Address.Set.singleton sender
-        ; Address.Set.singleton block_state.current_block.header.beneficiary
-        ; target_addresses ]
-    in
-    let accessed_keys =
-      List.to_seq access_list
-      |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.address, k)))
-      |> StorageKey.Set.of_seq
-    in
     let tx_gas_price =
       (* If this option was None, the transaction would have already been discarded as invalid. *)
       Option.get (Gas.tx_effective_gas_price block_state.current_block.header.base_fee_per_gas tx)
     in
-    { initial_world_state = block_state.world_state
+    { empty with
+      initial_world_state = block_state.world_state
     ; world_state = block_state.world_state
     ; current_block = block_state.current_block
     ; transient_storage = Address.Map.empty
@@ -236,11 +207,44 @@ module TransactionState = struct
     ; tx_gas_price
     ; self_destruct = Address.Set.empty
     ; logs = []
-    ; refund = U256.zero
-    ; accessed_addresses
-    ; accessed_keys }
+    ; refund = U256.zero }
 
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
+
+  (* YP (77). *)
+  let initialize_access_sets (tx : Transaction.t) (transaction_state : t) =
+    let open Transaction.Access in
+    let sender = transaction_state.tx_origin in
+    let access_list = Transaction.access_list tx in
+    (* YP (78). *)
+    let accessed_keys =
+      List.to_seq access_list
+      |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.address, k)))
+      |> StorageKey.Set.of_seq
+    in
+    (* YP (79), YP (80). *)
+    let access_list_addresses =
+      List.to_seq access_list |> Seq.map (fun acc -> acc.address) |> Address.Set.of_seq
+    in
+    let target_addresses =
+      match Transaction.call_or_create tx with
+      | Call {to_; _} -> (
+        match Delegation.get_delegated_address transaction_state.^(account sender).code with
+        | None -> Address.Set.singleton to_
+        | Some delegated -> Address.Set.of_list [to_; delegated] )
+      | Create _ ->
+          let sender_nonce = transaction_state.^(account sender).nonce in
+          Address.Set.singleton (Address.of_contract_creation ~sender ~nonce:sender_nonce ~create2:None)
+    in
+    let accessed_addresses =
+      List.fold_left Address.Set.union Address.Set.empty
+        [ access_list_addresses
+        ; pre_compiled_contract_addresses
+        ; Address.Set.singleton sender
+        ; Address.Set.singleton transaction_state.current_block.header.beneficiary
+        ; target_addresses ]
+    in
+    {transaction_state with accessed_addresses; accessed_keys}
 
   module M = Monad.State (struct
     type nonrec t = t
@@ -287,7 +291,7 @@ struct
     in
     let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
     (* In practice there is no way to modify the storage of an account with zero nonce, so there is no
-       need to keep empty accounts here. However, for testing purposes cases, it is useful to allow storage
+       need to keep empty accounts here. However, for the purpose of unit tests, it is useful to allow storage
        operations to work on empty accounts without clearing them up automatically. *)
     let$ () =
       account ~keep_empty:true addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v

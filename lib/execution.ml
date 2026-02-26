@@ -224,6 +224,8 @@ struct
             ; nonce = U64.(sender_account.nonce + one) } )
       in
 
+      let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
+
       (* Process EIP-7702 authorizations. *)
       let transaction_state =
         List.fold_left process_authorization transaction_state (Transaction.authorization_list tx)
