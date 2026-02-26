@@ -136,7 +136,7 @@ let test_message
     ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
     (msg : Evmc.Message.t) =
   (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
-     With better VM instrumentation we can remove the duplucation *)
+     With better VM instrumentation we can remove the duplication *)
   let action =
     let open Evm.Host in
     let$ () = prepare_env in
