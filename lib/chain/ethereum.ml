@@ -639,7 +639,8 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
-module Storage = Mpt.Make
+module Storage =
+  Mpt.Make
     (struct
       let hash_keys = true
     end)
@@ -655,8 +656,7 @@ module Account = struct
     { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t (* σ[a]_b *)
     ; storage : Storage.t (* σ[a]_s *)
-    ; code : Bytes.t (* σ[a]_c *)
-    }
+    ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
 
@@ -668,12 +668,7 @@ module Account = struct
     && Bytes.(acc_1.code = acc_2.code)
   let ( = ) = equal
 
-  let empty =
-    { balance = U256.zero
-    ; storage = Storage.empty
-    ; code = Bytes.empty
-    ; nonce = U64.zero
-    }
+  let empty = {balance = U256.zero; storage = Storage.empty; code = Bytes.empty; nonce = U64.zero}
 
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
