@@ -675,7 +675,8 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
-module Storage = Mpt.Make
+module Storage =
+  Mpt.Make
     (struct
       let hash_keys = true
     end)
@@ -708,12 +709,7 @@ module Account = struct
 
   let ( = ) = equal
 
-  let empty =
-    { balance = U256.zero
-    ; storage = Storage.empty
-    ; code = Bytes.empty
-    ; nonce = U64.zero
-    }
+  let empty = {balance = U256.zero; storage = Storage.empty; code = Bytes.empty; nonce = U64.zero}
 
   (** Account emptiness check as per YP (14). Note that an account with zero balance, nonce and code is
       considered empty independently of its storage, but empty accounts with non-empty storage cannot be

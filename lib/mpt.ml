@@ -73,9 +73,7 @@ module Generic = struct
   let rec remove key (trie : 'a t) =
     match trie.data with
     | Empty -> empty
-    | Extension {path; ending = Value _v} ->
-        let i = common_prefix path key in
-        if i <> Nibbles.length path then trie else empty
+    | Extension {path; ending = Value _v} -> if Nibbles.(path = key) then empty else trie
     | Extension {path; ending = Subtree subtree} ->
         let i = common_prefix path key in
         if i <> Nibbles.length path then trie
@@ -202,7 +200,7 @@ module Generic = struct
     | {data = Extension e_l; _}, {data = Extension e_r; _} ->
         Nibbles.(e_l.path = e_r.path) && ending_equal elt_equal e_l.ending e_r.ending
     | {data = Branch (b_l, v_l); _}, {data = Branch (b_r, v_r); _} ->
-        Iarray.equal (equal elt_equal) b_l b_r && Stdlib.(v_l = v_r)
+        Iarray.equal (equal elt_equal) b_l b_r && Option.equal elt_equal v_l v_r
     | _ -> false
 
   and ending_equal elt_equal l r =
@@ -213,7 +211,10 @@ module Generic = struct
 
   let merkleization_to_rlp_encoded = function Hash h -> Rlp.encode_bytes (B32.to_bytes h) | Small s -> s
 
-  let merkleization (node : 'a t) = Option.get node.merkleized
+  let merkleization (node : 'a t) =
+    match node.merkleized with
+    | Some merkleized -> merkleized
+    | None -> raise (Invalid_argument (Format.sprintf "Trying to take Merkle root of unmerkleized tree"))
 
   let rec merkleized ~(value_to_bytes : 'a -> Bytes.t) (node : 'a t) : 'a t =
     match node with
