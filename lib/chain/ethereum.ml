@@ -639,12 +639,24 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
+module Storage = Mpt.Make
+    (struct
+      let hash_keys = true
+    end)
+    (B32)
+    (struct
+      include B32
+      let commit word = word
+      let to_bytes (word : B32.t) = Rlp.encode U256.(to_rlp (of_repr word))
+    end)
+
 module Account = struct
   type t =
     { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : B32.t B32.Map.t (* σ[a]_s *)
-    ; code : Bytes.t (* σ[a]_c *) }
+    ; storage : Storage.t (* σ[a]_s *)
+    ; code : Bytes.t (* σ[a]_c *)
+    }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
 
@@ -652,31 +664,26 @@ module Account = struct
   let equal acc_1 acc_2 =
     U64.(acc_1.nonce = acc_2.nonce)
     && U256.(acc_1.balance = acc_2.balance)
-    && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
+    && Storage.(equal acc_1.storage acc_2.storage)
     && Bytes.(acc_1.code = acc_2.code)
   let ( = ) = equal
 
-  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U64.zero}
+  let empty =
+    { balance = U256.zero
+    ; storage = Storage.empty
+    ; code = Bytes.empty
+    ; nonce = U64.zero
+    }
 
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
 
   let is_smart_contract {code; _} = Bytes.(code <> empty) && not (Delegation.is_valid_delegation code)
 
-  let to_rlp {nonce; balance; storage; code} =
-    let storage_root =
-      let mpt =
-        storage
-        |> B32.Map.to_seq
-        |> Seq.map (fun (k, v) ->
-            let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
-            let v = Rlp.encode U256.(to_rlp (of_repr v)) in
-            (* YP (8) *)
-            (k, v) )
-        |> Mpt.of_seq
-      in
-      mpt.root_hash
-    in
+  let to_rlp {nonce; balance; storage; code; _} =
     let code_hash = Crypto.keccak_256 code in
+    let storage_root = Storage.merkle_root storage in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
+
+  let merkleized account = {account with storage = Storage.merkleized account.storage}
 end

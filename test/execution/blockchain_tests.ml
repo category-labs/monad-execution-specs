@@ -2,6 +2,7 @@ open Monad_lib
 open Test_utils.Utils
 open Chain.Ethereum
 open Byte_string
+open Host
 
 let blockchain_tests_folder = "fixtures" $/ "blockchain_tests"
 
@@ -15,18 +16,18 @@ let drop_test_folder_prefix =
 
 let load_preconditions pre (state : Host.WorldState.t) =
   let open Host.WorldState in
-  let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
+  let accounts = Accounts.add_seq (Accounts.to_seq pre) state.accounts in
   {state with accounts}
 
-let check_postconditions (post : Account.t Address.Map.t) (state : Host.WorldState.t) : unit =
+let check_postconditions (post : Accounts.t) (state : Host.WorldState.t) : unit =
   let check_account_existence_and_state addr =
-    let actual = Address.Map.find_opt addr state.accounts in
-    let expected = Address.Map.find_opt addr post in
+    let actual = Accounts.find_opt addr state.accounts in
+    let expected = Accounts.find_opt addr post in
     Alcotest.check (Alcotest.option account)
       (Format.sprintf "Account states for %s differ" (Address.to_hex_string addr))
       actual expected
   in
-  let all_addresses = Address.(Set.union (Map.keys state.accounts) (Map.keys post)) in
+  let all_addresses = Address.Set.of_seq (Seq.append (Accounts.keys state.accounts) (Accounts.keys post)) in
   Address.Set.iter check_account_existence_and_state all_addresses
 
 let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
