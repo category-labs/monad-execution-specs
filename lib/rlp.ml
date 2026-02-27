@@ -4,7 +4,7 @@ open Byte_string
 
 (** The type of RLP-encodable objects: either a byte string or a list of RLP-encodable objects. High-level types
     define encoding and decoding functions into this type. YP (190), YP (191), YP (192) *)
-type t = Bytes of Bytes.t | List of t list
+type t = Bytes of Bytes.t | List of t list [@@deriving to_yojson]
 
 let of_bytes (bs : Bytes.t) = Bytes bs
 let of_bytes32 (bs : B32.t) = Bytes (B32.to_bytes bs)

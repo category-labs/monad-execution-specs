@@ -16,12 +16,24 @@ let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
 let ( .^$()<- ) x lens f = Lens.modify lens f x
 
+module Accounts =
+  Mpt.Make
+    (struct
+      let hash_keys = true
+    end)
+    (Address)
+    (struct
+      include Account
+      let commit acc = merkleized acc
+      let to_bytes acc = Rlp.encode (to_rlp acc)
+    end)
+
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
       includes the world state as per YP 4.1. *)
   type t =
     { history : Block.t list
-    ; accounts : Account.t Address.Map.t (* σ[a], implicitly realizes YP (12) *)
+    ; accounts : Accounts.t (* σ[a], implicitly realizes YP (12) *)
     ; next_emptying_transaction_block : Uint.t Address.Map.t
           (** [next_emptying_transaction_block] maps every address to the next block number in which a
               transaction from it would be emptying. The counter for an account is bumped by
@@ -32,7 +44,7 @@ module WorldState = struct
 
   include TLens
 
-  let empty = {history = []; accounts = Address.Map.empty; next_emptying_transaction_block = Address.Map.empty}
+  let empty = {history = []; accounts = Accounts.empty; next_emptying_transaction_block = Address.Map.empty}
 
   (** [account_opt addr] provides a lens into the current state of the account for [addr]. Addresses that do
       not correspond to entries in the underlying map correspond to [None].
@@ -40,7 +52,7 @@ module WorldState = struct
      track of touched accounts. Note that the Ethereum executable spec uses a similar approach by intercepting
      any state updates to an account and deleting it if it is empty after the update. *)
   let account_opt ?(keep_empty = false) addr =
-    let Lens.{get; set} = accounts |-- Address.Map.at addr in
+    let Lens.{get; set} = accounts |-- Accounts.at addr in
     let set =
       if keep_empty then set
       else fun acct state ->

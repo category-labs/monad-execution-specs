@@ -675,12 +675,23 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
+module Storage = Mpt.Make
+    (struct
+      let hash_keys = true
+    end)
+    (B32)
+    (struct
+      include B32
+      let commit word = word
+      let to_bytes (word : B32.t) = Rlp.encode U256.(to_rlp (of_repr word))
+    end)
+
 module Account = struct
   (** The state associated with an Ethereum address. YP (13), but storage and code are stored directly. *)
   type t =
     { nonce : U64.t  (** σ\[a\]ₙ, the account nonce - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t  (** σ\[a\]_b *)
-    ; storage : B32.t B32.Map.t
+    ; storage : Storage.t
           (** σ\[a\]ₛ, the account storage, represented directly as a map rather than a state root. *)
     ; code : Bytes.t  (** σ\[a\]_c, the account code, represented directly as bytecode rather than a hash. *)
     }
@@ -692,12 +703,17 @@ module Account = struct
   let equal acc_1 acc_2 =
     U64.(acc_1.nonce = acc_2.nonce)
     && U256.(acc_1.balance = acc_2.balance)
-    && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
+    && Storage.(equal acc_1.storage acc_2.storage)
     && Bytes.(acc_1.code = acc_2.code)
 
   let ( = ) = equal
 
-  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U64.zero}
+  let empty =
+    { balance = U256.zero
+    ; storage = Storage.empty
+    ; code = Bytes.empty
+    ; nonce = U64.zero
+    }
 
   (** Account emptiness check as per YP (14). Note that an account with zero balance, nonce and code is
       considered empty independently of its storage, but empty accounts with non-empty storage cannot be
@@ -712,20 +728,12 @@ module Account = struct
       root of the account, which is potentially very expensive. *)
   let to_rlp {nonce; balance; storage; code} =
     let storage_root =
+    let code_hash = Crypto.keccak_256 code in
+    let storage_root =
       (* Unlike in the Yellow Paper, accounts contain their entire storage. The relationship in YP (7) is
          used here in reverse to calculate the storage root from the storage KV pairs. *)
-      let mpt =
-        storage
-        |> B32.Map.to_seq
-        |> Seq.map (fun (k, v) ->
-            (* YP (8), YP (9) *)
-            let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
-            let v = Rlp.encode U256.(to_rlp (of_repr v)) in
-            (k, v) )
-        |> Mpt.of_seq
-      in
-      mpt.root_hash
-    in
-    let code_hash = Crypto.keccak_256 code in
+      Storage.merkle_root storage in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
+
+  let merkleized account = {account with storage = Storage.merkleized account.storage}
 end

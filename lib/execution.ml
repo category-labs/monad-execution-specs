@@ -562,7 +562,7 @@ struct
     let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
 
     (* Compute roots and add the finalized block to the blockchain. *)
-    let finalized_block = BlockState.finalize_current_block block_state in
+    let finalized_block, block_state = BlockState.finalize_current_block block_state in
     let$ () = validate_block world_state finalized_block in
 
     let$ () =

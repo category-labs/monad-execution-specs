@@ -28,6 +28,12 @@ module Bytes = struct
     |> List.of_seq
     |> String.concat ""
 
+  let int_of_nibble n =
+    let n = Char.lowercase_ascii n in
+    if n >= '0' && n <= '9' then Char.code n - Char.code '0'
+    else if n >= 'a' && n <= 'f' then 10 + (Char.code n - Char.code 'a')
+    else raise (Invalid_argument (Format.sprintf "Invalid hexadecimal digit %c" n))
+
   (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
       '0x', into an array of bytes. If the [width] argument is provided, the resulting byte-string is left-padded
       with zeros up to the desired width. Raises an exception if the given string does not follow the correct format. *)

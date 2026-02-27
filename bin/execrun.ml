@@ -2,6 +2,7 @@ open Monad_lib
 open Chain.Ethereum
 open Numeric
 open Byte_string
+open Host
 
 let fixtures_file = ref None
 let test_kind = ref None
@@ -55,6 +56,7 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
     if U64.(actual.nonce <> expected.nonce) then
       Format.printf "\tNonce: %s\n\tExpected: %s\n" (U64.to_string actual.nonce)
         (U64.to_string expected.nonce) ;
+    (*
     if not B32.Map.(equal B32.equal actual.storage expected.storage) then (
       Format.printf "\tStorage differs\n" ;
       let actual_keys = B32.Map.keys actual.storage in
@@ -77,12 +79,13 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
                 Format.printf "\t\texpected(%s): <EMPTY>\n" key_s
             | _, _ -> () )
           (union actual_keys expected_keys) ) ) ;
+     *)
     false )
 
-let check_postconditions (state : State.WorldState.t) (post : Account.t Address.Map.t) : bool =
+let check_postconditions (state : State.WorldState.t) (post : Accounts.t) : bool =
   let check_account_existence_and_state addr =
-    let actual = Address.Map.find_opt addr state.accounts in
-    let expected = Address.Map.find_opt addr post in
+    let actual = Accounts.find_opt addr state.accounts in
+    let expected = Accounts.find_opt addr post in
     match (actual, expected) with
     | Some actual, Some expected -> check_account_state addr actual expected
     | Some _, None ->
@@ -93,7 +96,7 @@ let check_postconditions (state : State.WorldState.t) (post : Account.t Address.
         false
     | None, None -> assert false
   in
-  let all_addresses = Address.(Set.union (Map.keys state.accounts) (Map.keys post)) in
+  let all_addresses = Address.(Set.union (Accounts.keys state.accounts) (Accounts.keys post)) in
   Address.Set.fold
     (fun addr acc ->
       let ok = check_account_existence_and_state addr in
@@ -102,7 +105,7 @@ let check_postconditions (state : State.WorldState.t) (post : Account.t Address.
 
 let load_preconditions pre (state : State.WorldState.t) =
   let open State.WorldState in
-  let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
+  let accounts = Accounts.add_seq (Accounts.to_seq pre) state.accounts in
   {state with accounts}
 
 let load_genesis_block (genesis_block_header : Block.Header.t) (state : State.WorldState.t) =
