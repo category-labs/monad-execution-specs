@@ -26,4 +26,4 @@ jobs:
 
       - name: Run ocamlformat
         run: |
-          opam exec -- dune build @fmt
+          opam exec -- dune build @fmt --ignore-lock-dir
