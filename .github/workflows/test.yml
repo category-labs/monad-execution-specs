@@ -18,6 +18,10 @@ jobs:
         with:
           ocaml-compiler: 5.4.0
 
+      - name: Install external packages
+        run: |
+          sudo apt-get install -y $(opam exec -- dune show depexts)
+
       - name: Install dependencies
         run: |
           opam install . --deps-only -y
