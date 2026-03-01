@@ -9,11 +9,17 @@ let ( .^$()<- ) x lens f = Lens.modify lens f x
 
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
-      includes the world state as per YP 4.1. *)
+      includes the world state as per YP 4.1.
+   *)
   type t =
     { history : Block.t list
     ; accounts : Account.t Address.Map.t (* σ[a] *)
-    ; next_emptying_transaction_block : Uint.t Address.Map.t }
+    ; next_emptying_transaction_block : Uint.t Address.Map.t
+          (** [next_emptying_transaction_block] maps every address to the next block number in which a
+        transaction from it would be emptying. The counter for an account is bumped by
+        {!Reserve_balance.execution_consensus_delay} every time the account submits a transaction or appears
+        in a valid delegation. *)
+    }
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
@@ -37,8 +43,6 @@ module WorldState = struct
 
   let next_emptying_transaction_block_for addr =
     next_emptying_transaction_block |-- Address.Map.at addr |-- Option.get_or_default Uint.zero
-  let bump_emptying_transaction_block_for addr block_number =
-    next_emptying_transaction_block_for addr ^= block_number
 
   let state_root state =
     let mpt =
@@ -460,15 +464,17 @@ struct
       match from_tx with
       | None -> return result
       | Some t ->
-          (* Check reserve balance condition. Monad §6 Algorithm 2 *)
+          (* Check reserve balance condition. Monad §6 Algorithm 2. *)
           let chain_id = ChainParams.chain_id in
           let current_block = initial_state.current_block in
           let delegated_in_state =
             Delegation.is_valid_delegation initial_state.^(TransactionState.account msg.sender).code
           in
-          (* This should always be equivalent to
-             (Reserve_balance.is_tx_emptying ~chain_id ~t ~current_block ~previous_blocks ~delegated_in_state)
-             However, the straightforward implementation is prohibitively expensive.
+          (* Check whether transaction is emptying. Monad §6 Algorithm 4 (IsEmptying).
+             The check of [delegated_in_state] is exactly as in the spec. The comparison with the next emptying
+             transaction counter subsumes both [auth_condition] and [prior_sender_condition]. Note that
+             authority processing bumps the next emptying transaction block counter before the transaction is
+             processed, but the transaction itself only bumps its sender's counter after it finishes.
            *)
           let is_emptying =
             (not delegated_in_state)
