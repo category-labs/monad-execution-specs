@@ -562,12 +562,12 @@ struct
     let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
 
     (* Compute roots and add the finalized block to the blockchain. *)
-    let finalized_block, block_state = BlockState.finalize_current_block block_state in
+    let finalized_block, world_state = BlockState.finalize_current_block block_state in
     let$ () = validate_block world_state finalized_block in
 
     let$ () =
       if verify then validate_input_block_against_output ~input_block:block ~output_block:finalized_block
       else return ()
     in
-    return {block_state.world_state with history = finalized_block :: world_state.history}
+    return {world_state with history = finalized_block :: world_state.history}
 end
