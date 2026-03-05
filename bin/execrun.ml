@@ -60,17 +60,16 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
     if U64.(actual.nonce <> expected.nonce) then
       Format.printf "\tNonce: %s\n\tExpected: %s\n" (U64.to_string actual.nonce)
         (U64.to_string expected.nonce) ;
-    (*
-    if not B32.Map.(equal B32.equal actual.storage expected.storage) then (
+    if not Storage.(equal actual.storage expected.storage) then (
       Format.printf "\tStorage differs\n" ;
-      let actual_keys = B32.Map.keys actual.storage in
-      let expected_keys = B32.Map.keys expected.storage in
+      let actual_keys = B32.Set.of_seq (Storage.keys actual.storage) in
+      let expected_keys = B32.Set.of_seq (Storage.keys expected.storage) in
       B32.Set.(
         iter
           (fun key ->
             let key_s = B32.to_short_hex_string key in
-            let v_actual = B32.Map.find_opt key actual.storage in
-            let v_expected = B32.Map.find_opt key expected.storage in
+            let v_actual = Storage.find_opt key actual.storage in
+            let v_expected = Storage.find_opt key expected.storage in
             match (v_actual, v_expected) with
             | Some v_actual, Some v_expected when B32.(v_actual <> v_expected) ->
                 Format.printf "\t\tactual(%s): %s\n" key_s (B32.to_hex_string v_actual) ;
@@ -83,7 +82,6 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
                 Format.printf "\t\texpected(%s): <EMPTY>\n" key_s
             | _, _ -> () )
           (union actual_keys expected_keys) ) ) ;
-     *)
     false )
 
 let check_postconditions (state : Host.WorldState.t) (post : Accounts.t) : bool =

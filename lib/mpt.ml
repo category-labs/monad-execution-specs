@@ -6,6 +6,7 @@ module Iarray = struct
   let to_yojson elt_to_yojson arr = `List (List.map elt_to_yojson (to_list arr))
 end
 
+(** Nibble sequences backed by byte arrays, offering constant-time subsequence extraction. *)
 module Nibbles = struct
   type t = {bytes : Bytes.t; start : int; length : int}
   (* Both start and length count nibbles, not bytes. *)
@@ -98,7 +99,7 @@ module Nibbles = struct
     |> function None -> true | Some _ -> false
 
   (** [hex_prefix_encode n flag] encodes a sequence of nibbles plus an extra flag into a sequence of bytes,
-             following the definition of HP in YP (200) *)
+      following the definition of HP in YP (200) *)
   let hex_prefix_encode (nibbles : t) (flag : bool) : Bytes.t =
     let odd = length nibbles mod 2 = 1 in
     let header =
@@ -116,6 +117,7 @@ module Nibbles = struct
             let lower_nibble = nibbles.$[((i - 1) * 2) + 1 + shift] in
             Char.unsafe_chr ((upper_nibble lsl 4) lor lower_nibble) )
 
+  (** [hex_prefix_decode bs] decodes a sequence of bytes following the definition of HP in YP (200). *)
   let hex_prefix_decode (bytes : Bytes.t) : t * bool =
     let header = Char.code bytes.[0] in
     let odd = header land odd_mask <> 0 in
@@ -141,7 +143,8 @@ module Nibbles = struct
   end)
 end
 
-(** Generic maps from byte strings to ['a] backed by a lazily-merkleized Merkle-Patricia trie. *)
+(** Lazily-Merkleized Patricia tries, mapping byte strings to ['a].
+    The API is a subset of the OCaml Stdlib map signature [Map.S]. *)
 module Generic = struct
   let branching_factor = 16
 
@@ -153,9 +156,12 @@ module Generic = struct
   [@@deriving to_yojson]
   and 'a ending = Subtree of 'a t | Value of 'a [@@deriving to_yojson]
 
+  (* We would like to encode whether a node has been merkleized or not with a phantom type.
+     But it doesn't seem to be possible to do this in an ergonomic way: we need subtyping
+     (so that a merkleized subtree can be included in a non-merkleized tree without
+     reconstructing it) but GADTs must be invariant. *)
   and 'a t = {data : 'a impl; merkleized : merkleization option} [@@deriving to_yojson]
 
-  let empty_hash = Crypto.keccak_256 (Rlp.encode (Rlp.Bytes ""))
   let empty = {data = Empty; merkleized = Some (Small (Rlp.encode_bytes ""))}
 
   let make (type a) (data : a impl) = {data; merkleized = None}
@@ -189,10 +195,41 @@ module Generic = struct
   let two_branches (k_0, trie_0) (k_1, trie_1) : 'a t Iarray.t =
     Iarray.init branching_factor (fun i -> if i = k_0 then trie_0 else if i = k_1 then trie_1 else empty)
 
+  (* Smart constructors that compact the tree as they go. *)
   let extension ~path ~ending =
     match ending with
-    | Subtree subtree when Nibbles.length path = 0 -> subtree
-    | _ -> make (Extension {path; ending})
+    | Subtree {data = Empty; _} ->
+        (* Extension followed by empty; rewrite to empty. *)
+        empty
+    | Subtree {data = Extension {path = path'; ending}; _} ->
+        (* Extension followed by extension; rewrite to single extension. *)
+        make (Extension {path = Nibbles.(path ^ path'); ending})
+    | Subtree subtree when Nibbles.length path = 0 ->
+        (* Extension with empty path; rewrite to ending. *)
+        subtree
+    | _ ->
+        (* No compression; leave as Extension node. *)
+        make (Extension {path; ending})
+
+  let branch ~branches ~value =
+    let non_empty_branches =
+      Iarray.to_seq branches
+      |> Seq.mapi (fun index branch -> (index, branch))
+      |> Seq.filter (fun (_index, branch) -> branch.data <> Empty)
+    in
+    match value with
+    | Some value when Seq.is_empty non_empty_branches ->
+        (* Leaf value but no branches; rewrite to extension. *)
+        extension ~path:Nibbles.empty ~ending:(Value value)
+    | Some _ ->
+        (* Leaf value and branches; leave as Branch node. *)
+        make (Branch (branches, value))
+    | None -> (
+      (* No leaf value. Rewrite zero-branch case to empty, one-branch case to extension. *)
+      match Seq.uncons non_empty_branches with
+      | None -> empty
+      | Some ((ki, bi), bs) when Seq.is_empty bs -> extension ~path:(Nibbles.of_nibble ki) ~ending:(Subtree bi)
+      | Some _ -> make (Branch (branches, value)) )
 
   (* Note that we do not optimize very hard for the case where the key is not present. Every node touched will
    be assumed to be dirtied, even if the resulting trie is identical to the original one. *)
@@ -206,41 +243,13 @@ module Generic = struct
         else
           let _, key = Nibbles.split key i in
           let subtree = remove key subtree in
-          let data =
-            match subtree.data with
-            | Empty -> Empty
-            | Extension {path = path'; ending} -> Extension {path = Nibbles.(path ^ path'); ending}
-            | Branch (_, _) -> Extension {path; ending = Subtree subtree}
-          in
-          make data
-    | Branch (branches, v) -> (
+          extension ~path ~ending:(Subtree subtree)
+    | Branch (branches, value) -> (
       match Nibbles.uncons key with
-      | None -> make (Branch (branches, None))
+      | None -> branch ~branches ~value:None
       | Some (k_0, key) ->
           let branches = Iarray.mapi (fun k_i trie -> if k_0 = k_i then remove key trie else trie) branches in
-          let non_empty_branches =
-            Iarray.to_seq branches
-            |> Seq.mapi (fun index branch -> (index, branch))
-            |> Seq.filter (fun (_index, branch) -> branch.data <> Empty)
-          in
-          let data =
-            match (Seq.uncons non_empty_branches, v) with
-            | Some ((_i, _b_i), _bs), Some _ -> Branch (branches, v)
-            | Some ((i, b_i), bs), None -> (
-              match Seq.uncons bs with
-              | None -> (
-                (* Exactly one non-empty branch, we can compress the trie. *)
-                match b_i.data with
-                | Empty -> Empty
-                | Branch (_, _) -> Extension {path = Nibbles.of_nibble i; ending = Subtree b_i}
-                | Extension {path; ending} -> Extension {path = Nibbles.(of_nibble i ^ path); ending} )
-              (* Multiple branches, we cannot compress the trie. *)
-              | Some (_, _) -> Branch (branches, v) )
-            (* No branches. Compress to either empty (if value is empty) or extension ending in value. *)
-            | None, Some v -> Extension {path = Nibbles.empty; ending = Value v}
-            | None, None -> Empty
-          in
-          make data )
+          branch ~branches ~value )
 
   let rec graft_disjoint (path, ending) (key, value) : 'a ending =
     match (Nibbles.uncons path, Nibbles.uncons key, ending) with
@@ -282,32 +291,31 @@ module Generic = struct
           in
           make (Branch (branches, branch_value)) )
 
-  let add ?(hash_keys = false) (key : Bytes.t) (value : 'a) (trie : 'a t) =
-    let key = if hash_keys then B32.to_bytes (Crypto.keccak_256 key) else key in
-    add (Nibbles.of_bytes key) value trie
+  let add (key : Bytes.t) (value : 'a) (trie : 'a t) = add (Nibbles.of_bytes key) value trie
 
-  let remove ?(hash_keys = false) key trie =
-    let key = if hash_keys then B32.to_bytes (Crypto.keccak_256 key) else key in
-    remove (Nibbles.of_bytes key) trie
+  let remove key trie = remove (Nibbles.of_bytes key) trie
 
-  let of_seq ?(hash_keys = false) (entries : (Bytes.t * 'a) Seq.t) : 'a t =
-    entries |> Seq.fold_left (fun trie (k, v) -> add ~hash_keys k v trie) empty
+  let of_seq (entries : (Bytes.t * 'a) Seq.t) : 'a t =
+    entries |> Seq.fold_left (fun trie (k, v) -> add k v trie) empty
 
-  let of_seq_i ?(hash_keys = false) (entries : 'a Seq.t) =
+  let of_seq_i (entries : 'a Seq.t) =
     let to_kv i v = (Rlp.encode U64.(to_rlp ~$i), v) in
-    of_seq ~hash_keys (Seq.mapi to_kv entries)
+    of_seq (Seq.mapi to_kv entries)
 
-  let of_map ?(hash_keys = false) (map : 'a Bytes.Map.t) = of_seq ~hash_keys (Bytes.Map.to_seq map)
+  let of_map (map : 'a Bytes.Map.t) = of_seq (Bytes.Map.to_seq map)
 
   let rec to_seq ~(prefix : Nibbles.t) (trie : 'a t) : (Bytes.t * 'a) Seq.t =
     match trie.data with
     | Empty -> Seq.empty
-    | Branch (branches, _value) ->
-        Iarray.to_seq branches
-        |> Seq.mapi (fun k_i branch ->
-            let prefix = Nibbles.(prefix ^ of_nibble k_i) in
-            to_seq ~prefix branch )
-        |> Seq.concat
+    | Branch (branches, value) -> (
+        let branches =
+          Iarray.to_seq branches
+          |> Seq.mapi (fun k_i branch ->
+              let prefix = Nibbles.(prefix ^ of_nibble k_i) in
+              to_seq ~prefix branch )
+          |> Seq.concat
+        in
+        match value with None -> branches | Some value -> Seq.cons (Nibbles.to_bytes prefix, value) branches )
     | Extension {path; ending = Value v} ->
         let key = Nibbles.(to_bytes (prefix ^ path)) in
         Seq.singleton (key, v)
@@ -337,11 +345,15 @@ module Generic = struct
 
   let merkleization_to_rlp_encoded = function Hash h -> Rlp.encode_bytes (B32.to_bytes h) | Small s -> s
 
+  (** [merkleization trie] returns the Merkleization of [trie], provided it was already Merkleized
+      by a call to {!val-merkleized}. Otherwise, it raises an exception. *)
   let merkleization (node : 'a t) =
     match node.merkleized with
     | Some merkleized -> merkleized
-    | None -> raise (Invalid_argument (Format.sprintf "Trying to take Merkle root of unmerkleized tree"))
+    | None -> raise (Invalid_argument "Trying to take Merkle root of unmerkleized tree")
 
+  (** [merkleized ~value_to_bytes trie] returns a Merkleized version of [trie], which may be equal to
+      the original if this was already Merkleized. *)
   let rec merkleized ~(value_to_bytes : 'a -> Bytes.t) (node : 'a t) : 'a t =
     match node with
     | {merkleized = Some _; _} -> node
@@ -383,6 +395,8 @@ module Generic = struct
         let encoded_ending = merkleization_to_rlp_encoded (merkleization subtree) in
         Rlp.encode_list [encoded_path; encoded_ending]
 
+  (** [merkle_root trie] returns the Merkle root of [trie], provided it was already Merkleized
+      by a call to [merkleized trie]. Otherwise, it raises an exception. *)
   let merkle_root (trie : 'a t) =
     match merkleization trie with Small encoded -> Crypto.keccak_256 encoded | Hash hash -> hash
 
@@ -394,22 +408,27 @@ module Generic = struct
     {get = (fun m -> find_opt k m); set = (fun v m -> update k (fun _ -> v) m)}
 end
 
+(** Maps from arbitrary keys [Key.t] to values [Value.t] backed by a lazily-merkleized Merkle-Patricia trie.
+    The type [Make(P)(K)(V).t] is meant to efficiently represent storage and state tries by:
+    1. Replicating the data in the MPT as a standard OCaml map for efficient access without e.g. re-encrypting
+        the keys.
+    2. Caching updates in an intermediate map of "dirty" keys which gets batch-merkleized once per block. *)
 module Make (Params : sig
   val hash_keys : bool
 end) (Key : sig
   include Map.OrderedType
-  val of_bytes_exn : Bytes.t -> t
   val to_bytes : t -> Bytes.t
 end) (Value : sig
   type t
 
   val equal : t -> t -> bool
+
   val commit : t -> t
+  (** {!commit} specifies an update to be applied to the value type when a value is committed from the dirty
+      set into the clean set. In practice, this is useful when [t] is [Account.t], to Merkleize the account
+      storage trie only when the account itself is committed into the clean set. *)
 
   val to_bytes : t -> Bytes.t
-
-  val of_yojson : Yojson.Safe.t -> (t, string) result
-  val to_yojson : t -> Yojson.Safe.t
 end) =
 struct
   module Key = struct
@@ -460,36 +479,46 @@ struct
       let not_dirty (k, (_, _)) = Option.is_none (Key.Map.find_opt k trie.dirty) in
       Seq.filter not_dirty (Key.Map.to_seq trie.clean) |> Seq.map (fun (k, (_kh, v)) -> (k, v))
     in
-    Seq.append dirty_entries clean_entries
+    (* Map.to_seq returns entries sorted by key, so we should do the same here. *)
+    let rec merge_sort s1 s2 =
+      match (Seq.uncons s1, Seq.uncons s2) with
+      | Some ((k1, v1), s1'), Some ((k2, v2), s2') ->
+          if Key.compare k1 k2 <= 0 then Seq.cons (k1, v1) (fun () -> merge_sort s1' s2 ())
+          else Seq.cons (k2, v2) (fun () -> merge_sort s1 s2' ())
+      | None, _ -> s2
+      | _, None -> s1
+    in
+    merge_sort dirty_entries clean_entries
 
   let keys (trie : t) = Seq.map fst (to_seq trie)
 
+  (** [merkle_root trie_map] returns the Merkle root of [trie_map], provided it was already Merkleized
+      by a call to [merkleized trie_map]. Otherwise, it raises an exception. *)
   let merkle_root {mpt; dirty; _} =
     assert (Key.Map.is_empty dirty) ;
-    match mpt.merkleized with
-    | Some (Small bytes) -> Crypto.keccak_256 bytes
-    | Some (Hash hash) -> hash
-    | None -> assert false (* Must call merkleized first. *)
+    Generic.merkle_root mpt
 
-  let dirty_to_yojson (map : Value.t option Key.Map.t) : Yojson.Safe.t =
+  let dirty_to_yojson value_to_yojson (map : Value.t option Key.Map.t) : Yojson.Safe.t =
     Key.Map.to_seq map
     |> Seq.map (fun (k, v) ->
-        (Bytes.to_hex_string (Key.to_bytes k), match v with None -> `Null | Some v -> Value.to_yojson v) )
+        (Bytes.to_hex_string (Key.to_bytes k), match v with None -> `Null | Some v -> value_to_yojson v) )
     |> List.of_seq
     |> fun entries -> `Assoc entries
 
-  let clean_to_yojson (map : (Bytes.t * Value.t) Key.Map.t) : Yojson.Safe.t =
+  let clean_to_yojson value_to_yojson (map : (Bytes.t * Value.t) Key.Map.t) : Yojson.Safe.t =
     Key.Map.to_seq map
-    |> Seq.map (fun (k, (_, v)) -> (Bytes.to_hex_string (Key.to_bytes k), Value.to_yojson v))
+    |> Seq.map (fun (k, (_, v)) -> (Bytes.to_hex_string (Key.to_bytes k), value_to_yojson v))
     |> List.of_seq
     |> fun entries -> `Assoc entries
 
-  let to_yojson_debug {mpt; clean; dirty} =
+  let to_yojson_debug value_to_yojson {mpt; clean; dirty} =
     `Assoc
-      [ ("mpt", Generic.to_yojson Value.to_yojson mpt)
-      ; ("clean", clean_to_yojson clean)
-      ; ("dirty", dirty_to_yojson dirty) ]
+      [ ("mpt", Generic.to_yojson value_to_yojson mpt)
+      ; ("clean", clean_to_yojson value_to_yojson clean)
+      ; ("dirty", dirty_to_yojson value_to_yojson dirty) ]
 
+  (** [merkleized trie_map] returns a version of [trie_map] with all dirty updates committed to the
+      clean entry set and the MPT back-end, which is also Merkleized. *)
   let merkleized {mpt; clean; dirty} =
     let mpt, clean =
       Key.Map.to_seq dirty
@@ -516,28 +545,27 @@ struct
     if Key.Map.is_empty l.dirty && Key.Map.is_empty r.dirty then l.mpt.merkleized = r.mpt.merkleized
     else contains_all l r && contains_all r l
 
-  exception Value_decoding_error of string
-  let of_yojson : Yojson.Safe.t -> (t, string) result = function
-    | `Assoc fields -> (
-      try
-        Ok
-          ( List.to_seq fields
-          |> Seq.map (fun (k, v) ->
-              let k = Key.of_bytes_exn (Bytes.of_hex_string k) in
-              let v =
-                match Value.of_yojson v with Ok elt -> elt | Error msg -> raise (Value_decoding_error msg)
-              in
-              (k, v) )
-          |> of_seq )
-      with Value_decoding_error err -> Error err )
+  let of_yojson
+      (key_of_string : String.t -> (Key.t, string) result)
+      (value_of_yojson : Yojson.Safe.t -> (Value.t, string) result) : Yojson.Safe.t -> (t, string) result =
+    function
+    | `Assoc fields ->
+        Result.(
+          let$ entries =
+            List.mapM fields ~f:(fun (k, v) ->
+                let$ k = key_of_string k in
+                let$ v = value_of_yojson v in
+                return (k, v) )
+          in
+          return (of_seq (List.to_seq entries)) )
     | _ -> Error "Mpt.t"
 
-  let to_yojson (trie : t) : Yojson.Safe.t =
+  let to_yojson (value_to_yojson : Value.t -> Yojson.Safe.t) (trie : t) : Yojson.Safe.t =
     let fields =
       to_seq trie
       |> Seq.map (fun (k, v) ->
           let k = Bytes.to_hex_string (Key.to_bytes k) in
-          let v = Value.to_yojson v in
+          let v = value_to_yojson v in
           (k, v) )
       |> List.of_seq
     in

@@ -7,17 +7,27 @@ let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
 let ( .^$()<- ) x lens f = Lens.modify lens f x
 
-module Accounts =
-  Mpt.Make
-    (struct
-      let hash_keys = true
-    end)
-    (Address)
-    (struct
-      include Account
-      let commit acc = merkleized acc
-      let to_bytes acc = Rlp.encode (to_rlp acc)
-    end)
+module Accounts = struct
+  include
+    Mpt.Make
+      (struct
+        let hash_keys = true
+      end)
+      (Address)
+      (struct
+        include Account
+        let commit acc = merkleized acc
+        let to_bytes acc = Rlp.encode (to_rlp acc)
+      end)
+  let to_yojson = to_yojson Account.to_yojson
+  let of_yojson =
+    let key_of_string key =
+      try Ok (Address.of_hex_string key)
+      with _ -> Error (Format.sprintf "Cannot parse \"%s\" as Address.t" key)
+    in
+    let value_of_yojson = Account.of_yojson in
+    of_yojson key_of_string value_of_yojson
+end
 
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
@@ -94,8 +104,11 @@ module BlockState = struct
 
   (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
-      they are overwritten. *)
-  let finalize_current_block (block_state : t) : Block.t * t =
+      they are overwritten.
+      Since computing the state root requires merkleizing the world state, the merkleized world state is
+      also returned here.
+   *)
+  let finalize_current_block (block_state : t) : Block.t * WorldState.t =
     (* YP (46) *)
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
@@ -157,7 +170,7 @@ module BlockState = struct
       ; blob_gas_used
       ; parent_hash }
     in
-    ({block_state.current_block with header}, {block_state with world_state})
+    ({block_state.current_block with header}, world_state)
 end
 
 module TransactionState = struct
