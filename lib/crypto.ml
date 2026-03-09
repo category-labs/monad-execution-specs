@@ -12,6 +12,8 @@ let keccak_256 (input : Bytes.t) : B32.t =
 (** The Keccak-256 encoding of the empty byte array. *)
 let keccak_256_empty = keccak_256 Bytes.empty
 
+let () = assert (B32.(keccak_256_empty = ~@"c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"))
+
 let secp256k1b = U256.(~$7)
 let secp256k1p = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F")
 let secp256k1n = U256.(~@"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141")

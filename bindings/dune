@@ -1,0 +1,47 @@
+(library
+ (name fuzz_client)
+ (libraries unix monad_lib yojson ppx_deriving_yojson.runtime)
+ (modules fuzz_client)
+ (preprocess
+  (pps lens.ppx_deriving ppx_deriving_yojson)))
+
+(executable
+ (name fuzzrun_gen_stubs)
+ (libraries monad_lib fuzz_client ctypes ctypes.stubs ctypes-foreign)
+ (modules fuzzrun_gen_stubs bindings))
+
+(rule
+ (deps fuzzrun_gen_stubs.exe)
+ (targets
+  fuzzrun_stubs_generated.ml
+  fuzzrun_stubs_generated.h
+  fuzzrun_stubs_generated.c)
+ (action
+  (run %{exe:fuzzrun_gen_stubs.exe} ./)))
+
+(executable
+ (name libfuzzrun)
+ (libraries ctypes ctypes.stubs ctypes-foreign monad_lib fuzz_client)
+ (modules libfuzzrun fuzzrun_stubs_generated bindings)
+ (foreign_stubs
+  (language c)
+  ; Suppress unused variable errors in generated stubs (C)
+  (flags
+   (:standard -Wno-unused-variable -Wno-visibility))
+  (names fuzzrun_stubs_generated))
+ ; Suppress unused variable errors in generated stubs (OCaml)
+ (flags
+  (:standard -linkall -w -27))
+ (link_flags
+  (:standard -ccopt "-Wl,-Bsymbolic"))
+ (preprocess
+  (pps lens.ppx_deriving ppx_deriving_yojson))
+ (modes
+  (native shared_object)))
+
+(executable
+ (name fuzzrun)
+ (libraries monad_lib fuzz_client)
+ (modules fuzzrun)
+ (preprocess
+  (pps lens.ppx_deriving ppx_deriving_yojson)))

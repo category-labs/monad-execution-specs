@@ -30,6 +30,7 @@ module Result = struct
       | Internal_error
       | Rejected
       | Out_of_memory
+      | Monad_reserve_balance_violation
 
     let to_string = function
       | Success -> "Success"
@@ -53,6 +54,7 @@ module Result = struct
       | Internal_error -> "Internal error"
       | Rejected -> "Rejected"
       | Out_of_memory -> "Out of memory"
+      | Monad_reserve_balance_violation -> "Monad reserve balance violation"
   end
 
   (** Equivalent to {{:https://evmc.ethereum.org/structevmc__result.html}[evmc_result]}. *)

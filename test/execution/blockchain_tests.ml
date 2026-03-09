@@ -6,11 +6,6 @@ let fixtures_folder = Sys.getcwd () $/ "fixtures"
 
 let valid_block_tests_folder = fixtures_folder $/ "blockchain_tests" $/ "valid_blocks"
 
-let load_preconditions pre (state : Host.WorldState.t) =
-  let open Host.WorldState in
-  let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
-  {state with accounts}
-
 let check_postconditions (post : Account.t Address.Map.t) (state : Host.WorldState.t) : unit =
   let check_account_existence_and_state addr =
     let actual = Address.Map.find_opt addr state.accounts in
@@ -22,18 +17,12 @@ let check_postconditions (post : Account.t Address.Map.t) (state : Host.WorldSta
   let all_addresses = Address.(Set.union (Map.keys state.accounts) (Map.keys post)) in
   Address.Set.iter check_account_existence_and_state all_addresses
 
-let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
-  { state with
-    history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
-
 let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
   let module Execution = Execution.Make (struct
     let chain_id = fixtures.config.chain_id
     let trace = false
   end) in
-  Host.WorldState.empty
-  |> load_genesis_block fixtures.genesis_block_header
-  |> load_preconditions fixtures.pre
+  Fixtures.BlockchainTest.to_initial_world_state fixtures
   |> fun s ->
   Result.List.fold_leftM ~f:(Execution.process_block ~verify:true) s fixtures.blocks
   |> Result.map_error Execution.Error.to_string

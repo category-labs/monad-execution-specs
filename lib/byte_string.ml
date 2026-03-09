@@ -67,6 +67,10 @@ module Bytes = struct
     let compare (x : t) (y : t) = String.compare (x :> string) (y :> string)
   end)
 
+  (* RLP conversions. *)
+  let to_rlp bs = Rlp.of_bytes bs
+  let of_rlp = function Rlp.Bytes bs -> Some bs | _ -> None
+
   let of_yojson ?width (json : Yojson.Safe.t) : (t, string) result =
     let type_name = "Byte_string.t" in
     match json with
@@ -170,6 +174,10 @@ struct
     type nonrec t = t
     let compare (x : t) (y : t) = String.compare (x :> string) (y :> string)
   end)
+
+  (* RLP conversions. *)
+  let to_rlp bs = Bytes.to_rlp (to_bytes bs)
+  let of_rlp rlp = Option.bind (Bytes.of_rlp rlp) of_bytes
 
   let of_yojson (json : Yojson.Safe.t) : (t, string) result =
     let type_name = Format.sprintf "Byte_string.B%d.t" byte_width in

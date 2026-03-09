@@ -347,11 +347,25 @@ module U256 = Bits256.Unsigned
 (** Signed 256-bit integers. {!I256.t} is used for signed arithmetic on Ethereum 256-bit words. *)
 module I256 = Bits256.Signed
 
+(** Signed and unsigned 128-bit integers. {!U128.t} is used for Monad header timestamps. *)
+module Bits128 = TwosComplement (Traits.Byte_width.Bytes16)
+
+module U128 = Bits128.Unsigned
+module I128 = Bits128.Signed
+
 (** Signed and unsigned 64-bit integers. More operations than the versions in stdlib. *)
 module Bits64 = TwosComplement (Traits.Byte_width.Bytes8)
 
 module U64 = Bits64.Unsigned
 module I64 = Bits64.Signed
 
+(** Signed and unsigned 32-bit integers. More operations than the versions in stdlib. *)
+module Bits32 = TwosComplement (Traits.Byte_width.Bytes4)
+
+module U32 = Bits32.Unsigned
+module I32 = Bits32.Signed
+
+(** Single-byte integers. Used specificaly to represent a parity bit, which is encoded as a byte. *)
 module Bits8 = TwosComplement (Traits.Byte_width.Bytes1)
+
 module U8 = Bits8.Unsigned

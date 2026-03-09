@@ -37,6 +37,9 @@ module Address = struct
     match json with `String "" -> Ok None | _ -> Result.map Option.some (of_yojson json)
 
   let t_opt_to_rlp (addr : t option) = match addr with None -> Rlp.Bytes "" | Some addr -> to_rlp addr
+  let t_opt_of_rlp : Rlp.t -> t option option = function
+    | Rlp.Bytes "" -> Some None
+    | rlp -> ( match of_rlp rlp with None -> None | Some addr -> Some (Some addr) )
 end
 
 module Revision = struct
@@ -98,7 +101,15 @@ module Transaction = struct
     [@@deriving yojson]
 
     let to_rlp {address; storage_keys} =
-      Rlp.List [Address.to_rlp address; Rlp.List (List.map Rlp.of_bytes32 storage_keys)]
+      Rlp.List [Address.to_rlp address; Rlp.List (List.map B32.to_rlp storage_keys)]
+
+    let of_rlp = function
+      | Rlp.List [address; List storage_keys] ->
+          Option.(
+            let$ address = Address.of_rlp address in
+            let$ storage_keys = sequence (List.map B32.of_rlp storage_keys) in
+            return {address; storage_keys} )
+      | _ -> None
   end
 
   module Authorization = struct
@@ -119,6 +130,18 @@ module Transaction = struct
         ; U8.to_rlp y_parity
         ; U256.to_rlp r
         ; U256.to_rlp s ]
+
+    let of_rlp = function
+      | Rlp.List [chain_id; address; nonce; y_parity; r; s] ->
+          Option.(
+            let$ chain_id = U256.of_rlp chain_id in
+            let$ address = Address.of_rlp address in
+            let$ nonce = U64.of_rlp nonce in
+            let$ y_parity = U8.of_rlp y_parity in
+            let$ r = U256.of_rlp r in
+            let$ s = U256.of_rlp s in
+            return {chain_id; nonce; address; y_parity; r; s} )
+      | _ -> None
 
     (** Recover the authority address from an EIP-7702 authorization entry. *)
     let authority ({y_parity; r; s; chain_id; address; nonce} : t) : Address.t option =
@@ -324,11 +347,116 @@ module Transaction = struct
           ; U256.to_rlp tx.r
           ; U256.to_rlp tx.s ]
 
+  let of_rlp = function
+    | Rlp.List [nonce; gas_price; gas_limit; to_; tx_value; Rlp.Bytes data; v; r; s] ->
+        Option.(
+          let$ nonce = U64.of_rlp nonce in
+          let$ gas_price = Uint.of_rlp gas_price in
+          let$ gas_limit = Uint.of_rlp gas_limit in
+          let$ to_ = Address.t_opt_of_rlp to_ in
+          let$ value = U256.of_rlp tx_value in
+          let$ v = U256.of_rlp v in
+          let$ r = U256.of_rlp r in
+          let$ s = U256.of_rlp s in
+          return (Legacy {nonce; gas_price; gas_limit; to_; value; data; v; r; s}) )
+    | Rlp.List
+        [chain_id; nonce; gas_price; gas_limit; to_; tx_value; Bytes data; List access_list; y_parity; r; s]
+      ->
+        Option.(
+          let$ chain_id = Uint.of_rlp chain_id in
+          let$ nonce = U64.of_rlp nonce in
+          let$ gas_price = Uint.of_rlp gas_price in
+          let$ gas_limit = Uint.of_rlp gas_limit in
+          let$ to_ = Address.t_opt_of_rlp to_ in
+          let$ value = U256.of_rlp tx_value in
+          let$ access_list = sequence (List.map Access.of_rlp access_list) in
+          let$ y_parity = U8.of_rlp y_parity in
+          let$ r = U256.of_rlp r in
+          let$ s = U256.of_rlp s in
+          return
+            (AccessList {chain_id; nonce; gas_price; gas_limit; to_; value; data; access_list; y_parity; r; s}) )
+    | Rlp.List
+        ( chain_id
+        :: nonce
+        :: max_priority_fee_per_gas
+        :: max_fee_per_gas
+        :: gas_limit
+        :: to_
+        :: tx_value
+        :: Bytes data
+        :: List access_list
+        :: rest ) -> (
+        Option.(
+          let$ chain_id = Uint.of_rlp chain_id in
+          let$ nonce = U64.of_rlp nonce in
+          let$ max_priority_fee_per_gas = Uint.of_rlp max_priority_fee_per_gas in
+          let$ max_fee_per_gas = Uint.of_rlp max_fee_per_gas in
+          let$ gas_limit = Uint.of_rlp gas_limit in
+          let$ to_ = Address.t_opt_of_rlp to_ in
+          let$ value = U256.of_rlp tx_value in
+          let$ access_list = sequence (List.map Access.of_rlp access_list) in
+          match rest with
+          | [y_parity; r; s] ->
+              let$ y_parity = U8.of_rlp y_parity in
+              let$ r = U256.of_rlp r in
+              let$ s = U256.of_rlp s in
+              return
+                (FeeMarket
+                   { chain_id
+                   ; nonce
+                   ; max_priority_fee_per_gas
+                   ; max_fee_per_gas
+                   ; gas_limit
+                   ; to_
+                   ; value
+                   ; data
+                   ; access_list
+                   ; y_parity
+                   ; r
+                   ; s } )
+          | [List authorization_list; y_parity; r; s] ->
+              let$ authorization_list = sequence (List.map Authorization.of_rlp authorization_list) in
+              let$ y_parity = U8.of_rlp y_parity in
+              let$ r = U256.of_rlp r in
+              let$ s = U256.of_rlp s in
+              return
+                (SetCode
+                   { chain_id
+                   ; nonce
+                   ; max_priority_fee_per_gas
+                   ; max_fee_per_gas
+                   ; gas_limit
+                   ; to_
+                   ; value
+                   ; data
+                   ; access_list
+                   ; authorization_list
+                   ; y_parity
+                   ; r
+                   ; s } )
+          | _ -> None ) )
+    | _ -> None
+
   (* YP (37) *)
   let encode tx =
     match kind_tag tx with
     | `Legacy -> Rlp.encode (to_rlp tx)
     | tag -> kind_tag_to_bytes tag ^ Rlp.encode (to_rlp tx)
+
+  (* TODO: refactor this *)
+  let decode bytes =
+    if Bytes.length bytes = 0 then None
+    else
+      let expected_tag, payload =
+        match byte_to_kind_tag bytes.[0] with
+        | Some tag -> (tag, Bytes.sub bytes 1 (Bytes.length bytes - 1))
+        | None -> (`Legacy, bytes)
+      in
+      match of_rlp (Rlp.decode payload) with
+      | None -> None
+      | Some tx ->
+          assert (kind_tag tx = expected_tag) ;
+          Some tx
 
   let signing_hash chain_id tx =
     let bytes =
@@ -482,6 +610,16 @@ module Withdrawal = struct
     Rlp.List
       [U64.to_rlp global_index; U64.to_rlp validator_index; Address.to_rlp recipient; U256.to_rlp amount]
 
+  let of_rlp = function
+    | Rlp.List [global_index; validator_index; recipient; amount] ->
+        Option.(
+          let$ global_index = U64.of_rlp global_index in
+          let$ validator_index = U64.of_rlp validator_index in
+          let$ recipient = Address.of_rlp recipient in
+          let$ amount = U256.of_rlp amount in
+          return {global_index; validator_index; recipient; amount} )
+    | _ -> None
+
   let encode (withdrawal : t) = Rlp.encode (to_rlp withdrawal)
 end
 
@@ -509,33 +647,188 @@ module Block = struct
       ; blob_gas_used : U64.t (* EIP-4844 *) [@key "blobGasUsed"]
       ; excess_blob_gas : U64.t (* EIP-4844 *) [@key "excessBlobGas"]
       ; parent_beacon_block_root : B32.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
-      ; requests_hash : B32.t (* EIP-7685 *) [@key "requestsHash"] }
+      ; requests_hash : B32.t option (* EIP-7685 *) [@key "requestsHash"] }
     [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens]
 
     (* YP 4.4.3 (40) *)
     let to_rlp h =
-      Rlp.List
-        [ Rlp.of_bytes32 h.parent_hash
-        ; Rlp.of_bytes32 h.ommers_hash
-        ; Address.to_rlp h.beneficiary
-        ; Rlp.of_bytes32 h.state_root
-        ; Rlp.of_bytes32 h.transactions_root
-        ; Rlp.of_bytes32 h.receipts_root
-        ; Rlp.Bytes (Bloom.to_bytes h.logs_bloom)
-        ; Uint.to_rlp h.difficulty
-        ; Uint.to_rlp h.number
-        ; Uint.to_rlp h.gas_limit
-        ; Uint.to_rlp h.gas_used
-        ; U256.to_rlp h.timestamp
-        ; Rlp.Bytes h.extra_data
-        ; Rlp.of_bytes32 h.prev_randao
-        ; Rlp.of_bytes (B8.to_bytes h.nonce)
-        ; Uint.to_rlp h.base_fee_per_gas
-        ; Rlp.of_bytes32 h.withdrawals_root
-        ; U64.to_rlp h.blob_gas_used
-        ; U64.to_rlp h.excess_blob_gas
-        ; Rlp.of_bytes32 h.parent_beacon_block_root
-        ; Rlp.of_bytes32 h.requests_hash ]
+      let common_fields rest =
+        B32.to_rlp h.parent_hash
+        :: B32.to_rlp h.ommers_hash
+        :: Address.to_rlp h.beneficiary
+        :: B32.to_rlp h.state_root
+        :: B32.to_rlp h.transactions_root
+        :: B32.to_rlp h.receipts_root
+        :: Rlp.Bytes (Bloom.to_bytes h.logs_bloom)
+        :: Uint.to_rlp h.difficulty
+        :: Uint.to_rlp h.number
+        :: Uint.to_rlp h.gas_limit
+        :: Uint.to_rlp h.gas_used
+        :: U256.to_rlp h.timestamp
+        :: Rlp.Bytes h.extra_data
+        :: B32.to_rlp h.prev_randao
+        :: Rlp.of_bytes (B8.to_bytes h.nonce)
+        :: Uint.to_rlp h.base_fee_per_gas
+        :: B32.to_rlp h.withdrawals_root
+        :: U64.to_rlp h.blob_gas_used
+        :: U64.to_rlp h.excess_blob_gas
+        :: B32.to_rlp h.parent_beacon_block_root
+        :: rest
+      in
+      let fields =
+        match h.requests_hash with None -> common_fields [] | Some hash -> common_fields [B32.to_rlp hash]
+      in
+      Rlp.List fields
+
+    let of_rlp = function
+      | Rlp.List
+          ( parent_hash
+          :: ommers_hash
+          :: beneficiary
+          :: state_root
+          :: transactions_root
+          :: receipts_root
+          :: logs_bloom
+          :: difficulty
+          :: number
+          :: gas_limit
+          :: gas_used
+          :: timestamp
+          :: extra_data
+          :: prev_randao
+          :: nonce
+          :: base_fee_per_gas
+          :: withdrawals_root
+          :: blob_gas_used
+          :: excess_blob_gas
+          :: parent_beacon_block_root
+          :: rest ) ->
+          Option.(
+            let$ parent_hash = B32.of_rlp parent_hash in
+            let$ ommers_hash = B32.of_rlp ommers_hash in
+            let$ beneficiary = Address.of_rlp beneficiary in
+            let$ state_root = B32.of_rlp state_root in
+            let$ transactions_root = B32.of_rlp transactions_root in
+            let$ receipts_root = B32.of_rlp receipts_root in
+            let$ logs_bloom = Bloom.of_rlp logs_bloom in
+            let$ difficulty = Uint.of_rlp difficulty in
+            let$ number = Uint.of_rlp number in
+            let$ gas_limit = Uint.of_rlp gas_limit in
+            let$ gas_used = Uint.of_rlp gas_used in
+            let$ timestamp = U256.of_rlp timestamp in
+            let$ extra_data = Bytes.of_rlp extra_data in
+            let$ prev_randao = B32.of_rlp prev_randao in
+            let$ nonce = B8.of_rlp nonce in
+            let$ base_fee_per_gas = Uint.of_rlp base_fee_per_gas in
+            let$ withdrawals_root = B32.of_rlp withdrawals_root in
+            let$ blob_gas_used = U64.of_rlp blob_gas_used in
+            let$ excess_blob_gas = U64.of_rlp excess_blob_gas in
+            let$ parent_beacon_block_root = B32.of_rlp parent_beacon_block_root in
+            let$ requests_hash =
+              match rest with
+              | [] -> return None
+              | [requests_hash] -> (
+                match B32.of_rlp requests_hash with
+                | None -> None
+                | Some requests_hash -> return (Some requests_hash) )
+              | _ -> None
+            in
+            return
+              { parent_hash
+              ; ommers_hash
+              ; beneficiary
+              ; state_root
+              ; transactions_root
+              ; receipts_root
+              ; logs_bloom
+              ; difficulty
+              ; number
+              ; gas_limit
+              ; gas_used
+              ; timestamp
+              ; extra_data
+              ; prev_randao
+              ; nonce
+              ; base_fee_per_gas
+              ; withdrawals_root
+              ; blob_gas_used
+              ; excess_blob_gas
+              ; parent_beacon_block_root
+              ; requests_hash } )
+      | _ -> None
+
+    (** Read a block header provided by consensus as input to execution. Roots are not present. *)
+    let of_rlp_input = function
+      | Rlp.List
+          ( ommers_hash
+          :: beneficiary
+          :: transactions_root
+          :: difficulty
+          :: number
+          :: gas_limit
+          :: timestamp
+          :: extra_data
+          :: prev_randao
+          :: nonce
+          :: base_fee_per_gas
+          :: withdrawals_root
+          :: blob_gas_used
+          :: excess_blob_gas
+          :: parent_beacon_block_root
+          :: rest ) ->
+          Option.(
+            let parent_hash = B32.zeros in
+            let$ ommers_hash = B32.of_rlp ommers_hash in
+            let$ beneficiary = Address.of_rlp beneficiary in
+            let state_root = B32.zeros in
+            let$ transactions_root = B32.of_rlp transactions_root in
+            let receipts_root = B32.zeros in
+            let logs_bloom = Bloom.zeros in
+            let$ difficulty = Uint.of_rlp difficulty in
+            let$ number = Uint.of_rlp number in
+            let$ gas_limit = Uint.of_rlp gas_limit in
+            let gas_used = Uint.zero in
+            let$ timestamp = U256.of_rlp timestamp in
+            let$ extra_data = Bytes.of_rlp extra_data in
+            let$ prev_randao = B32.of_rlp prev_randao in
+            let$ nonce = B8.of_rlp nonce in
+            let$ base_fee_per_gas = Uint.of_rlp base_fee_per_gas in
+            let$ withdrawals_root = B32.of_rlp withdrawals_root in
+            let$ blob_gas_used = U64.of_rlp blob_gas_used in
+            let$ excess_blob_gas = U64.of_rlp excess_blob_gas in
+            let$ parent_beacon_block_root = B32.of_rlp parent_beacon_block_root in
+            let$ requests_hash =
+              match rest with
+              | [] -> return None
+              | [requests_hash] -> (
+                match B32.of_rlp requests_hash with
+                | None -> None
+                | Some requests_hash -> return (Some requests_hash) )
+              | _ -> None
+            in
+            return
+              { parent_hash
+              ; ommers_hash
+              ; beneficiary
+              ; state_root
+              ; transactions_root
+              ; receipts_root
+              ; logs_bloom
+              ; difficulty
+              ; number
+              ; gas_limit
+              ; gas_used
+              ; timestamp
+              ; extra_data
+              ; prev_randao
+              ; nonce
+              ; base_fee_per_gas
+              ; withdrawals_root
+              ; blob_gas_used
+              ; excess_blob_gas
+              ; parent_beacon_block_root
+              ; requests_hash } )
+      | _ -> None
 
     (* Empty block header, useful for testing. *)
     let empty =
@@ -559,7 +852,7 @@ module Block = struct
       ; blob_gas_used = U64.zero
       ; excess_blob_gas = U64.zero
       ; parent_beacon_block_root = B32.zeros
-      ; requests_hash = B32.zeros }
+      ; requests_hash = Some B32.zeros }
   end
 
   (* Bring block header lenses into scope for convenience. *)
@@ -678,5 +971,5 @@ module Account = struct
       mpt.root_hash
     in
     let code_hash = Crypto.keccak_256 code in
-    Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
+    Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; B32.to_rlp storage_root; B32.to_rlp code_hash]
 end
