@@ -25,6 +25,7 @@ let bytes_of_hex_string str = try Ok (Bytes.of_hex_string str) with _ -> Error "
 let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
 
 module StateTest = struct end
+
 module BlockchainTest = struct
   type info =
     { filling_rpc_server : string [@key "filling-rpc-server"]
@@ -74,6 +75,8 @@ module BlockchainTest = struct
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
     ; last_blockhash : U256.t [@key "lastblockhash"]
     ; pre : Account.t Address.Map.t
+    ; next_emptying_transaction_block : Uint.t Address.Map.t
+          [@key "nextEmptyingTransactionBlock"] [@default Address.Map.empty]
     ; post : Account.t Address.Map.t [@key "postState"] }
   [@@deriving yojson {strict = false}]
 
@@ -91,6 +94,15 @@ module BlockchainTest = struct
 
   let to_yojson (test_cases : t) : Yojson.Safe.t =
     `Assoc (List.map (fun (k, v) -> (k, test_case_to_yojson v)) test_cases)
+
+  let to_initial_world_state (test_case : test_case) =
+    let open Host.WorldState in
+    let genesis_block =
+      Block.{header = test_case.genesis_block_header; transactions = []; ommers = []; withdrawals = []}
+    in
+    { history = [genesis_block]
+    ; next_emptying_transaction_block = test_case.next_emptying_transaction_block
+    ; accounts = test_case.pre }
 end
 
 module TrieTest = struct

@@ -271,6 +271,9 @@ let of_patricia trie =
   in
   {root_hash; inv_hashes}
 
+let empty = of_patricia (PatriciaTrie.of_trie Trie.Empty)
+let () = assert (empty.root_hash = B32.(~@"56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"))
+
 (** {!of_seq} builds an MPT representing the mapping given by the key-value pairs in the input sequence. *)
 let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
   entries

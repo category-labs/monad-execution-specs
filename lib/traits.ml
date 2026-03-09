@@ -18,9 +18,19 @@ module Byte_width = struct
     let byte_width : [> `Fixed of int] = `Fixed 20
   end
 
+  (* 128 bits *)
+  module Bytes16 = struct
+    let byte_width : [> `Fixed of int] = `Fixed 16
+  end
+
   (* 64 bits *)
   module Bytes8 = struct
     let byte_width : [> `Fixed of int] = `Fixed 8
+  end
+
+  (* 32 bits *)
+  module Bytes4 = struct
+    let byte_width : [> `Fixed of int] = `Fixed 4
   end
 
   (* 8 bits *)

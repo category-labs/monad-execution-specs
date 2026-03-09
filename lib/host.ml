@@ -125,14 +125,9 @@ module BlockState = struct
       |> Bloom.union
     in
 
-    (* See https://eips.ethereum.org/EIPS/eip-7685#block-header *)
-    let requests_hash =
-      block_state.requests
-      |> List.filter (fun req -> Bytes.length req > 1)
-      |> List.stable_sort (fun r_a r_b -> Char.compare r_a.[0] r_b.[0])
-      |> Bytes.concat Bytes.empty
-      |> Crypto.keccak_256
-    in
+    (* Monad does not implement EIP-7685 request lists. The requests_hash field
+       is present, but not validated. *)
+    let requests_hash = block_state.current_block.header.requests_hash in
 
     let gas_used = block_state.gas_used in
     (* Monad does not support Blob transactions. *)

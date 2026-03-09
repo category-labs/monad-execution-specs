@@ -369,6 +369,12 @@ struct
     (* TODO validate prevrandao *)
     return ()
 
+  (* Deploy a contract on an address if the corresponding account is empty. *)
+  let deploy_contract_if_empty (block_state : BlockState.t) (addr : Address.t) (code : Bytes.t) =
+    if Account.is_empty block_state.^(BlockState.account addr) then
+      block_state.^(BlockState.account addr) <- {Account.empty with code; nonce = U64.one}
+    else block_state
+
   (* Process a system message call as in EIP-2935, EIP-4788. *)
   let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
     let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
@@ -413,7 +419,11 @@ struct
       (Some result, {block_state with world_state = transaction_state.world_state})
 
   let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
+
   let history_storage_address = Address.of_hex_string "0000f90827f1c53a10cb7a02335b175320002935"
+  let history_storage_contract =
+    Bytes.of_hex_string
+      "3373fffffffffffffffffffffffffffffffffffffffe14604657602036036042575f35600143038111604257611fff81430311604257611fff9006545f5260205ff35b5f5ffd5b5f35611fff60014303065500"
 
   let validate_input_block_against_output ~(input_block : Block.t) ~(output_block : Block.t) =
     let open Result in
@@ -462,7 +472,9 @@ struct
         (invalid_block input_block (Wrong_parent_hash {expected = output_header.parent_hash}))
     in
 
-    assert (input_block = output_block) ;
+    (* If all the roots are the same, then the actual blocks must be identical, otherwise we have
+       run into an internal error. *)
+    assert (input_block = output_block);
 
     return ()
 
@@ -484,6 +496,11 @@ struct
 
     (* EIP-2935 *)
     let block_state =
+      (* Unlike e.g. the Ethereum executable spec, if the history storage contract is not deployed we deploy
+       it here. *)
+      let block_state =
+        deploy_contract_if_empty block_state history_storage_address history_storage_contract
+      in
       let parent_hash = Block.hash (List.hd world_state.history) in
       (* Ignore call result as per EIP-2935. *)
       let _, block_state =

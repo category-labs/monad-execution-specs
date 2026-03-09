@@ -13,4 +13,8 @@ let ( >>= ) = bind
 let ( let$ ) = bind
 let return x = Some x
 
+(* TODO: better monad API for options in general *)
+let rec sequence (ls : 'a option list) : 'a list option =
+  match ls with [] -> Some [] | Some hd :: tl -> map (fun tl -> hd :: tl) (sequence tl) | None :: _ -> None
+
 let ensure (predicate : bool) : unit option = if predicate then Some () else None
