@@ -335,6 +335,8 @@ struct
     (* TODO: adapt to account for Monad base fee update rules. *)
 
     (* YP (54) (YP (55) does not apply) *)
+    (* TODO: this is temporarily commented out for fuzzing. *)
+    (*
     let max_gas_limit_update = Gas.(parent.header.gas_limit / ~$1024) in
     let$ () =
       when_
@@ -343,6 +345,7 @@ struct
         || Gas.(header.gas_limit <= parent.header.gas_limit - max_gas_limit_update) )
         (invalid_block block Invalid_gas_limit)
     in
+     *)
 
     let$ () = when_ Gas.(header.gas_used > header.gas_limit) (invalid_block block Gas_above_limit) in
 
