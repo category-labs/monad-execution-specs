@@ -151,8 +151,8 @@ let c_gascap ~gas ~gas_left ~memory_cost ~extra_cost =
 
 type call_gas = {caller_spent_gas : Uint.t (* YP C_call *); callee_available_gas : Uint.t (* YP C_callgas *)}
 
-let call_gas ~value ~gas ~gas_left ~memory_cost ~extra_cost =
+let call_gas ~transfer_value ~gas ~gas_left ~memory_cost ~extra_cost =
   let c_gascap = c_gascap ~gas ~gas_left ~memory_cost ~extra_cost in
   let caller_spent_gas = Uint.(c_gascap + extra_cost) in
-  let callee_available_gas = if U256.(value <> zero) then Uint.(c_gascap + call_stipend) else c_gascap in
+  let callee_available_gas = if transfer_value then Uint.(c_gascap + call_stipend) else c_gascap in
   {caller_spent_gas; callee_available_gas}
