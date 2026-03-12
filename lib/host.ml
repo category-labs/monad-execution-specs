@@ -304,8 +304,8 @@ struct
     in
     let zero u = B32.(u = zeros) in
     let x u = B32.(u <> zeros && u = o) in
-    let y u = B32.(u <> zeros && u = c) in
-    let z u = B32.(u <> zeros && u = v) in
+    let y u = B32.(u <> zeros && u <> o && u = c) in
+    let z u = B32.(u <> zeros && u <> o && u <> c && u = v) in
     let open Evmc.StorageStatus in
     return
       ( match () with

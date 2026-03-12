@@ -1536,7 +1536,7 @@ struct
 
     let$ gas_left = !(machine_state |-- MachineState.gas) in
     let Gas.{caller_spent_gas; callee_available_gas} =
-      Gas.call_gas ~value ~gas ~gas_left ~memory_cost:memory_extension_gas
+      Gas.call_gas ~transfer_value ~gas ~gas_left ~memory_cost:memory_extension_gas
         ~extra_cost:Uint.(access_gas + transfer_gas + create_gas)
     in
 
@@ -1550,10 +1550,13 @@ struct
 
     let$ self_addr = self in
     let$ self_balance = HostAPI.get_balance self_addr in
+    let$ call_depth = !(execution_environment |-- ExecutionEnvironment.depth) in
     let$ () =
-      if transfer_value && U256.(self_balance < value) then
+      if (transfer_value && U256.(self_balance < value)) || call_depth >= 1024 then
         let$ () = push U256.zero in
-        let$ () = update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + caller_spent_gas)) in
+        let$ () =
+          update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + callee_available_gas))
+        in
         machine_state |-- output_buffer := Bytes.empty
       else
         generic_call_impl ~kind
