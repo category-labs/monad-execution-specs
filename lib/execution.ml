@@ -233,7 +233,7 @@ struct
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
       let message = prepare_message sender available_gas tx in
-      Host.call_from_eoa message transaction_state
+      Host.(run (call_from_eoa message)) transaction_state
     in
 
     (* Propagate state changes. *)
@@ -372,7 +372,7 @@ struct
           ; accessed_addresses = Address.Set.empty
           ; accessed_keys = StorageKey.Set.empty }
       in
-      let result, transaction_state = Host.call message transaction_state in
+      let result, transaction_state = Host.run (Host.call message) transaction_state in
       assert (result.status_code = Success) ;
       (* Update block state with storage changes. As per the relevant EIPs, a system message call
        does not warm up accounts or storage slots, and it does not count towards the block gas

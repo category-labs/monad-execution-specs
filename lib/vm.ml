@@ -238,6 +238,8 @@ struct
     include St.Lift (ErrStHost) (StHost)
     include ErrStHost
 
+    let run = StHost.run
+
     module HostAPI = struct
       module Base = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
 
@@ -1909,7 +1911,7 @@ struct
     let open Monad.Make (Host) in
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg code in
-    let$ res, ctx = run code ctx in
+    let$ res, ctx = M.run (run code) ctx in
     trace (fun () -> "Finished execution\n") ;
     return
       ( match res with

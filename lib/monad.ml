@@ -256,48 +256,78 @@ struct
   module type SIG = sig
     include SIG
     type state = T.t
+
     val get : state t
-    val put : state -> unit t
+    val update : (state -> state) -> unit t
   end
 
   module Make (S : SIG) = struct
     include S
     include Make (S)
     type state = T.t
-    let update (f : state -> state) : unit t = get >>= fun s -> put (f s)
 
+    open Lens.Infix
+    let put s = update (fun _ -> s)
     let ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
-      let$ state = get in
-      put (l.set x state)
-
-    let ( ! ) (l : (state, 'x) Lens.t) : 'x t =
-      let$ state = get in
-      return (l.get state)
-
-    let update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t =
-      let$ v = !l in
-      l := f v
+      let upd s = l.set x s in
+      update upd
+    let ( ! ) (l : (state, 'x) Lens.t) : 'x t = l.get <$> get
+    let update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t = update (l ^%= f)
   end
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
 
-    include Make (struct
-      type 'a t = T.t -> ('a * T.t) Inner.t
-      let return (x : 'a) : 'a t = fun s -> Inner.return (x, s)
+    module type IMPL = sig
+      type 'a t
+      type state = T.t
+
+      val return : 'a -> 'a t
+      val ( >>= ) : 'a t -> ('a -> 'b t) -> 'b t
+
+      val get : state t
+      val update : (state -> state) -> unit t
+
+      val run : 'a t -> state -> ('a * state) Inner.t
+
+      val lift : 'a Inner.t -> 'a t
+    end
+
+    module Impl = struct
+      type 'a t = {run : 's. T.t -> ('a -> T.t -> 's Inner.t) -> 's Inner.t} [@@unboxed]
+
+      let return (x : 'a) : 'a t =
+        let run state cont = cont x state in
+        {run}
       let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
-       fun s ->
-        Inner.(
-          let$ x, s = x s in
-          f x s )
+        let run state cont =
+          let cont' x state = (f x).run state cont in
+          x.run state cont'
+        in
+        {run}
 
       type state = T.t
-      let get : T.t t = fun s -> Inner.return (s, s)
-      let put (s : T.t) : unit t = fun _ -> Inner.return ((), s)
-    end)
+      let get : T.t t =
+        let run state cont = cont state state in
+        {run}
+      let update (f : state -> state) : unit t =
+        let run s cont = cont () (f s) in
+        {run}
 
-    let lower (x : state -> 'a * state) : 'a t = fun s -> Inner.return (x s)
-    let lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (x, s)) x
+      let run (act : 'a t) (s : state) : ('a * state) Inner.t = act.run s (fun v s -> Inner.return (v, s))
+
+      let lift (x : 'a Inner.t) : 'a t =
+        let run state cont =
+          Inner.(
+            let$ x = x in
+            cont x state )
+        in
+        {run}
+    end
+    include Make (Impl)
+
+    let lift (x : 'a Inner.t) : 'a t = Impl.lift x
+    let run x s = Impl.run x s
   end
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
@@ -305,7 +335,7 @@ struct
       include MT
       type state = T.t
       let get : T.t MT.t = MT.lift M.get
-      let put x = MT.lift (M.put x)
+      let update f = MT.lift (M.update f)
     end)
   end
 
@@ -383,7 +413,7 @@ module StErr = struct
 
         let fail (err : T.error) : 'a t = fun _s -> Inner.return (Error err)
         let get = fun s -> Inner.return (Ok (s, s))
-        let put s' = fun _s -> Inner.return (Ok ((), s'))
+        let update f = fun s -> Inner.return (Ok ((), f s))
       end
 
       module State = State (struct
