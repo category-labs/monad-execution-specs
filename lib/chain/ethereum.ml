@@ -448,7 +448,7 @@ module Transaction = struct
          are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
          match on it. *)
       match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
-      | Ok None -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
+      | Ok None | Ok (Some 0) -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
       | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
       | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
       | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)

@@ -1552,7 +1552,7 @@ struct
     let$ self_balance = HostAPI.get_balance self_addr in
     let$ call_depth = !(execution_environment |-- ExecutionEnvironment.depth) in
     let$ () =
-      if (transfer_value && U256.(self_balance < value)) || call_depth >= 1024 then
+      if (transfer_value && U256.(self_balance < value)) || call_depth >= max_stack_depth then
         let$ () = push U256.zero in
         let$ () =
           update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + callee_available_gas))

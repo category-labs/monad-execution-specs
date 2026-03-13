@@ -25,15 +25,15 @@ let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex
 module StateTest = struct end
 module BlockchainTest = struct
   type info =
-    { filling_rpc_server : string [@key "filling-rpc-server"]
-    ; filling_tool_version : string [@key "filling-tool-version"]
+    { filling_rpc_server : string option [@key "filling-rpc-server"] [@default None]
+    ; filling_tool_version : string option [@key "filling-tool-version"] [@default None]
     ; fixture_format : string [@key "fixture-format"]
     ; hash : U256.t
-    ; lllc_version : string [@key "lllcversion"]
-    ; repo : string
-    ; solidity : string
-    ; source : string
-    ; source_hash : U256.t [@key "sourceHash"] }
+    ; lllc_version : string option [@key "lllcversion"] [@default None]
+    ; repo : string option [@default None]
+    ; solidity : string option [@default None]
+    ; source : string option [@default None]
+    ; source_hash : U256.t option [@key "sourceHash"] [@default None] }
   [@@deriving yojson {strict = false}]
 
   type blob_schedule =

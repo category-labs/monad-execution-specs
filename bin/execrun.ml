@@ -140,8 +140,7 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
   let info =
     Fixtures.BlockchainTest.
       { fixtures.info with
-        filling_rpc_server = Format.sprintf "execrun %s" Version.hash
-      ; filling_tool_version = ""
+        filling_rpc_server = Some (Format.sprintf "execrun %s" Version.hash)
       ; fixture_format = "blockchain_test" }
   in
   let genesis_rlp = Rlp.encode (Block.Header.to_rlp fixtures.genesis_block_header) in
