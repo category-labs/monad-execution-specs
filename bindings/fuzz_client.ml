@@ -408,7 +408,7 @@ let run (client : t) (n_blocks : int) =
   Format.printf "Finished in %fms, %fms per block\n" dt (dt /. float_of_int n_blocks) ;
   Format.print_flush ()
 
-let produce_test_fixture (client : t) (filename : string) =
+let generate_test_fixture (client : t) (filename : string) =
   let network = Chain.Monad.Revision.(to_string Eight) in
   let genesis_block = List.hd client.prev_chain.history in
   let genesis_block_header = genesis_block.Block.header in

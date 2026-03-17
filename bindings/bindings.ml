@@ -88,12 +88,12 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
       (C_Client.t @-> ptr C_B32.t @-> returning void)
       runloop_fuzz_client_get_state_root
 
-  let runloop_fuzz_client_produce_test_fixture (client : C_Client.t) (filename : string) =
-    Fuzz_client.produce_test_fixture client filename
+  let runloop_fuzz_client_generate_test_fixture (client : C_Client.t) (filename : string) =
+    Fuzz_client.generate_test_fixture client filename
   let () =
-    I.internal "runloop_fuzz_client_produce_test_fixture"
+    I.internal "runloop_fuzz_client_generate_test_fixture"
       (C_Client.t @-> string @-> returning void)
-      runloop_fuzz_client_produce_test_fixture
+      runloop_fuzz_client_generate_test_fixture
 
   let runloop_fuzz_client_dump (client : C_Client.t) =
     client.chain.accounts
