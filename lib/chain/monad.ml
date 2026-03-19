@@ -2,6 +2,8 @@
 
 open Numeric
 
+open Byte_string
+
 module Revision = struct
   (** Monad revisions, defining the set of features that are active on chain. *)
 
@@ -127,6 +129,9 @@ end
 
 let wei_per_mon = U256.(~$1_000_000_000_000_000_000)
 let mon_to_wei mon = U256.(mon * wei_per_mon)
+
+(** Privileged sender address for Monad system transactions. *)
+let system_sender = B20.of_hex_string "0x6f49a8F621353f12378d0046E7d7e4b9B249DC9e"
 
 module Constants = struct
   (** Maximum size in bytes of a deployed smart contract. Monad §TODO: maximum contract code size is larger than

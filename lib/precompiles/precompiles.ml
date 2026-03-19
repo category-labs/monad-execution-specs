@@ -5,6 +5,8 @@ open Numeric
 open Chain.Ethereum
 open Utils
 
+type precompile = Evmc.Message.t -> Evmc.Result.t State.TransactionState.M.t
+
 let ecrecover_address = Address.of_hex_string "0x01"
 let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
   (* YP (210) *)
@@ -137,10 +139,12 @@ struct
       ; Secp256r1.(address, verify) ]
 
   let monad_precompiles : monad_precompile Address.Map.t =
-    let module Reserve_balance_introspection = Reserve_balance_introspection.Make (Revision) in
     match revision with
-    | `Eight -> Address.Map.empty
-    | `Nine -> Address.Map.of_list [Reserve_balance_introspection.(address, precompile)]
+    | `Eight -> Address.Map.of_list [Staking.(address, precompile)]
+    | `Nine ->
+        let module Reserve_balance_introspection = Reserve_balance_introspection.Make (Revision) in
+        Address.Map.of_list
+          [Staking.(address, precompile); Reserve_balance_introspection.(address, precompile)]
 
   (* π in YP (142). *)
   let precompile_addresses : Address.Set.t =
@@ -171,4 +175,12 @@ struct
           Some (return Evmc.Result.(failure Rejected))
       | Some precompile -> Some (precompile msg)
       | None -> None )
+
+  (* Monad allows for privileged system transactions to call into special endpoints of certain precompiles.
+   Currently this is only the staking precompile. *)
+  let syscall_endpoints : precompile Address.Map.t =
+    Address.Map.of_list [(Staking.staking_address, Staking.staking_syscalls)]
+
+  let syscall_endpoint_addresses : Address.Set.t =
+    Address.Map.to_seq syscall_endpoints |> Seq.map (fun (addr, _endpoint) -> addr) |> Address.Set.of_seq
 end
