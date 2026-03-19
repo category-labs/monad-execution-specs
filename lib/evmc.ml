@@ -44,7 +44,7 @@ module Result = struct
       (* TODO: there is currently no Monad EVMC equivalent for this. The C++ implementation does not track
          VM error conditions with this granularity. *)
       | Create_from_delegated_eoa
-    [@@deriving eq]
+    [@@deriving yojson, eq]
 
     let is_success = function Success -> true | _ -> false
 

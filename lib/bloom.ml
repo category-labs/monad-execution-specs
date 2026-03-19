@@ -21,7 +21,7 @@ let set_bit (bloom : t) (bit_index : int) =
 let test_bit (bloom : t) (bit_index : int) : bool =
   let byte_index = bit_index / 8 in
   let bit_index = bit_index mod 8 in
-  Stdlib.(Char.code bloom.$(byte_index) land (1 lsl bit_index) <> 0)
+  Stdlib.(Char.code bloom.$(byte_index) land (128 lsr bit_index) <> 0)
 
 (** Digest an arbitrary byte-string into a Bloom filter by computing M_\{3:2048\} in YP (31), YP (32), YP (33),
     YP (34). *)

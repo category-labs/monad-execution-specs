@@ -247,6 +247,7 @@ module TransactionState = struct
     ; tx_gas_limit = Transaction.gas_limit tx }
 
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
+  let balance addr = world_state |-- WorldState.account addr |-- Account.balance
 
   (** [initialize_access_sets tx state p_addr] extends the set of accessed addresses and keys of [state] with
       the transaction sender and recipient (if any), the addresses and keys in the transaction's access list,
