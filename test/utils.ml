@@ -1,7 +1,8 @@
 open Monad_lib
-open Monad_lib.Chain.Ethereum
-open Monad_lib.Numeric
-open Monad_lib.Byte_string
+open Chain.Ethereum
+open Numeric
+open Byte_string
+open State
 
 (* Generators and printers for our types. *)
 module QCheck2 = struct
@@ -20,6 +21,7 @@ module QCheck2 = struct
 
   module Gen = struct
     include Gen
+    let tiny_nat = int_range 0 3
     let uint8 = char_range '\x00' '\xff'
     let u256 : U256.t t =
       (* Uniformly distributed random strings are very unlikely to be negative.
@@ -66,47 +68,43 @@ end
 let check_prop ~name ?print ?(count = 10000) generator property =
   QCheck_alcotest.to_alcotest (QCheck2.Test.make ?print ~name ~count generator property)
 
-let u256 =
-  ( module struct
-    include U256
-    let pp = Fmt.of_to_string U256.to_string
-  end : Alcotest.TESTABLE
-    with type t = U256.t )
+let u256 = Alcotest.testable (Fmt.of_to_string U256.to_hex_string) U256.equal
+let u64 = Alcotest.testable (Fmt.of_to_string U64.to_hex_string) U64.equal
+let u8 = Alcotest.testable (Fmt.of_to_string U8.to_hex_string) U8.equal
 
-let b32 =
-  ( module struct
-    include B32
-    let pp = Fmt.of_to_string B32.to_hex_string
-  end : Alcotest.TESTABLE
-    with type t = B32.t )
+let b32 = Alcotest.testable (Fmt.of_to_string B32.to_hex_string) B32.equal
 
-let rlp =
-  ( module struct
-    include Rlp
-    let pp = Fmt.of_to_string Rlp.to_string
-  end : Alcotest.TESTABLE
-    with type t = Rlp.t )
+let address = Alcotest.testable (Fmt.of_to_string Address.to_hex_string) Address.equal
 
-let status_code =
-  ( module struct
-    include Evmc.Result.StatusCode
-    let pp = Fmt.of_to_string (fun s -> Evmc.Result.StatusCode.to_string s)
-    let equal = Stdlib.( = )
-  end : Alcotest.TESTABLE
-    with type t = Evmc.Result.StatusCode.t )
+let rlp = Alcotest.testable (Fmt.of_to_string Rlp.to_string) Rlp.equal
+
+let status_code = Alcotest.testable (Fmt.of_to_string Evmc.Result.StatusCode.to_string) Stdlib.( = )
 
 let account =
-  ( module struct
-    include Chain.Ethereum.Account
-    let pp = Fmt.of_to_string (fun acc -> Yojson.Safe.pretty_to_string (Account.to_yojson acc))
-  end : Alcotest.TESTABLE
-    with type t = Chain.Ethereum.Account.t )
+  Alcotest.testable
+    (Fmt.of_to_string (fun acc -> Yojson.Safe.pretty_to_string (Account.to_yojson acc)))
+    Account.equal
 
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
-let expect_ok (result : ('a, string) result) : 'a =
-  match result with Ok value -> value | Error err -> Alcotest.fail err
+let expect_some ~msg (opt : 'a option) : 'a = match opt with Some value -> value | None -> Alcotest.fail msg
+
+let expect_none ~msg (opt : 'a option) : unit = match opt with Some _ -> Alcotest.fail msg | None -> ()
+
+let expect_ok ?(err_kind : 'err Alcotest.testable option) (result : ('a, 'err) result) : 'a =
+  match result with
+  | Ok value -> value
+  | Error err -> (
+    match err_kind with
+    | None -> Alcotest.fail "Expected Ok, got Error (...)"
+    | Some testable ->
+        Alcotest.fail (Format.asprintf "Expected Ok, got Error (%a)" (Alcotest.pp testable) err) )
+
+let expect_error (testable : 'err Alcotest.testable) (expected : 'err) (result : ('a, 'err) result) : unit =
+  match result with
+  | Ok _ -> Alcotest.fail (Format.asprintf "Expected Error (%a), got Ok" (Alcotest.pp testable) expected)
+  | Error actual -> Alcotest.check' testable ~msg:"Error" ~expected ~actual
 
 module Params = struct
   let chain_id = Chain.Monad.Testnet.chain_id
@@ -124,17 +122,17 @@ module Evm = struct
 end
 
 let test_message
-    ?(prepare_env : Host.TransactionState.t -> Host.TransactionState.t = Fun.id)
+    ?(prepare_env : TransactionState.t -> TransactionState.t = Fun.id)
     ?(prepare_vm : unit Evm.Vm.M.t = Evm.Vm.M.return ())
     ?(check_vm_state : unit Evm.Vm.M.t option)
-    ?(check_env_state : Host.TransactionState.t -> unit = fun _ -> ())
+    ?(check_env_state : TransactionState.t -> unit = fun _ -> ())
     ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
     (msg : Evmc.Message.t) =
   (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
      With better VM instrumentation we can remove the duplication *)
   let action =
     let open Evm.Host in
-    let open Monad.State (Host.TransactionState) in
+    let open Monad.State (TransactionState) in
     let$ tx_context = get_tx_context in
     let$ host = get in
     let module Exe = Evm.Vm.Executor (struct
@@ -175,7 +173,7 @@ let test_message
               ; create_address = Address.zero }
         | _ -> Evmc.Result.failure err ) )
   in
-  let result, state = action (prepare_env Host.TransactionState.empty) in
+  let result, state = action (prepare_env TransactionState.empty) in
   (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;

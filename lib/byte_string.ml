@@ -142,6 +142,7 @@ struct
 
   let make char = init (fun _ -> char)
   let zeros = make '\x00'
+  let ones = make '\xff'
 
   let of_bytes_exn (bs : Bytes.t) : t = Option.get (of_bytes bs)
   let to_bytes (bs : t) : string = (bs :> string)
@@ -158,6 +159,8 @@ struct
   let mapi (f : int -> char -> char) (bs : t) = init (fun i -> f i bs.$(i))
   let iter (f : char -> unit) (bs : t) = String.iter f (bs :> string)
   let iteri (f : int -> char -> unit) (bs : t) = String.iteri f (bs :> string)
+  let for_all (f : char -> bool) (bs : t) = String.for_all f (bs :> string)
+  let exists (f : char -> bool) (bs : t) = String.exists f (bs :> string)
 
   let reverse (bs : t) =
     let byte_i i = bs.$(byte_width - i - 1) in
@@ -234,16 +237,46 @@ struct
       |> List.of_seq
       |> fun entries -> `Assoc entries
   end
+
+  (* Bitwise operations on fixed bytestrings. *)
+
+  let lift_bytewise f (b1 : t) (b2 : t) : t =
+    init (fun i -> Char.chr (f (Char.code b1.$(i)) (Char.code b2.$(i))))
+
+  let logand = lift_bytewise Int.logand
+  let logor = lift_bytewise Int.logor
+  let logxor = lift_bytewise Int.logxor
+  let lognot (b : t) =
+    init (fun i ->
+        let b_i = Char.code b.$(i) in
+        Char.chr Int.(logxor 255 b_i) )
+
+  let union (bs : t Seq.t) : t = Seq.fold_left logor zeros bs
+  let intersection (bs : t Seq.t) : t = Seq.fold_left logand ones bs
+
+  (* Index goes left-to-right. So bit_index = 0 corresponds to the most-significant bit of the 0th byte. *)
+  let set_bit (b : t) (bit_index : int) =
+    let byte_index = bit_index / 8 in
+    let bit_index = bit_index mod 8 in
+    init (fun i ->
+        if Stdlib.(i = byte_index) then Char.chr (Char.code b.$(i) lor (128 lsr bit_index)) else b.$(i) )
+
+  let test_bit (b : t) (bit_index : int) : bool =
+    let byte_index = bit_index / 8 in
+    let bit_index = bit_index mod 8 in
+    Stdlib.(Char.code b.$(byte_index) land (128 lsr bit_index) <> 0)
 end
 
 module B256 = Fixed (Traits.Byte_width.Bytes256)
 module B96 = Fixed (Traits.Byte_width.Bytes96)
 module B64 = Fixed (Traits.Byte_width.Bytes64)
 module B48 = Fixed (Traits.Byte_width.Bytes48)
+module B33 = Fixed (Traits.Byte_width.Bytes33)
 module B32 = Fixed (Traits.Byte_width.Bytes32)
 module B20 = struct
   include Fixed (Traits.Byte_width.Bytes20)
 
+  (** Truncate a 32-byte string [bs] to a 20-byte address, discarding the leftmost bytes. *)
   let of_bytes32_truncating (bs : B32.t) : t = init (fun i -> B32.(bs.$(i + 32 - 20)))
 
   (** Widen a 20 byte string [addr] to 32 bytes by left-padding with zeros. *)
@@ -251,3 +284,4 @@ module B20 = struct
     B32.init (fun i -> if Stdlib.(i < 32 - 20) then '\x00' else addr.$(i - 32 + 20))
 end
 module B8 = Fixed (Traits.Byte_width.Bytes8)
+module B4 = Fixed (Traits.Byte_width.Bytes4)

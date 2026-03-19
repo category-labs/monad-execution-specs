@@ -1,8 +1,10 @@
 open Byte_string
 open Numeric
 open Chain.Ethereum
+open State
 
-type precompile = Evmc.Message.t -> Evmc.Result.t
+type precompile_result = Evmc.Result.t TransactionState.M.t
+type precompile = Evmc.Message.t -> precompile_result
 
 (** A state/result monad for executing Ethereum precompiles. This includes primitives for parsing the message's
     input data, validating gas and checking precompile-specific preconditions. *)
@@ -106,19 +108,21 @@ module Precompile = struct
       match res with Error _ -> precompile_failure | Ok v -> Base.return v
   end
 
-  (** Run a Bytes.t computation on an input message, returning an Evmc.Result.t *)
-  let run (msg : Evmc.Message.t) (impl : Bytes.t t) : Evmc.Result.t =
-    match impl (msg, 0) with
-    | Ok output, (msg', _) ->
-        Evmc.Result.
-          { status_code = StatusCode.Success
-          ; gas_left = msg'.gas
-          ; gas_refund = 0L
-          ; output_data = output
-          ; create_address = Address.zero }
-    | Error err, _ ->
-        assert (err <> Evmc.Result.StatusCode.Success) ;
-        Evmc.Result.failure err
+  (** Turn a Bytes.t computation into a precompile by applying it to an input message and embedding the
+      result in a pure TransactionState computation. *)
+  let run (msg : Evmc.Message.t) (impl : Bytes.t t) : Evmc.Result.t TransactionState.M.t =
+    ( match impl (msg, 0) with
+      | Ok output, (msg', _) ->
+          Evmc.Result.
+            { status_code = StatusCode.Success
+            ; gas_left = msg'.gas
+            ; gas_refund = 0L
+            ; output_data = output
+            ; create_address = Address.zero }
+      | Error err, _ ->
+          assert (err <> Evmc.Result.StatusCode.Success) ;
+          Evmc.Result.failure err )
+    |> TransactionState.M.return
 end
 
 (** Encoding and decoding for G_1/G_2 points for EC precompiles. *)

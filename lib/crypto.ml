@@ -3,6 +3,10 @@
 open Numeric
 open Byte_string
 
+external blake3_hash : string -> string = "caml_blake3"
+
+let blake3 (input : Bytes.t) : B32.t = B32.of_bytes_exn (blake3_hash input)
+
 (** [keccak_256 bytes] computes the Keccak-256 digest of a byte array. *)
 let keccak_256 (input : Bytes.t) : B32.t =
   let bytes = Digestif.KECCAK_256.(to_raw_string (digest_string input)) in
@@ -54,6 +58,85 @@ let ecrecover {r; s; y_parity} (msg_hash : B32.t) : B20.t option =
       let public_key_i i = result_bigstring.{i + 1} in
       let public_key = Bytes.init 64 public_key_i in
       return (B20.of_bytes32_truncating (keccak_256 public_key)) ) )
+
+module Secp = struct
+  open Libsecp256k1.External
+  type sk = Key.secret Key.t
+  type pk = Key.public Key.t
+  type signature = Sign.plain Sign.t
+
+  let sk_of_bytes (sk : B32.t) : sk option =
+    Result.to_option (Key.read_sk context (Bigstring.of_string (B32.to_bytes sk)))
+  let sk_to_bytes (sk : sk) : B32.t =
+    Bigstring.to_string (Key.to_bytes context ~compress:false sk) |> B32.of_bytes_exn
+
+  let pk_of_bytes (pk : B33.t) : pk option =
+    Result.to_option (Key.read_pk context (Bigstring.of_string (B33.to_bytes pk)))
+  let pk_to_bytes (pk : pk) : B33.t =
+    Bigstring.to_string (Key.to_bytes context ~compress:true pk) |> B33.of_bytes_exn
+
+  let signature_of_bytes (signature : Bytes.t) : signature option =
+    Result.to_option (Sign.read context (Bigstring.of_string signature))
+  let signature_to_bytes (signature : signature) : Bytes.t =
+    Bigstring.to_string (Sign.to_bytes context signature)
+
+  let sign (sk : sk) (msg : Bytes.t) : signature =
+    let digest = Bigstring.of_string (B32.to_bytes (blake3 msg)) in
+    Sign.sign_exn context ~sk digest
+
+  let verify (pk : pk) ~(msg : Bytes.t) ~(signature : signature) : bool =
+    let digest = Bigstring.of_string (B32.to_bytes (blake3 msg)) in
+    Sign.verify_exn context ~pk ~msg:digest ~signature
+
+  let gen_keypair (secret : B32.t) : pk * sk =
+    let sk = Key.read_sk_exn context (Bigstring.of_string (B32.to_bytes secret)) in
+    let pk = Key.neuterize_exn context sk in
+    (pk, sk)
+
+  let address_of_pubkey (pk : pk) : B20.t =
+    let uncompressed = Key.to_bytes ~compress:false context pk in
+    let public_key = Bytes.init 64 (fun i -> Bigstring.get uncompressed (i + 1)) in
+    B20.of_bytes32_truncating (keccak_256 public_key)
+end
+
+module Bls = struct
+  open Bls12_381_signature
+  type nonrec sk = sk
+  type pk = MinPk.pk
+  type signature = MinPk.signature
+
+  let sk_of_secret (secret : B32.t) : sk = generate_sk (Bytes.to_bytes (B32.to_bytes secret))
+  let sk_of_bytes (sk : B32.t) : sk option = sk_of_bytes_opt (Bytes.to_bytes (B32.to_bytes sk))
+  let sk_to_bytes (sk : sk) : B32.t = sk_to_bytes sk |> Stdlib.Bytes.to_string |> B32.of_bytes_exn
+
+  let pk_of_bytes (pk : B48.t) : pk option = MinPk.pk_of_bytes_opt (Bytes.to_bytes (B48.to_bytes pk))
+  let pk_to_bytes (pk : pk) : B48.t = MinPk.pk_to_bytes pk |> Stdlib.Bytes.to_string |> B48.of_bytes_exn
+
+  let signature_of_bytes (signature : Bytes.t) : signature option =
+    MinPk.signature_of_bytes_opt (Bytes.to_bytes signature)
+  let signature_to_bytes (signature : signature) : Bytes.t =
+    MinPk.signature_to_bytes signature |> Stdlib.Bytes.to_string
+
+  let sign (sk : sk) (msg : Bytes.t) : signature =
+    let msg = Bytes.to_bytes msg in
+    MinPk.Pop.sign sk msg
+
+  let verify (pk : pk) ~(msg : Bytes.t) ~(signature : signature) : bool =
+    let msg = Bytes.to_bytes msg in
+    MinPk.Pop.verify pk msg signature
+
+  let gen_keypair (secret : B32.t) : pk * sk =
+    let sk = generate_sk (Bytes.to_bytes (B32.to_bytes secret)) in
+    let pk = MinPk.derive_pk sk in
+    (pk, sk)
+
+  let address_of_pubkey (pk : pk) : B20.t =
+    Bls12_381.G1.of_compressed_bytes_exn (MinPk.pk_to_bytes pk)
+    |> Bls12_381.G1.to_bytes
+    |> Stdlib.Bytes.to_string
+    |> keccak_256
+    |> B20.of_bytes32_truncating
+end
 
 let sha_256 (bs : Bytes.t) : B32.t = B32.of_bytes_exn Digestif.SHA256.(to_raw_string (digest_string bs))
 

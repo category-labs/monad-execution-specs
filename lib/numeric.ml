@@ -74,8 +74,10 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
 
   (** [byte ~index-le x] extracts the [i]-th byte from the Little-endian representation of [x]. *)
   let byte ~index_le x =
-    let le_bytes = Z.to_bits (to_z x) in
-    if index_le >= String.length le_bytes then '\x00' else le_bytes.[index_le]
+    let bit_index = 8 * index_le in
+    (* Z.extract will pad with zeros when reading past the end of the number. *)
+    let x = Z.(to_int (extract (to_z x) bit_index 8)) in
+    Char.chr x
 
   let significant_bits x = Z.numbits (to_z x)
   let significant_bytes x = (significant_bits x + 7) / 8
@@ -245,6 +247,8 @@ module Integer = struct
   let legendre a modulus = Z.legendre (to_z a) (to_z modulus)
 end
 
+type arithmetic_error = Overflow | Underflow | Division_by_zero
+
 (** Helper functor to create pairs of signed and unsigned types for a given bit width, together with conversion
     functions via two's complement. *)
 module TwosComplement (B : sig
@@ -348,6 +352,17 @@ struct
       Option.(
         let$ uint = Uint.of_rlp rlp in
         of_uint_opt uint )
+
+    module Checked = struct
+      let lift_2_or error op x y =
+        match of_z_opt (op (to_z x) (to_z y)) with Some r -> Ok r | None -> Error error
+
+      let ( + ) = lift_2_or Overflow Z.( + )
+      let ( - ) = lift_2_or Underflow Z.( - )
+      let ( * ) = lift_2_or Overflow Z.( * )
+
+      let ( / ) x y = if y = zero then Error Division_by_zero else Ok (x / y)
+    end
   end
 end
 

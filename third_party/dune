@@ -1,0 +1,32 @@
+(dirs
+ (:standard \ tests \ blake3))
+
+(rule
+ (copy blake3/c/blake3.c blake3.c))
+
+(rule
+ (copy blake3/c/blake3_dispatch.c blake3_dispatch.c))
+
+(rule
+ (copy blake3/c/blake3_portable.c blake3_portable.c))
+
+(rule
+ (copy blake3/c/blake3.h blake3.h))
+
+(rule
+ (copy blake3/c/blake3_impl.h blake3_impl.h))
+
+(library
+ (name blake3_vendored)
+ (public_name monad-spec.blake3_vendored)
+ (wrapped false)
+ (foreign_stubs
+  (language c)
+  (names blake3 blake3_dispatch blake3_portable blake3_stubs)
+  (flags
+   (:standard
+    -DBLAKE3_USE_NEON=0
+    -DBLAKE3_NO_SSE2
+    -DBLAKE3_NO_SSE41
+    -DBLAKE3_NO_AVX2
+    -DBLAKE3_NO_AVX512))))

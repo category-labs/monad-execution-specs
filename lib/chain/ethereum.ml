@@ -39,6 +39,9 @@ module Address = struct
   let t_opt_to_rlp (addr : t option) = match addr with None -> Rlp.Bytes "" | Some addr -> to_rlp addr
 end
 
+(* Sender for system transactions as in e.g. EIP-2935, EIP-4788. *)
+let system_sender = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe"
+
 module Revision = struct
   type t =
     (* The Frontier revision.
@@ -643,11 +646,55 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
+(* Storage is a thin abstraction layer over B32-indexed maps that implicitly reads zeros from absent entries
+   (and deletes any entries set to zero). *)
+module Storage : sig
+  type t
+  type key = B32.t
+  type value = B32.t
+
+  val ( = ) : t -> t -> bool
+  val ( <> ) : t -> t -> bool
+
+  val find : key -> t -> value
+  val add : key -> value -> t -> t
+  val at : key -> (t, value) Lens.t
+
+  val empty : t
+
+  val to_seq : t -> (key * value) Seq.t
+  val keys : t -> B32.Set.t
+
+  val to_yojson : t -> Yojson.Safe.t
+  val of_yojson : Yojson.Safe.t -> (t, string) result
+end = struct
+  type t = B32.t B32.Map.t
+  type key = B32.t
+  type value = B32.t
+
+  let empty = B32.Map.empty
+
+  let ( = ) s1 s2 = B32.Map.compare B32.compare s1 s2 = 0
+  let ( <> ) s1 s2 = B32.Map.compare B32.compare s1 s2 <> 0
+
+  let find key s = Option.value (B32.Map.find_opt key s) ~default:B32.zeros
+  let add key value s = if B32.(value = zeros) then B32.Map.remove key s else B32.Map.add key value s
+  let at key = Lens.{get = find key; set = add key}
+
+  let to_seq = B32.Map.to_seq
+  let keys = B32.Map.keys
+
+  let to_yojson = B32.Map.to_yojson B32.to_yojson
+  let of_yojson json =
+    B32.Map.of_yojson B32.of_yojson json
+    |> Result.map (B32.Map.filter_map (fun _k v -> if B32.(v = zeros) then None else Some v))
+end
+
 module Account = struct
   type t =
     { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t (* σ[a]_b *)
-    ; storage : B32.t B32.Map.t (* σ[a]_s *)
+    ; storage : Storage.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
   [@@deriving lens {submodule = true; prefix = true}, yojson]
   include TLens
@@ -656,11 +703,12 @@ module Account = struct
   let equal acc_1 acc_2 =
     U64.(acc_1.nonce = acc_2.nonce)
     && U256.(acc_1.balance = acc_2.balance)
-    && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
+    && Storage.(acc_1.storage = acc_2.storage)
     && Bytes.(acc_1.code = acc_2.code)
   let ( = ) = equal
+  let ( <> ) acc_1 acc_2 = not (acc_1 = acc_2)
 
-  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U64.zero}
+  let empty = {balance = U256.zero; storage = Storage.empty; code = Bytes.empty; nonce = U64.zero}
 
   (* YP (14) *)
   let is_empty {balance; nonce; code; _} = U256.(balance = zero) && U64.(nonce = zero) && Bytes.(code = empty)
@@ -671,7 +719,7 @@ module Account = struct
     let storage_root =
       let mpt =
         storage
-        |> B32.Map.to_seq
+        |> Storage.to_seq
         |> Seq.map (fun (k, v) ->
             let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
             let v = Rlp.encode U256.(to_rlp (of_repr v)) in

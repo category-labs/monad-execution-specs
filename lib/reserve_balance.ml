@@ -46,4 +46,6 @@ let dipped_into_reserve
   Address.Map.to_seq original_balances
   |> Seq.exists (fun (addr, orig_account) ->
       let new_account = Address.Map.find_opt addr new_state |> Option.value ~default:Account.empty in
-      (not (Account.is_smart_contract new_account)) && account_reserve_violated addr orig_account new_account )
+      (* The staking contract is explicitly excluded from reserve balance checks. *)
+      (not (Account.is_smart_contract new_account || Address.(addr = Staking.staking_address)))
+      && account_reserve_violated addr orig_account new_account )

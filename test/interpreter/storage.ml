@@ -2,8 +2,9 @@ open Test_utils
 open Test_utils.Utils
 open Alcotest
 
-open Monad_lib.Numeric
-open Monad_lib.Byte_string
+open Monad_lib
+open Numeric
+open Byte_string
 
 let () =
   run "Storage opcodes"

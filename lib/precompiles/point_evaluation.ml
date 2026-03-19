@@ -131,7 +131,7 @@ let verify_kzg_proof ~commitment ~z ~y ~proof =
     ensure (pairing_check [(p_minus_y, G_2.(neg generator)); (proof, x_minus_z)]) )
 
 let address = Address.of_hex_string "0x0a"
-let precompile (msg : Evmc.Message.t) : Evmc.Result.t =
+let precompile (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data = 192) in

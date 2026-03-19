@@ -1,0 +1,18 @@
+(version 6.1.0)
+
+(build
+ (all_platforms
+  ((action
+    (progn
+     (when %{pkg-self:dev} (run dune subst))
+     (run dune build -p %{pkg-self:name} -j %{jobs} @install))))))
+
+(depends
+ (all_platforms
+  (dune ocaml zarith hex integers)))
+
+(source
+ (fetch
+  (url
+   https://gitlab.com/nomadic-labs/cryptography/ocaml-bls12-381/-/archive/6.1.0/ocaml-bls12-381-6.1.0.tar.gz)
+  (checksum md5=999c150ef33f33ab2d040308a810a527)))

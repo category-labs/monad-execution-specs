@@ -297,7 +297,7 @@ let g2_discount =
   fun k -> IntMap.find_opt k discount_table |> Option.value ~default:max_discount
 
 let g1_add_address = Address.of_hex_string "0x0b"
-let g1_add (msg : Evmc.Message.t) : Evmc.Result.t =
+let g1_add (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data = 256) in
@@ -311,7 +311,7 @@ let g1_add (msg : Evmc.Message.t) : Evmc.Result.t =
        return (delta_1_inv C_1.(p_0 + p_1)) ) )
 
 let g1_msm_address = Address.of_hex_string "0x0c"
-let g1_msm (msg : Evmc.Message.t) : Evmc.Result.t =
+let g1_msm (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data mod 160 = 0) in
@@ -327,7 +327,7 @@ let g1_msm (msg : Evmc.Message.t) : Evmc.Result.t =
        return (delta_1_inv (sum :> C_1.t)) ) )
 
 let g2_add_address = Address.of_hex_string "0x0d"
-let g2_add (msg : Evmc.Message.t) : Evmc.Result.t =
+let g2_add (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data = 512) in
@@ -341,7 +341,7 @@ let g2_add (msg : Evmc.Message.t) : Evmc.Result.t =
        return (delta_2_inv C_2.(p_0 + p_1)) ) )
 
 let g2_msm_address = Address.of_hex_string "0x0e"
-let g2_msm (msg : Evmc.Message.t) : Evmc.Result.t =
+let g2_msm (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data mod 288 = 0) in
@@ -357,7 +357,7 @@ let g2_msm (msg : Evmc.Message.t) : Evmc.Result.t =
        return (delta_2_inv (sum :> C_2.t)) ) )
 
 let pairing_check_address = Address.of_hex_string "0x0f"
-let pairing_check (msg : Evmc.Message.t) : Evmc.Result.t =
+let pairing_check (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data mod 384 = 0) in
@@ -373,7 +373,7 @@ let pairing_check (msg : Evmc.Message.t) : Evmc.Result.t =
       ) )
 
 let map_fp_to_g1_address = Address.of_hex_string "0x10"
-let map_fp_to_g1 (msg : Evmc.Message.t) : Evmc.Result.t =
+let map_fp_to_g1 (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data = 64) in
@@ -384,7 +384,7 @@ let map_fp_to_g1 (msg : Evmc.Message.t) : Evmc.Result.t =
        return (delta_1_inv (Ec.Bls12_381.map_fp_to_g1 fp_elem :> C_1.t)) ) )
 
 let map_fp2_to_g2_address = Address.of_hex_string "0x11"
-let map_fp2_to_g2 (msg : Evmc.Message.t) : Evmc.Result.t =
+let map_fp2_to_g2 (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = ensure (Bytes.length msg.input_data = 128) in

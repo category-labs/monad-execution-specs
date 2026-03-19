@@ -52,7 +52,7 @@ let read_at_most_256_bits (data : Bytes.t) ~(start : Uint.t) ~(length : Uint.t) 
       (* Start is beyond the input data length. Zero-padding gives 0. *)
       U256.zero
 
-let precompile (msg : Evmc.Message.t) : Evmc.Result.t =
+let precompile (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ base_length = U256.to_uint <$> u256 in

@@ -341,6 +341,10 @@ struct
 
       let or_fail (err : error) = function None -> S.fail err | Some x -> S.return x
     end
+
+    let or_fail (res : ('a, error) result) : 'a t = match res with Ok v -> return v | Error err -> fail err
+
+    let ensure (predicate : bool) ~or_error : unit t = if predicate then return () else fail or_error
   end
   [@@inline]
 
