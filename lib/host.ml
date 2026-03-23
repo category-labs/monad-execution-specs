@@ -235,7 +235,7 @@ module TransactionState = struct
     let target_addresses =
       match Transaction.call_or_create tx with
       | Call {to_; _} -> (
-        match Delegation.get_delegated_address transaction_state.^(account sender).code with
+        match Delegation.get_delegated_address transaction_state.^(account to_).code with
         | None -> Address.Set.singleton to_
         | Some delegated -> Address.Set.of_list [to_; delegated] )
       | Create _ ->
@@ -434,13 +434,15 @@ struct
             return
               { result with
                 gas_left = Int64.zero
+              ; gas_refund = 0L
               ; output_data = Bytes.empty
               ; status_code =
                   Evmc.Result.StatusCode.(
                     if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
           else
+            let gas_left = Int64.(result.gas_left - Gas.to_int64 contract_code_gas) in
             let$ () = account create_address |-- code := contract_code in
-            return {result with create_address}
+            return {result with create_address; gas_left}
       | _ -> return result
 
   let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =

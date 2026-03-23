@@ -477,7 +477,7 @@ struct
 
     (* If all the roots are the same, then the actual blocks must be identical, otherwise we have
        run into an internal error. *)
-    assert (input_block = output_block);
+    assert (input_block = output_block) ;
 
     return ()
 
