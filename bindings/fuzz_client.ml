@@ -335,7 +335,7 @@ let finalized_headers ledger_path = headers_from ledger_path finalized_head
 let proposed_headers ledger_path = headers_from ledger_path proposed_head
 
 let set_balance (client : t) (addr : Address.t) (balance : U256.t) =
-  client.chain <- (client.chain.^(account ~keep_empty:true addr |-- Account.balance) <- balance)
+  client.chain <- (client.chain.^(account addr |-- Account.balance) <- balance)
 
 let get_balance (client : t) (addr : Address.t) = client.chain.^(account addr).balance
 
@@ -397,10 +397,7 @@ let run (client : t) (n_blocks : int) =
       in
       client.chain <- chain )
     blocks ;
-  let rec rev_take n acc = function
-    | x :: xs when n > 0 -> rev_take (n - 1) (x :: acc) xs
-    | _ -> acc
-  in
+  let rec rev_take n acc = function x :: xs when n > 0 -> rev_take (n - 1) (x :: acc) xs | _ -> acc in
   client.last_run_blocks <- rev_take n_blocks [] client.chain.history ;
 
   let t1 = Unix.gettimeofday () in

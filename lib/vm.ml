@@ -1432,8 +1432,12 @@ struct
 
     let$ () = check_write_permissions in
 
-    let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
     let$ self_addr = self in
+
+    let$ self_code_start = HostAPI.copy_code self_addr ~offset:0 ~size:Delegation.eoa_delegated_code_length in
+    let$ () = when_ (Delegation.is_valid_delegation self_code_start) (fail Failure) in
+
+    let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
     let$ self_balance = HostAPI.get_balance self_addr in
     if self_balance < endowment || new_depth > max_stack_depth then push U256.zero
     else
@@ -1520,11 +1524,10 @@ struct
 
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
     let$ delegation = access_delegation code_address in
-    let code_address, access_gas =
+    let access_gas =
       match delegation with
-      | Direct _delegation -> (code_address, access_gas)
-      | Delegated {delegation_access_gas; code_address} ->
-          (code_address, Gas.(access_gas + delegation_access_gas))
+      | Direct _delegation -> access_gas
+      | Delegated {delegation_access_gas; _} -> Gas.(access_gas + delegation_access_gas)
     in
 
     let transfer_value = kind <> Evmc.Message.CallKind.DelegateCall && U256.(value <> zero) in
