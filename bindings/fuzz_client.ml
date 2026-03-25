@@ -414,15 +414,15 @@ let generate_test_fixture (client : t) (filename : string) =
   let genesis_block_header = genesis_block.Block.header in
   let test_case : Fixtures.BlockchainTest.test_case =
     { info =
-        { filling_rpc_server = "monad-execution-fuzzer"
-        ; filling_tool_version = ""
+        { filling_rpc_server = Some "monad-execution-fuzzer"
+        ; filling_tool_version = None
         ; fixture_format = "blockchain_test"
         ; hash = U256.zero
-        ; lllc_version = ""
-        ; repo = ""
-        ; solidity = ""
-        ; source = "monad-execution-fuzzer"
-        ; source_hash = U256.zero }
+        ; lllc_version = None
+        ; repo = None
+        ; solidity = None
+        ; source = None
+        ; source_hash = None }
     ; blocks = client.last_run_blocks
     ; config = {blob_schedule = []; chain_id = client.chain_id; network}
     ; genesis_block_header
