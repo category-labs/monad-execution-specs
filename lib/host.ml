@@ -248,7 +248,8 @@ module TransactionState = struct
         ; pre_compiled_contract_addresses
         ; Address.Set.singleton sender
         ; Address.Set.singleton transaction_state.current_block.header.beneficiary
-        ; target_addresses ]
+        ; target_addresses
+        ; transaction_state.accessed_addresses ]
     in
     {transaction_state with accessed_addresses; accessed_keys}
 

@@ -243,8 +243,6 @@ struct
             ; nonce = U64.(sender_account.nonce + one) } )
       in
 
-      let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
-
       (* Process EIP-7702 authorizations. *)
       let authorities, transaction_state =
         List.fold_left
@@ -254,6 +252,9 @@ struct
             | Some authority, transaction_state -> (authority :: authorities, transaction_state) )
           ([], transaction_state) (Transaction.authorization_list tx)
       in
+
+      let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
+
       (* Bump the emptying transaction counter for valid authorizations. This accounts for auth_condition
          in Monad §6 Algorithm 4. *)
       let transaction_state = bump_emptying_transaction_counters authorities transaction_state in
@@ -346,7 +347,6 @@ struct
         (invalid_block block Invalid_gas_limit)
     in
      *)
-
     let$ () = when_ Gas.(header.gas_used > header.gas_limit) (invalid_block block Gas_above_limit) in
 
     (* YP (56), however note that Monad's shorter interval between blocks requires a weaker comparison. *)
