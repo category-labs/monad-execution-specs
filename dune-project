@@ -16,4 +16,5 @@
     (qcheck-core (= 0.27))
     (qcheck-alcotest (= 0.27))
     (yojson (= 3.0.0))
-    (ppx_deriving_yojson (= 3.10.0))))
+    (ppx_deriving_yojson (= 3.10.0))
+    (mtime (= 2.1.0))))

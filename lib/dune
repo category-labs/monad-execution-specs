@@ -17,6 +17,7 @@
   digestif
   secp256k1-internal
   yojson
-  ppx_deriving_yojson.runtime)
+  ppx_deriving_yojson.runtime
+  mtime.clock)
  (preprocess
   (pps lens.ppx_deriving ppx_deriving_yojson)))
