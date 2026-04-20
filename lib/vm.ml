@@ -11,7 +11,9 @@ module Make
 struct
   module Memory : sig
     type t
-    val empty : t
+    val empty : memory_capacity:Uint.t -> t
+
+    val max_memory_usage : Uint.t
 
     val read_block_at : U256.t -> U256.t -> t -> Bytes.t
     val read_word_at : U256.t -> t -> U256.t
@@ -22,21 +24,31 @@ struct
 
     val active_words : t -> Uint.t (* μ_i *)
 
-    val extend_to : start:U256.t -> size_bytes:U256.t -> t -> t
+    val extend_to : start:U256.t -> size_bytes:U256.t -> t -> t option
+
+    val available_memory_size : t -> Uint.t
 
     (* For debugging purposes *)
     val dump : t -> unit
   end = struct
     type t =
       { contents : char U256.Map.t (* Corresponds to μ_m *)
-      ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *) }
+      ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *)
+      ; memory_capacity : Uint.t (* Total memory capacity in bytes. *) }
+
+    let max_memory_usage =
+      match Params.revision with
+      | `Eight -> Uint.zero
+      | `Nine ->
+          (* MIP-3. *)
+          Uint.of_int (8 * 1024 * 1024)
 
     (** Check that the index start + size - 1 does not overflow U256.t. *)
     let u256_overflow_check start size_bytes =
       assert (U256.in_range Z.(U256.to_z start + U256.to_z size_bytes - one))
 
     (** Check that the index start + size - 1 does not exceed the active bytes. Memory must be extended
-     by a call to [extend_to] beforehand. *)
+        by a call to [extend_to] beforehand. *)
     let active_bytes_overflow_check mem start size_bytes =
       assert (Uint.(mem.active_bytes >= U256.(to_uint start) + U256.(to_uint size_bytes)))
 
@@ -68,18 +80,36 @@ struct
     let write_word_at pos w = U256.to_repr w |> U256.Repr.to_bytes |> write_block_at pos
 
     let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
+    let empty ~memory_capacity =
+      assert (memory_capacity <= max_memory_usage) ;
+      {contents = U256.Map.empty; active_bytes = Uint.zero; memory_capacity}
 
-    let empty = {contents = U256.Map.empty; active_bytes = Uint.zero}
+    let active_words mem = Uint.(bytes_to_whole_words mem.active_bytes)
 
-    let active_words mem = Uint.bytes_to_whole_words mem.active_bytes
+    let available_memory_size =
+      match Params.revision with
+      | `Eight -> fun _mem -> max_memory_usage
+      | `Nine -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
 
-    let extend_to ~start ~size_bytes mem =
-      if U256.(size_bytes = zero) then mem
+    let extend_to_monad_eight ~start ~size_bytes mem =
+      if U256.(size_bytes = zero) then Some mem
       else
         (* Round up to whole words. *)
         let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
         let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
-        {mem with active_bytes}
+        Some {mem with active_bytes}
+
+    let extend_to_monad_nine ~start ~size_bytes mem =
+      if U256.(size_bytes = zero) then Some mem
+      else
+        (* Round up to whole words. *)
+        let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
+        let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
+        (* MIP-3: enforce the per-call budget, not the global 8 MB ceiling. *)
+        if Uint.(active_bytes <= mem.memory_capacity) then Some {mem with active_bytes} else None
+
+    let extend_to =
+      match Params.revision with `Eight -> extend_to_monad_eight | `Nine -> extend_to_monad_nine
 
     let dump mem =
       (* Write one word at a time *)
@@ -109,10 +139,10 @@ struct
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
-    let initial =
-      { gas = Uint.zero
+    let initial ~gas ~memory_capacity =
+      { gas
       ; pc = U256.zero
-      ; memory = Memory.empty
+      ; memory = Memory.empty ~memory_capacity
       ; stack = []
       ; output_buffer = Bytes.empty
       ; gas_refund = Integer.zero }
@@ -207,7 +237,9 @@ struct
 
     let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
       { execution_environment = ExecutionEnvironment.make ctx msg code
-      ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
+      ; machine_state =
+          MachineState.initial ~gas:(Uint.of_uint64 msg.gas)
+            ~memory_capacity:Uint.(of_uint32 msg.memory_capacity)
       ; jump_destinations = valid_jump_destinations code
       ; initial_storage = U256.Map.empty }
   end
@@ -754,11 +786,15 @@ struct
   let extend_memory_to ~start ~size_bytes : Uint.t M.t =
     if U256.(size_bytes = zero) then return Uint.zero
     else
-      let$ current_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
-      let$ () = update_field (machine_state |-- memory) (Memory.extend_to ~start ~size_bytes) in
-      let$ new_memory_words = Memory.active_words <$> !(machine_state |-- memory) in
-      if Uint.(current_memory_words >= new_memory_words) then return Uint.zero
-      else return Gas.(memory_cost new_memory_words - memory_cost current_memory_words)
+      let$ current = !(machine_state |-- memory) in
+      let current_active_words = Memory.active_words current in
+      let$ extended = Memory.extend_to ~start ~size_bytes current |> Option.or_fail Out_of_memory in
+      let$ () = machine_state |-- memory := extended in
+      let$ new_active_words = Memory.active_words <$> !(machine_state |-- memory) in
+      if Uint.(current_active_words >= new_active_words) then return Uint.zero
+      else
+        return
+          Gas.(memory_cost Params.revision new_active_words - memory_cost Params.revision current_active_words)
 
   let keccak =
     (* Stack *)
@@ -1397,7 +1433,8 @@ struct
       let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g + U256.to_uint call_gas)) in
       push U256.zero
     else
-      let$ input_data = Memory.read_block_at input_start input_size <$> !(machine_state |-- memory) in
+      let$ mem = !(machine_state |-- memory) in
+      let input_data = Memory.read_block_at input_start input_size mem in
       let delegated = match delegation with Direct _ -> false | Delegated _ -> true in
       let message =
         Evmc.(
@@ -1413,7 +1450,8 @@ struct
             ; value
             ; create2_salt = B32.zeros
             ; code_address
-            ; code = Bytes.empty } )
+            ; code = Bytes.empty
+            ; memory_capacity = Uint.to_uint32 (Memory.available_memory_size mem) } )
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
@@ -1462,7 +1500,8 @@ struct
       let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g - create_message_gas)) in
 
       let$ () = machine_state |-- output_buffer := Bytes.empty in
-      let$ call_data = Memory.read_block_at input_start input_size_bytes <$> !(machine_state |-- memory) in
+      let$ mem = !(machine_state |-- memory) in
+      let call_data = Memory.read_block_at input_start input_size_bytes mem in
 
       let message =
         Evmc.(
@@ -1478,7 +1517,8 @@ struct
             ; value = endowment
             ; create2_salt
             ; code_address = Address.zero
-            ; code = Bytes.empty } )
+            ; code = Bytes.empty
+            ; memory_capacity = Uint.to_uint32 (Memory.available_memory_size mem) } )
       in
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in

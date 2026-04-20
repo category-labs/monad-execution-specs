@@ -95,6 +95,11 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   let to_uint64 x = Z.to_int64_unsigned (to_z x)
   let to_int64 x = Z.to_int64 (to_z x)
 
+  let of_uint32 i = of_z_exn (Z.of_int32_unsigned i)
+  let of_int32 i = of_z_exn (Z.of_int32 i)
+  let to_uint32 x = Z.to_int32_unsigned (to_z x)
+  let to_int32 x = Z.to_int32 (to_z x)
+
   let hash x = Z.hash (to_z x)
 
   include Comparable.Make (struct
