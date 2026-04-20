@@ -92,7 +92,8 @@ module Message = struct
     ; value : U256.t
     ; create2_salt : B32.t
     ; code_address : Address.t
-    ; code : Bytes.t }
+    ; code : Bytes.t
+    ; memory_capacity : Int32.t }
 end
 
 module TxInitcode = struct

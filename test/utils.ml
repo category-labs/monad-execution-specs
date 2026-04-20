@@ -121,7 +121,6 @@ module Evm = struct
   module Vm = Vm.Make (Params) (Evm0.Host)
   module Host = Host.Make (Params) (Vm)
 end
-module Vm = Evm.Vm
 
 let test_message
     ?(prepare_env : unit Evm.Host.t = Evm.Host.return ())
@@ -136,7 +135,7 @@ let test_message
     let open Evm.Host in
     let$ () = prepare_env in
     let$ tx_context = get_tx_context in
-    let ctx = Vm.Context.make tx_context msg msg.code in
+    let ctx = Evm.Vm.Context.make tx_context msg msg.code in
     let$ res, ctx =
       Evm.Vm.M.(
         let$ () = prepare_vm in
@@ -195,12 +194,13 @@ let bytecode_to_call_message code =
       ; value = U256.of_int 1000
       ; create2_salt = B32.zeros
       ; code_address = Address.zero
-      ; code } )
+      ; code
+      ; memory_capacity = Uint.to_uint32 Evm.Vm.Memory.max_memory_usage } )
 
 let expect_stack expected_stack =
   let open Lens.Infix in
   let open Evm.Vm.M in
-  let$ stack = !(Vm.Context.machine_state |-- Vm.MachineState.stack) in
+  let$ stack = !(Evm.Vm.Context.machine_state |-- Evm.Vm.MachineState.stack) in
   Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
     ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
   return
@@ -215,7 +215,7 @@ let test_bytecode_pure bc ~input_stack ~output_stack =
   let msg = bytecode_to_call_message bc in
   ignore
     (test_message
-       ~prepare_vm:(Vm.Context.machine_state |-- Vm.MachineState.stack := input_stack)
+       ~prepare_vm:(Evm.Vm.Context.machine_state |-- Evm.Vm.MachineState.stack := input_stack)
        ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =

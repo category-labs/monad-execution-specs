@@ -55,11 +55,6 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
         (* Other precompiles. *)
       ; "mf_tests/byzantium/eip214_staticcall/staticcall"
 
-        (* MIP-3. *)
-      ; "mf_tests/monad_nine/mip3_linear_memory/oom_deep"
-      ; "mf_tests/monad_nine/mip3_linear_memory/oom"
-      ; "mf_tests/monad_nine/mip3_linear_memory/gas_cost"
-
         (* MIP-4. *)
       ; "mf_tests/monad_nine/mip4_checkreservebalance/fork_transition"
       ; "mf_tests/monad_nine/mip4_checkreservebalance/tx_revert"
@@ -81,15 +76,11 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
       [ (* modexp precompile. *)
         (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1), [])
       ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15), [])
+      ; (("mf_tests/monad_nine/mip3_linear_memory/oom", 19), [])
 
         (* Other precompiles. *)
       ; (("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10), [])
       ; (("mf_tests/frontier/precompiles/precompiles", 0), [])
-
-        (* MIP-3. *)
-      ; (("mf_tests/cancun/eip5656_mcopy/mcopy_memory_expansion", 1), [`Eight])
-      ; (("mf_tests/frontier/opcodes/call", 1), [`Eight])
-      ; (("mf_tests/frontier/opcodes/call", 2), [`Eight])
 
         (* Misc. *)
       ; (("mf_tests/shanghai/eip3860_initcode/initcode", 1), [`Eight])

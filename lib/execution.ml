@@ -76,7 +76,8 @@ struct
       ; delegated = Delegation.is_valid_delegation code
       ; input_data = data
       ; depth = 0l
-      ; create2_salt = B32.zeros }
+      ; create2_salt = B32.zeros
+      ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
 
   let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
     (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her
@@ -396,7 +397,8 @@ struct
           ; input_data = data
           ; create2_salt = B32.zeros
           ; code_address = addr
-          ; code }
+          ; code
+          ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
       in
       let transaction_state =
         TransactionState.
