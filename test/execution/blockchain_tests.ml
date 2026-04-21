@@ -29,11 +29,6 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
       ; "mf_tests/monad_nine/mip4_checkreservebalance/transfers"
       ; "mf_tests/monad_nine/mip4_checkreservebalance/precompile_call"
       ; "mf_tests/monad_nine/mip4_checkreservebalance/multi_block"
-
-        (* MIP-5. *)
-      ; "mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds"
-      ; "mf_tests/osaka/eip7823_modexp_upper_bounds/modexp_upper_bounds"
-      ; "mf_tests/osaka/eip7939_count_leading_zeros/count_leading_zeros"
       ] [@ocamlformat "disable"]
   in
   (* Tests disabled at the individual test fixture or revision level, specified as a mapping from the test

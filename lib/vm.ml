@@ -1851,105 +1851,87 @@ struct
       (* PC *)
       finish_execution ~return_output:false
 
-    let execute_opcode (opcode : Opcode.t) =
-      let impl =
-        match opcode with
-        (* Arithmetic *)
-        | Add -> add
-        | Mul -> mul
-        | Sub -> sub
-        | Udiv -> udiv
-        | Sdiv -> sdiv
-        | Umod -> umod
-        | Smod -> smod
-        | Addmod -> addmod
-        | Mulmod -> mulmod
-        | Exp -> exp
-        | Signextend -> signextend
-        (* Comparison *)
-        | Lt -> lt
-        | Gt -> gt
-        | Slt -> slt
-        | Sgt -> sgt
-        | Eq -> eq
-        | Iszero -> is_zero
-        (* Bitwise *)
-        | And -> bitwise_and
-        | Or -> bitwise_or
-        | Xor -> bitwise_xor
-        | Not -> bitwise_not
-        | Byte -> byte
-        | Shl -> shl
-        | Shr -> shr
-        | Sar -> sar
-        (* Cryptography *)
-        | Keccak -> keccak
-        (* Environment *)
-        | Address -> address
-        | Balance -> balance
-        | Origin -> origin
-        | Caller -> caller
-        | Callvalue -> callvalue
-        | Calldataload -> calldataload
-        | Calldatasize -> calldatasize
-        | Calldatacopy -> calldatacopy
-        | Codesize -> codesize
-        | Codecopy -> codecopy
-        | Gasprice -> gasprice
-        | Extcodesize -> extcodesize
-        | Extcodecopy -> extcodecopy
-        | Returndatasize -> returndatasize
-        | Returndatacopy -> returndatacopy
-        | Extcodehash -> extcodehash
-        | Blockhash -> blockhash
-        | Coinbase -> coinbase
-        | Timestamp -> timestamp
-        | Number -> number
-        | Prevrandao -> prevrandao
-        | Gaslimit -> gaslimit
-        | Chainid -> chainid
-        | Selfbalance -> selfbalance
-        | Basefee -> basefee
-        | Blobhash -> blobhash
-        | Blobbasefee -> blobbasefee
-        | Gas -> gas_
-        (* Memory and storage *)
-        | Msize -> msize
-        | Mload -> mload
-        | Mstore -> mstore
-        | Mstore8 -> mstore8
-        | Sload -> sload
-        | Sstore -> sstore
-        | Tload -> tload
-        | Tstore -> tstore
-        | Mcopy -> mcopy
-        (* Control flow *)
-        | Jump -> jump
-        | Jumpi -> jumpi
-        | Pc -> pc_
-        | Jumpdest -> jumpdest
-        | Stop -> stop
-        | Return -> return_
-        | Revert -> revert
-        (* Stack *)
-        | Pop -> pop_
-        | Push i -> push_ i
-        | Dup i -> dup i
-        | Swap i -> swap i
-        (* System *)
-        | Log i -> log i
-        | Create -> create
-        | Call -> call
-        | Callcode -> callcode
-        | Delegatecall -> delegatecall
-        | Create2 -> create2
-        | Staticcall -> staticcall
-        | Selfdestruct -> selfdestruct
-        (* Error *)
-        | Invalid -> invalid
-        | Undefined _ -> undefined
-      in
-      impl
+  let execute_opcode (opcode : Opcode.t) =
+    let impl =
+      match opcode with
+      (* Arithmetic *)
+      | Add -> add
+      | Mul -> mul
+      | Sub -> sub
+      | Udiv -> udiv
+      | Sdiv -> sdiv
+      | Umod -> umod
+      | Smod -> smod
+      | Addmod -> addmod
+      | Mulmod -> mulmod
+      | Exp -> exp
+      | Signextend -> signextend
+      (* Comparison *)
+      | Lt -> lt
+      | Gt -> gt
+      | Slt -> slt
+      | Sgt -> sgt
+      | Eq -> eq
+      | Iszero -> is_zero
+      (* Bitwise *)
+      | And -> bitwise_and
+      | Or -> bitwise_or
+      | Xor -> bitwise_xor
+      | Not -> bitwise_not
+      | Byte -> byte
+      | Shl -> shl
+      | Shr -> shr
+      | Sar -> sar
+      | Clz -> clz
+      (* Cryptography *)
+      | Keccak -> keccak
+      (* Environment *)
+      | Address -> address
+      | Balance -> balance
+      | Origin -> origin
+      | Caller -> caller
+      | Callvalue -> callvalue
+      | Calldataload -> calldataload
+      | Calldatasize -> calldatasize
+      | Calldatacopy -> calldatacopy
+      | Codesize -> codesize
+      | Codecopy -> codecopy
+      | Gasprice -> gasprice
+      | Extcodesize -> extcodesize
+      | Extcodecopy -> extcodecopy
+      | Returndatasize -> returndatasize
+      | Returndatacopy -> returndatacopy
+      | Extcodehash -> extcodehash
+      | Blockhash -> blockhash
+      | Coinbase -> coinbase
+      | Timestamp -> timestamp
+      | Number -> number
+      | Prevrandao -> prevrandao
+      | Gaslimit -> gaslimit
+      | Chainid -> chainid
+      | Selfbalance -> selfbalance
+      | Basefee -> basefee
+      | Blobhash -> blobhash
+      | Blobbasefee -> blobbasefee
+      | Gas -> gas_
+      (* Memory and storage *)
+      | Msize -> msize
+      | Mload -> mload
+      | Mstore -> mstore
+      | Mstore8 -> mstore8
+      | Sload -> sload
+      | Sstore -> sstore
+      | Tload -> tload
+      | Tstore -> tstore
+      | Mcopy -> mcopy
+      (* Control flow *)
+      | Jump -> jump
+      | Jumpi -> jumpi
+      | Pc -> pc_
+      | Jumpdest -> jumpdest
+      | Stop -> stop
+      | Return -> return_
+      | Revert -> revert
 
     let trace_stack =
       if Params.trace then ( fun stack ->

@@ -184,8 +184,6 @@ module TransactionState = struct
 
   include TLens
 
-  let pre_compiled_contract_addresses = Address.Map.keys Precompiles.precompiles
-
   (* Empty transaction state, useful for running EVM tests against it. *)
   let empty =
     let world_state = WorldState.empty in
@@ -223,7 +221,8 @@ module TransactionState = struct
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
 
   (* YP (77). *)
-  let initialize_access_sets (tx : Transaction.t) (transaction_state : t) =
+  let initialize_access_sets
+      (tx : Transaction.t) (transaction_state : t) (precompile_addresses : Address.Set.t) =
     let open Transaction.Access in
     let sender = transaction_state.tx_origin in
     let access_list = Transaction.access_list tx in
@@ -250,7 +249,7 @@ module TransactionState = struct
     let accessed_addresses =
       List.fold_left Address.Set.union Address.Set.empty
         [ access_list_addresses
-        ; pre_compiled_contract_addresses
+        ; precompile_addresses
         ; Address.Set.singleton sender
         ; Address.Set.singleton transaction_state.current_block.header.beneficiary
         ; target_addresses
@@ -365,7 +364,7 @@ struct
         U64.(nonce + one) )
 
   let try_precompile (address : Address.t) (msg : Evmc.Message.t) ~otherwise =
-    match Address.Map.find_opt address Precompiles.precompiles with
+    match Address.Map.find_opt address (Precompiles.precompiles ChainParams.revision) with
     | Some precompile when not msg.delegated -> return (precompile msg)
     | Some _ ->
         (* Delegated calls to precompiles are executed as if the corresponding contract was empty,

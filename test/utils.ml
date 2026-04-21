@@ -110,7 +110,7 @@ let expect_ok (result : ('a, string) result) : 'a =
 
 module Params = struct
   let chain_id = Chain.Monad.Testnet.chain_id
-  let revision = `Eight
+  let revision = `Nine
   let trace = false
   let debug_tstore = false
 end

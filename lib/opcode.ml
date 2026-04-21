@@ -27,6 +27,7 @@ type t =
   | Shl
   | Shr
   | Sar
+  | Clz
   (* 0x2X *)
   | Keccak
   (* 0x3X *)
@@ -123,6 +124,7 @@ let of_byte = function
   | '\x1b' -> Shl
   | '\x1c' -> Shr
   | '\x1d' -> Sar
+  | '\x1e' -> Clz
   | '\x20' -> Keccak
   | '\x30' -> Address
   | '\x31' -> Balance
@@ -210,6 +212,7 @@ let info = function
   | Shl -> {opcode = Shl; byte = '\x1b'; name = "Shl"}
   | Shr -> {opcode = Shr; byte = '\x1c'; name = "Shr"}
   | Sar -> {opcode = Sar; byte = '\x1d'; name = "Sar"}
+  | Clz -> {opcode = Clz; byte = '\x1e'; name = "Clz"}
   | Keccak -> {opcode = Keccak; byte = '\x20'; name = "Keccak"}
   | Address -> {opcode = Address; byte = '\x30'; name = "Address"}
   | Balance -> {opcode = Balance; byte = '\x31'; name = "Balance"}

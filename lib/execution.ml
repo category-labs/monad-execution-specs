@@ -268,7 +268,10 @@ struct
 
       (* Note that the access set is initialized after authorizations are processed. In particular, if the
          recipient changes delegation, it is the new delegation that is warmed up. *)
-      let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
+      let transaction_state =
+        let precompile_addresses = Address.Map.keys (Precompiles.precompiles Params.revision) in
+        TransactionState.initialize_access_sets tx transaction_state precompile_addresses
+      in
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
       let message = prepare_message sender available_gas tx in
