@@ -78,7 +78,10 @@ let blake2f (msg : Evmc.Message.t) : Evmc.Result.t =
        |> Bytes.(concat empty)
        |> return ) )
 
-let precompiles : precompile Address.Map.t =
+let precompiles_eight =
+  let module Modexp = Modexp.Make (struct
+    let revision = `Eight
+  end) in
   Address.Map.of_list
     [ (ecrecover_address, ecrecover)
     ; (sha256_address, sha256)
@@ -98,3 +101,30 @@ let precompiles : precompile Address.Map.t =
     ; Bls12_381.(map_fp_to_g1_address, map_fp_to_g1)
     ; Bls12_381.(map_fp2_to_g2_address, map_fp2_to_g2)
     ; Secp256r1.(address, verify) ]
+
+let precompiles_nine =
+  let module Modexp = Modexp.Make (struct
+    let revision = `Nine
+  end) in
+  Address.Map.of_list
+    [ (ecrecover_address, ecrecover)
+    ; (sha256_address, sha256)
+    ; (ripemd160_address, ripemd160)
+    ; (identity_address, identity)
+    ; Modexp.(address, precompile)
+    ; Alt_bn128.(add_address, add)
+    ; Alt_bn128.(mul_address, mul)
+    ; Alt_bn128.(pairing_check_address, pairing_check)
+    ; (blake2f_address, blake2f)
+    ; Point_evaluation.(address, precompile)
+    ; Bls12_381.(g1_add_address, g1_add)
+    ; Bls12_381.(g1_msm_address, g1_msm)
+    ; Bls12_381.(g2_add_address, g2_add)
+    ; Bls12_381.(g2_msm_address, g2_msm)
+    ; Bls12_381.(pairing_check_address, pairing_check)
+    ; Bls12_381.(map_fp_to_g1_address, map_fp_to_g1)
+    ; Bls12_381.(map_fp2_to_g2_address, map_fp2_to_g2)
+    ; Secp256r1.(address, verify) ]
+
+let precompiles (revision : Chain.Monad.Revision.active) : precompile Address.Map.t =
+  match revision with `Eight -> precompiles_eight | `Nine -> precompiles_nine
