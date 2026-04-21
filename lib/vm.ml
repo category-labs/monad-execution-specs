@@ -834,6 +834,24 @@ struct
       (* PC *)
       increase_pc_and_continue
 
+  let clz =
+    match Params.revision with
+    | `Eight -> undefined
+    | `Nine ->
+        (* Stack *)
+        let$ value = pop in
+
+        (* Gas *)
+        let$ () = spend Gas.low in
+
+        (* Operation *)
+        let result = U256.of_int (U256.bit_width - U256.significant_bits value) in
+        let$ () = push result in
+
+        (* PC *)
+        increase_pc_and_continue
+
+
     let extend_memory_to ~start ~size_bytes : Uint.t M.t =
       if U256.(size_bytes = zero) then return Uint.zero
       else
