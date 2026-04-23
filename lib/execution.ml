@@ -4,50 +4,50 @@ open Byte_string
 open Host
 open Lens.Infix
 
+module Error = struct
+  type invalid_block =
+    | Nonempty_ommers
+    | Nonzero_difficulty
+    | Nonzero_nonce
+    | Wrong_base_fee of {expected : Gas.t}
+    | Invalid_gas_limit
+    | Gas_above_limit
+    | Invalid_timestamp
+    | Invalid_number
+    | Extra_data_too_long
+    | Wrong_parent_hash of {expected : B32.t}
+    | Wrong_merkle_root of {kind : [`Transactions | `Withdrawals | `State | `Receipts]; expected : B32.t}
+    | Wrong_gas_used of {expected : Gas.t}
+    | Wrong_logs_bloom of {expected : Bloom.t}
+  [@@deriving to_yojson]
+
+  type invalid_transaction =
+    | Wrong_chain_id
+    | Invalid_signature
+    | Invalid_nonce of {addr : Address.t; expected : U64.t}
+    | Nonce_overflow
+    | Initcode_too_long
+    | Insufficient_balance of {balance : U256.t; required : Gas.t}
+    | Invalid_delegation of {code : Bytes.t}
+    | Cannot_pay_floor_gas of {floor_gas : Gas.t}
+    | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
+    | Empty_authorization_list
+    | Transaction_fee_below_base of {base_fee_per_gas : Gas.t}
+  [@@deriving to_yojson]
+
+  type t =
+    | Invalid_block of {block : Block.t; reason : invalid_block}
+    | Invalid_transaction of {block : Block.t; transaction : Transaction.t; reason : invalid_transaction}
+  [@@deriving to_yojson]
+
+  let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
+end
+
 module Make (Params : sig
   include Chain.Monad.PARAMS
   val trace : bool
 end) =
 struct
-  module Error = struct
-    type invalid_block =
-      | Nonempty_ommers
-      | Nonzero_difficulty
-      | Nonzero_nonce
-      | Wrong_base_fee of {expected : Gas.t}
-      | Invalid_gas_limit
-      | Gas_above_limit
-      | Invalid_timestamp
-      | Invalid_number
-      | Extra_data_too_long
-      | Wrong_parent_hash of {expected : B32.t}
-      | Wrong_merkle_root of {kind : [`Transactions | `Withdrawals | `State | `Receipts]; expected : B32.t}
-      | Wrong_gas_used of {expected : Gas.t}
-      | Wrong_logs_bloom of {expected : Bloom.t}
-    [@@deriving to_yojson]
-
-    type invalid_transaction =
-      | Wrong_chain_id
-      | Invalid_signature
-      | Invalid_nonce of {addr : Address.t; expected : U64.t}
-      | Nonce_overflow
-      | Initcode_too_long
-      | Insufficient_balance of {balance : U256.t; required : Gas.t}
-      | Invalid_delegation of {code : Bytes.t}
-      | Cannot_pay_floor_gas of {floor_gas : Gas.t}
-      | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
-      | Empty_authorization_list
-      | Transaction_fee_below_base of {base_fee_per_gas : Gas.t}
-    [@@deriving to_yojson]
-
-    type t =
-      | Invalid_block of {block : Block.t; reason : invalid_block}
-      | Invalid_transaction of {block : Block.t; transaction : Transaction.t; reason : invalid_transaction}
-    [@@deriving to_yojson]
-
-    let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
-  end
-
   let invalid_block block reason = Error Error.(Invalid_block {block; reason})
   let invalid_transaction block transaction reason =
     Error Error.(Invalid_transaction {block; transaction; reason})

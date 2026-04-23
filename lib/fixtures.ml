@@ -45,9 +45,34 @@ module BlockchainTest = struct
     ; network : string }
   [@@deriving yojson]
 
+  (* Test case blocks come in a different format when the test case expects an exception to be raised. *)
+  type test_case_block = {block : Block.t; expect_exception : string option}
+  let test_case_block_of_yojson json =
+    match json.$("expectException") with
+    | `Null ->
+        (* Parse as normal block. *)
+        Result.(
+          let$ block = Block.of_yojson json in
+          return {block; expect_exception = None} )
+    | exn ->
+        (* Parse as exception-raising block. *)
+        Result.(
+          let$ exn = [%of_yojson: string] exn in
+          let$ _rlp = Bytes.of_yojson json.$("rlp") in
+          let$ block = Block.of_yojson json.$("rlp_decoded") in
+          return {block; expect_exception = Some exn} )
+  let test_case_block_to_yojson {block; expect_exception} =
+    match expect_exception with
+    | None -> Block.to_yojson block
+    | Some exn ->
+        `Assoc
+          [ ("rlp", Bytes.to_yojson (Rlp.encode (Block.to_rlp block)))
+          ; ("rlp_decoded", Block.to_yojson block)
+          ; ("expectException", [%to_yojson: string] exn) ]
+
   type test_case =
     { info : info [@key "_info"]
-    ; blocks : Block.t list
+    ; blocks : test_case_block list
     ; config : config
     ; genesis_block_header : Block.Header.t [@key "genesisBlockHeader"]
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
