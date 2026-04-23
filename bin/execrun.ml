@@ -98,7 +98,11 @@ let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.M
     | None, None -> assert false
   in
   let all_addresses = Address.(Set.union (Map.keys state.accounts) (Map.keys post)) in
-  Address.Set.for_all check_account_existence_and_state all_addresses
+  Address.Set.fold
+    (fun addr acc ->
+      let ok = check_account_existence_and_state addr in
+      ok && acc )
+    all_addresses true
 
 let load_preconditions pre (state : Host.WorldState.t) =
   let open Host.WorldState in
@@ -109,17 +113,34 @@ let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.Wor
   { state with
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
 
+module Test_failure = struct
+  type test_failure = Expected_ok of Execution.Error.t | Expected_error of string
+  let to_string = function
+    | Expected_ok err -> Format.sprintf "Expected ok, got %s" (Execution.Error.to_string err)
+    | Expected_error err -> Format.sprintf "Expected error %s, got success" err
+end
+
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   let module Execution = Execution.Make (struct
     let chain_id = fixtures.config.chain_id
     let trace = trace
   end) in
+  let check_block_fixture state Fixtures.BlockchainTest.{block; expect_exception} =
+    let result = Execution.process_block ~verify:true state block in
+    match (result, expect_exception) with
+    | Ok state, None -> Ok state
+    | Error _, Some _ ->
+        (* TODO: standarize on error messages and check those. *)
+        Ok state
+    | Ok _, Some err -> Error (Test_failure.Expected_error err)
+    | Error err, None -> Error (Test_failure.Expected_ok err)
+  in
   Host.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  Result.List.fold_leftM ~f:(Execution.process_block ~verify:false) s fixtures.blocks
-  |> Result.map_error Execution.Error.to_string
+  Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
+  |> Result.map_error Test_failure.to_string
   |> Result.get_ok'
 
 let check_test_result (name, fixtures, post_state) =
@@ -131,7 +152,12 @@ let check_test_results results = List.for_all check_test_result results
 
 let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : Host.WorldState.t) =
   let post = post_state.accounts in
-  let blocks = List.(tl (rev post_state.history)) in
+  (* TODO: allow for blocks that expect a failure. *)
+  let blocks =
+    List.map
+      (fun block -> Fixtures.BlockchainTest.{block; expect_exception = None})
+      List.(tl (rev post_state.history))
+  in
   (* TODO: don't hard-code this *)
   let config =
     let blob_schedule = List.map (fun (_, sched) -> (network, sched)) fixtures.config.blob_schedule in
@@ -192,12 +218,13 @@ let () =
   match test_kind with
   | `Blockchain ->
       let blockchain_tests =
-        match Fixtures.BlockchainTest.of_yojson ~skip_invalid:true (Yojson.Safe.from_file fixtures_file) with
+        match Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file fixtures_file) with
         | Error place -> failwith (Format.sprintf "Error when decoding %s" place)
-        | Ok tests -> tests
+        | Ok tests ->
+            List.filter
+              (fun (_name, test_case) -> test_case.Fixtures.BlockchainTest.network = "MONAD_EIGHT")
+              tests
       in
-      if List.is_empty blockchain_tests then (
-        Format.printf "No valid tests found in %s!\n" fixtures_file ;
-        Format.printf "No valid tests found in %s!\n" fixtures_file ) ;
+      if List.is_empty blockchain_tests then Format.printf "No valid tests found in %s!\n" fixtures_file ;
       if not (run_blockchain_tests blockchain_tests) then (Format.printf "Some tests failed\n" ; exit (-1))
   | `State -> failwith "TODO"

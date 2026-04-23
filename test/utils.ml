@@ -253,3 +253,10 @@ let test_cases_opcode_3 opcode cases =
   , List.map (fun ((x_0, x_1, x_2), y) -> test_case_opcode_3 opcode x_0 x_1 x_2 y) cases )
 
 let ( $/ ) path file = Filename.concat path file
+
+let rec traverse_folder (path : string) : (string * string) Seq.t =
+  Sys.readdir path
+  |> Array.to_seq
+  |> Seq.concat_map (fun entry ->
+      let file = path $/ entry in
+      if Sys.is_directory file then traverse_folder file else Seq.singleton (path, entry) )
