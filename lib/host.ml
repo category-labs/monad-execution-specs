@@ -119,7 +119,7 @@ module BlockState = struct
       |> List.filter (fun req -> Bytes.length req > 1)
       |> List.stable_sort (fun r_a r_b -> Char.compare r_a.[0] r_b.[0])
       |> Bytes.concat Bytes.empty
-      |> Crypto.keccak_256
+      |> Crypto.sha_256
     in
 
     let gas_used = block_state.gas_used in
@@ -350,29 +350,38 @@ struct
         assert (U64.(nonce < max_t)) ;
         U64.(nonce + one) )
 
+  let try_precompile (address : Address.t) (msg : Evmc.Message.t) ~otherwise =
+    match Address.Map.find_opt address Precompiles.precompiles with
+    | Some precompile when not msg.delegated -> return (precompile msg)
+    | Some _ ->
+        (* Delegated calls to precompiles are executed as if the corresponding contract was empty,
+          as per EIP-7702. *)
+        Vm.execute msg Bytes.empty
+    | None -> otherwise
+
   let process_call (msg : Evmc.Message.t) =
     assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
     let$ transfer_ok =
       if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
     in
     if transfer_ok then
-      match Address.Map.find_opt msg.recipient Precompiles.precompiles with
-      | Some precompile when not msg.delegated -> return (precompile msg)
-      | Some _ ->
-          (* Delegated calls to precompiles are executed as if the corresponding contract was empty, as per EIP-7702. *)
-          Vm.execute msg Bytes.empty
-      | None ->
-          let$ code =
-            (* If the message provides the code to be called then it's executed, otherwise it's fetched from
-             the provided code_address. *)
-            if Bytes.(msg.code = empty) then
-              let$ account_code = !(account msg.code_address |-- code) in
-              match Delegation.get_delegated_address account_code with
-              | None -> return account_code
-              | Some delegated_addr -> !(account delegated_addr |-- code)
-            else return msg.code
-          in
-          Vm.execute msg code
+      try_precompile msg.recipient msg
+        ~otherwise:
+          ((* Callcode and Delegatecall may provide a precompile address to invoke its code. Since precompile
+            addresses do not actually have any code, this needs to be special-cased. *)
+           try_precompile msg.code_address msg
+             ~otherwise:
+               (let$ code =
+                  (* If the message provides the code to be called then it's executed, otherwise it's fetched
+                     from the provided code_address. *)
+                  if Bytes.(msg.code = empty) then
+                    let$ account_code = !(account msg.code_address |-- code) in
+                    match Delegation.get_delegated_address account_code with
+                    | None -> return account_code
+                    | Some delegated_addr -> !(account delegated_addr |-- code)
+                  else return msg.code
+                in
+                Vm.execute msg code ) )
     else return Evmc.Result.(failure StatusCode.Insufficient_balance)
 
   let process_create (msg : Evmc.Message.t) =
