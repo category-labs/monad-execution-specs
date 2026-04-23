@@ -229,7 +229,7 @@ module TransactionState = struct
     let target_addresses =
       match Transaction.call_or_create tx with
       | Call {to_; _} -> (
-        match Delegation.get_delegated_address transaction_state.^(account sender).code with
+        match Delegation.get_delegated_address transaction_state.^(account to_).code with
         | None -> Address.Set.singleton to_
         | Some delegated -> Address.Set.of_list [to_; delegated] )
       | Create _ ->
@@ -365,23 +365,19 @@ struct
       if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
     in
     if transfer_ok then
-      try_precompile msg.recipient msg
+      try_precompile msg.code_address msg
         ~otherwise:
-          ((* Callcode and Delegatecall may provide a precompile address to invoke its code. Since precompile
-            addresses do not actually have any code, this needs to be special-cased. *)
-           try_precompile msg.code_address msg
-             ~otherwise:
-               (let$ code =
-                  (* If the message provides the code to be called then it's executed, otherwise it's fetched
-                     from the provided code_address. *)
-                  if Bytes.(msg.code = empty) then
-                    let$ account_code = !(account msg.code_address |-- code) in
-                    match Delegation.get_delegated_address account_code with
-                    | None -> return account_code
-                    | Some delegated_addr -> !(account delegated_addr |-- code)
-                  else return msg.code
-                in
-                Vm.execute msg code ) )
+          (let$ code =
+             (* If the message provides the code to be called then it's executed, otherwise it's fetched
+                from the provided code_address. *)
+             if Bytes.(msg.code = empty) then
+               let$ account_code = !(account msg.code_address |-- code) in
+               match Delegation.get_delegated_address account_code with
+               | None -> return account_code
+               | Some delegated_addr -> !(account delegated_addr |-- code)
+             else return msg.code
+           in
+           Vm.execute msg code )
     else return Evmc.Result.(failure StatusCode.Insufficient_balance)
 
   let process_create (msg : Evmc.Message.t) =

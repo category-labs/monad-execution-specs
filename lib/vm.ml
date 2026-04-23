@@ -1525,7 +1525,9 @@ struct
     let code_address, access_gas =
       match delegation with
       | Direct _delegation -> (code_address, access_gas)
-      | Delegated {delegation_access_gas; code_address} ->
+      | Delegated {delegation_access_gas; _} ->
+          (* The host will resolve the delegation, so we keep the original code_address. This is necessary
+            in order to prevent accidentally following two delegation pointers. *)
           (code_address, Gas.(access_gas + delegation_access_gas))
     in
 
