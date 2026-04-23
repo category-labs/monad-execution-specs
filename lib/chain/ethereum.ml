@@ -109,7 +109,7 @@ module Transaction = struct
       ; y_parity : U8.t [@key "v"]
       ; r : U256.t
       ; s : U256.t }
-    [@@deriving yojson]
+    [@@deriving yojson {strict = false}]
 
     let to_rlp {chain_id; nonce; address; y_parity; r; s} =
       Rlp.List
