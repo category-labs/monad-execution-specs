@@ -297,6 +297,7 @@ struct
         let$ result = Base.call msg in
         trace (fun () ->
             Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
+        trace (fun () -> Format.sprintf "\tOutput buffer %s\n" (Bytes.to_hex_string result.output_data)) ;
         return result
 
       let selfdestruct ~address ~beneficiary =
@@ -1311,6 +1312,7 @@ struct
     (* PC *)
     increase_pc_and_continue
 
+  (* EIP-5656. *)
   let mcopy =
     (* Stack *)
     let$ dst_start = pop in
@@ -1412,15 +1414,15 @@ struct
       assert (Address.(zero = create_address)) ;
 
       let$ () = machine_state |-- output_buffer := output_data in
-      if status_code = Evmc.Result.StatusCode.Success then
-        let$ () = push U256.one in
+      let$ () =
         let truncated_output =
           match U256.to_int_opt output_size with
           | None -> output_data
           | Some i -> Bytes.sub output_data 0 (min i (Bytes.length output_data))
         in
         update_field (machine_state |-- memory) (Memory.write_block_at output_start truncated_output)
-      else push U256.zero
+      in
+      push (if status_code = Success then U256.one else U256.zero)
 
   let generic_create_impl
       ~(kind : Evmc.Message.CallKind.t)
