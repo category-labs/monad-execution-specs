@@ -38,7 +38,9 @@ let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
 
         let$ addr = Crypto.ecrecover {r; s; y_parity} h in
 
-        return (B32.to_bytes (Address.to_bytes32 addr)) ) )
+        return (B32.to_bytes (Address.to_bytes32 addr)) )
+      |> Option.value ~default:Bytes.empty
+      |> Option.return )
 
 let sha256_address = Address.of_hex_string "0x02"
 let sha256 (msg : Evmc.Message.t) : Evmc.Result.t =
