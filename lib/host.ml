@@ -334,9 +334,9 @@ struct
 
     let$ created_in_current_tx = Address.Set.mem address <$> !accounts_created_in_current_transaction in
     if created_in_current_tx then
-      (* Delete the account as per EIP-6780 *)
+      (* Defer deletion to end of transaction as per EIP-6780. *)
       let$ alive_before_selfdestruct = account_exists address in
-      let$ () = world_state |-- accounts |-- Address.Map.at address := None in
+      let$ () = update_field self_destruct (Address.Set.add address) in
       return alive_before_selfdestruct
     else return false
 
@@ -355,7 +355,7 @@ struct
     | Some precompile when not msg.delegated -> return (precompile msg)
     | Some _ ->
         (* Delegated calls to precompiles are executed as if the corresponding contract was empty,
-          as per EIP-7702. *)
+           as per EIP-7702. *)
         Vm.execute msg Bytes.empty
     | None -> otherwise
 
