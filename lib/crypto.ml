@@ -44,11 +44,12 @@ let ecrecover {r; s; y_parity} (msg_hash : B32.t) : B20.t option =
       let$ signature =
         Result.to_option (Sign.read_recoverable context (Bigstring.init Sign.recoverable_bytes signature_i))
       in
-      let result_bigstring =
+      let$ result_bigstring =
         (msg_hash :> string)
         |> Bigstring.of_string
-        |> Sign.recover_exn context ~signature
-        |> Key.to_bytes ~compress:false context
+        |> Sign.recover context ~signature
+        |> Result.to_option
+        |> Option.map (Key.to_bytes ~compress:false context)
       in
       let public_key_i i = result_bigstring.{i + 1} in
       let public_key = Bytes.init 64 public_key_i in
