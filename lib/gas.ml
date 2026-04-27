@@ -93,6 +93,9 @@ let tx_max_gas_fee (tx : Transaction.t) =
   | FeeMarketFee {max_fee_per_gas; _} -> tx_gas_limit * max_fee_per_gas
   | LegacyFee {gas_price} -> tx_gas_limit * gas_price
 
+(* EIP-7825, adjusted for Monad §3. *)
+let tx_max_gas_limit = ~$30_000_000
+
 let jumpdest = ~$1
 
 let base = ~$2

@@ -33,6 +33,7 @@ module Error = struct
     | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
     | Empty_authorization_list
     | Transaction_fee_below_base of {base_fee_per_gas : Gas.t}
+    | Gas_above_limit
   [@@deriving to_yojson]
 
   type t =
@@ -150,7 +151,7 @@ struct
       (* Initcode size *)
       let$ () =
         match Transaction.call_or_create tx with
-        | Create {initcode} when Bytes.length initcode > 2 * Vm.max_init_code_size ->
+        | Create {initcode} when Bytes.length initcode > Vm.max_init_code_size ->
             invalid_transaction block tx Initcode_too_long
         | _ -> return ()
       in
@@ -162,6 +163,9 @@ struct
           Gas.(intrinsic_gas > tx_gas_limit)
           (invalid_transaction block tx (Cannot_pay_intrinsic_gas {intrinsic_gas}))
       in
+
+      (* EIP-7825, adjusted for Monad §3. *)
+      let$ () = when_ Gas.(tx_gas_limit > tx_max_gas_limit) (invalid_transaction block tx Gas_above_limit) in
 
       (* EIP-7623 *)
       let floor_gas = Gas.tx_floor_gas tx in
@@ -188,7 +192,7 @@ struct
         | Some effective_gas_price -> Ok effective_gas_price
         | None -> invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas})
       in
-      let total_fee = Gas.(Transaction.gas_limit tx * effective_gas_price) in
+      let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
       (* Note that in Monad, a transaction only needs to be able to pay the gas fee to be considered valid. If
          the account can pay for the gas fees but not for the value transfer, the transaction will fail but it
          will not be considered invalid. In particular, irrevocable changes (fees paid, nonce incremented) will
