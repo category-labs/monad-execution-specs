@@ -358,7 +358,9 @@ struct
         let$ () = machine_state |-- stack := tl in
         return hd
 
-  let finish_execution : bool M.t = return false
+  let finish_execution ~return_output : bool M.t =
+    let$ () = when_ (not return_output) (machine_state |-- output_buffer := Bytes.empty) in
+    return false
   let update_pc_and_continue (f : U256.t -> U256.t) : bool M.t =
     update_field (machine_state |-- pc) f >> return true
   let increase_pc_and_continue : bool M.t = update_pc_and_continue U256.(( + ) one)
@@ -376,7 +378,7 @@ struct
     (* Gas *)
     (* Operation *)
     (* PC *)
-    finish_execution
+    finish_execution ~return_output:false
 
   let add =
     (* Stack *)
@@ -1464,6 +1466,7 @@ struct
       let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       if status_code = Evmc.Result.StatusCode.Success then
+        let$ () = spend Gas.(code_deposit_per_byte * ~$(Bytes.length output_data)) in
         let$ () = machine_state |-- output_buffer := Bytes.empty in
         push (Address.to_u256 create_address)
       else
@@ -1641,7 +1644,7 @@ struct
     let$ () = machine_state |-- output_buffer := result in
 
     (* PC *)
-    finish_execution
+    finish_execution ~return_output:true
 
   let delegatecall =
     (* Stack *)
@@ -1768,7 +1771,7 @@ struct
     let$ () = ignore <$> HostAPI.selfdestruct ~address:self_addr ~beneficiary in
 
     (* PC *)
-    finish_execution
+    finish_execution ~return_output:false
 
   let execute_opcode (opcode : Opcode.t) =
     let impl =
