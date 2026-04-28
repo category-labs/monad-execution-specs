@@ -270,13 +270,14 @@ struct
     (* Add receipt and logs. *)
     let block_state =
       let receipt =
-        let bloom = Bloom.union (Seq.map Log.to_bloom (List.to_seq transaction_state.logs)) in
+        let logs = List.rev transaction_state.logs in
+        let bloom = Bloom.union (Seq.map Log.to_bloom (List.to_seq logs)) in
         Receipt.
           { tx_type = Transaction.kind_tag tx
           ; cumulative_gas_used = block_state.gas_used
           ; bloom
           ; succeeded = result.status_code = Success
-          ; logs = transaction_state.logs }
+          ; logs }
       in
       { block_state with
         transactions_processed = List.append block_state.transactions_processed [(tx, receipt)] }
