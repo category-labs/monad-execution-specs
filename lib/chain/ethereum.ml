@@ -128,7 +128,7 @@ module Transaction = struct
       let auth_hash = Crypto.keccak_256 msg in
       Option.(
         let$ () = ensure U256.(zero < r && r < Crypto.secp256k1n) in
-        let$ () = ensure U256.(zero < s && s < Crypto.secp256k1n / ~$2) in
+        let$ () = ensure U256.(zero < s && s <= Crypto.secp256k1n / ~$2) in
         Crypto.ecrecover {y_parity; r; s} auth_hash )
   end
 
