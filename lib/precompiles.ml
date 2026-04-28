@@ -56,7 +56,9 @@ let ripemd160 (msg : Evmc.Message.t) : Evmc.Result.t =
 
 let identity_address = Address.of_hex_string "0x04"
 let identity (msg : Evmc.Message.t) : Evmc.Result.t =
-  check_gas msg (Gas.of_int (15 + (3 * Bytes.length msg.input_data))) (fun () -> Some msg.input_data)
+  check_gas msg
+    Gas.(~$15 + (~$3 * bytes_to_whole_words ~$(Bytes.length msg.input_data)))
+    (fun () -> Some msg.input_data)
 
 let modexp_address = Address.of_hex_string "0x05"
 let modexp (_msg : Evmc.Message.t) : Evmc.Result.t = failwith "todo 4"
