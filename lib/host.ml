@@ -164,7 +164,7 @@ module TransactionState = struct
     ; tx_origin : Address.t
     ; tx_gas_price : Gas.t
     ; self_destruct : Address.Set.t  (** A_s *)
-    ; logs : Log.t list  (** A_l *)
+    ; logs : Log.t list  (** A_l, in reverse order *)
     ; refund : U256.t  (** A_r *)
     ; accessed_addresses : Address.Set.t  (** A_a *)
     ; accessed_keys : StorageKey.Set.t  (** A_K *) }
@@ -337,6 +337,8 @@ struct
       (* Defer deletion to end of transaction as per EIP-6780. *)
       let$ alive_before_selfdestruct = account_exists address in
       let$ () = update_field self_destruct (Address.Set.add address) in
+      (* Set selfdestructing account's balance to zero. This is a noop unless address=beneficiary. *)
+      let$ () = (account address |-- balance) := U256.zero in
       return alive_before_selfdestruct
     else return false
 
