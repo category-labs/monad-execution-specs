@@ -338,7 +338,7 @@ struct
       let$ alive_before_selfdestruct = account_exists address in
       let$ () = update_field self_destruct (Address.Set.add address) in
       (* Set selfdestructing account's balance to zero. This is a noop unless address=beneficiary. *)
-      let$ () = (account address |-- balance) := U256.zero in
+      let$ () = account address |-- balance := U256.zero in
       return alive_before_selfdestruct
     else return false
 
