@@ -1426,6 +1426,14 @@ struct
       in
       push (if status_code = Success then U256.one else U256.zero)
 
+  let access_delegation (addr : Address.t) : delegation M.t =
+    let$ code = HostAPI.copy_code addr ~offset:0 ~size:Delegation.eoa_delegated_code_length in
+    match Delegation.get_delegated_address code with
+    | None -> return (Direct {code})
+    | Some code_address ->
+        let$ delegation_access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
+        return (Delegated {code_address; delegation_access_gas})
+
   let generic_create_impl
       ~(kind : Evmc.Message.CallKind.t)
       ~(create2_salt : B32.t)
@@ -1441,6 +1449,11 @@ struct
     let$ self_balance = HostAPI.get_balance self_addr in
     if self_balance < endowment || new_depth > max_stack_depth then push U256.zero
     else
+      let$ () =
+        (* Monad §TODO: delegated EOAs cannot call CREATE/CREATE2. *)
+        let$ delegation = access_delegation self_addr in
+        match delegation with Delegated _ -> fail Create_from_delegated_eoa | Direct _ -> return ()
+      in
       let$ create_message_gas = Uint.minus_1_64th <$> !(machine_state |-- gas) in
       let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g - create_message_gas)) in
 
@@ -1497,14 +1510,6 @@ struct
 
     (* PC *)
     increase_pc_and_continue
-
-  let access_delegation (addr : Address.t) : delegation M.t =
-    let$ code = HostAPI.copy_code addr ~offset:0 ~size:Delegation.eoa_delegated_code_length in
-    match Delegation.get_delegated_address code with
-    | None -> return (Direct {code})
-    | Some code_address ->
-        let$ delegation_access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
-        return (Delegated {code_address; delegation_access_gas})
 
   let call_opcode_impl
       ~kind
