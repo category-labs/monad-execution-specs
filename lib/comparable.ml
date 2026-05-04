@@ -5,7 +5,6 @@ module Make (T : sig
   val compare : t -> t -> int
 end) =
 struct
-  include T
   let comparison_op (int_cmp : int -> int -> bool) (x : T.t) (y : T.t) = int_cmp (T.compare x y) 0
   let ( < ) = comparison_op Stdlib.( < )
   let ( <= ) = comparison_op Stdlib.( <= )
@@ -24,5 +23,14 @@ struct
   module Map = struct
     include Map.Make (T)
     let keys (map : 'a t) : Set.t = to_seq map |> Seq.map (fun (k, _) -> k) |> Set.of_seq
+
+    let difference (diff : 'a option -> 'a option -> 'd option) (self : 'a t) (other : 'a t) : 'd t =
+      Set.union (keys self) (keys other)
+      |> Set.to_seq
+      |> Seq.filter_map (fun key ->
+          let v_self = find_opt key self in
+          let v_other = find_opt key other in
+          Option.map (fun d -> (key, d)) (diff v_self v_other) )
+      |> of_seq
   end
 end

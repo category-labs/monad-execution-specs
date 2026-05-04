@@ -3,8 +3,15 @@ open Byte_string
 open Numeric
 open Yojson.Safe.Util
 
-(* Helper functions for reading JSON *)
+(* Helper functions for reading and writing JSON *)
 let ( .$() ) json key = member key json
+let ( .$()<- ) obj k v =
+  let rec loop = function
+    | (k', _) :: rest when k' = k -> (k, v) :: rest
+    | (k', v') :: rest -> (k', v') :: loop rest
+    | [] -> [(k, v)]
+  in
+  `Assoc (loop (to_assoc obj))
 
 type 'v object_as_alist = (string * 'v) list
 let object_as_alist_of_yojson value_of_yojson (json : Yojson.Safe.t) : ('v object_as_alist, string) result =
@@ -72,12 +79,12 @@ module BlockchainTest = struct
 
   type test_case =
     { info : info [@key "_info"]
+    ; network : string
     ; blocks : test_case_block list
     ; config : config
     ; genesis_block_header : Block.Header.t [@key "genesisBlockHeader"]
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
     ; last_blockhash : U256.t [@key "lastblockhash"]
-    ; network : string
     ; pre : Account.t Address.Map.t
     ; post : Account.t Address.Map.t [@key "postState"] }
   [@@deriving yojson {strict = false}]
