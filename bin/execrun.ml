@@ -126,7 +126,7 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
     let trace = trace
   end) in
   let check_block_fixture state Fixtures.BlockchainTest.{block; expect_exception} =
-    let result = Execution.process_block ~verify:true state block in
+    let result = Execution.process_block ~verify:(execution_mode = `Verify) state block in
     match (result, expect_exception) with
     | Ok state, None -> Ok state
     | Error _, Some _ ->
@@ -173,10 +173,19 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
   let last_blockhash = U256.of_repr (Block.hash (List.hd post_state.history)) in
   {fixtures with post; blocks; config; info; genesis_rlp; last_blockhash}
 
-let test_case_to_yojson fixture =
+let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
   let open Yojson.Safe.Util in
-  let ( .$() ) obj k = member k obj in
-  let ( .$()<- ) obj k v = to_assoc obj |> List.remove_assoc k |> fun l -> (k, v) :: l |> fun l -> `Assoc l in
+  let open Fixtures in
+  let fixture =
+    let initial_state_root =
+      Host.WorldState.empty
+      |> load_genesis_block fixture.genesis_block_header
+      |> load_preconditions fixture.pre
+      |> Host.WorldState.state_root
+    in
+    let genesis_block_header = {fixture.genesis_block_header with state_root = initial_state_root} in
+    {fixture with genesis_block_header}
+  in
   (* TODO: this is a hack to add necessary extra fields *)
   let fixture_json = Fixtures.BlockchainTest.test_case_to_yojson fixture in
   let fixture_json =
@@ -189,7 +198,15 @@ let test_case_to_yojson fixture =
           let header_with_hash = b.$("blockHeader").$("hash") <- B32.to_yojson (Block.hash block) in
           b.$("blockHeader") <- header_with_hash )
     in
-    fixture_json.$("blocks") <- `List blocks
+    let genesis_block =
+      Block.{header = fixture.genesis_block_header; transactions = []; ommers = []; withdrawals = []}
+    in
+    let genesis_block_header =
+      fixture_json.$("genesisBlockHeader").$("hash") <- B32.to_yojson (Block.hash genesis_block)
+    in
+    fixture_json
+    |> (fun f -> f.$("blocks") <- `List blocks)
+    |> fun f -> f.$("genesisBlockHeader") <- genesis_block_header
   in
   let fixture_json = fixture_json.$("network") <- `String network in
   fixture_json
