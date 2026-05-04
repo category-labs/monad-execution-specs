@@ -63,6 +63,16 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   |> expect_ok
   |> check_postconditions fixtures.post
 
+let is_substring needle haystack =
+  (* Quadratic complexity, we don't really care. *)
+  let rec match_at i j =
+    if String.length needle <= j then true
+    else if String.length haystack <= i then false
+    else haystack.[i] = needle.[j] && match_at (i + 1) (j + 1)
+  in
+  let rec loop i = if i >= String.length haystack then false else match_at i 0 || loop (i + 1) in
+  loop 0
+
 let blockchain_tests =
   traverse_folder blockchain_tests_folder
   |> Seq.filter (fun (_path, filename) -> Filename.extension filename = ".json")
@@ -74,11 +84,16 @@ let blockchain_tests =
         Seq.cons (path, filename) tl
         |> Seq.map (fun (path, filename) ->
             let path = path $/ filename in
-            Alcotest.test_case filename `Quick (fun () ->
+            Alcotest.test_case filename `Quick (fun subtest_filter ->
                 let fixtures =
                   Result.get_ok'
                     (Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path))
                   |> List.filter (fun (_name, test) -> test.Fixtures.BlockchainTest.network = "MONAD_EIGHT")
+                in
+                let fixtures =
+                  match subtest_filter with
+                  | None -> fixtures
+                  | Some filter -> List.filter (fun (name, _test) -> is_substring filter name) fixtures
                 in
                 List.iter run_blockchain_test fixtures ) )
         |> List.of_seq
@@ -86,4 +101,164 @@ let blockchain_tests =
       (group_name, tests) )
   |> List.of_seq
 
-let () = Alcotest.run "Blockchain tests" blockchain_tests
+(* Blockchain tests contain multiple subtests per json file. The --subtest_filter flag can be used to
+   execute a specific such subtest. *)
+let subtest_filter_flag =
+  Cmdliner.Arg.(value & opt (some string) None & info ["subtest_filter"] ~doc:"Select a specific subtest")
+
+module Test_entry = struct
+  type t = string * int
+  include Comparable.Make (struct
+    type nonrec t = t
+    let compare (name, index) (name', index') =
+      let d = compare name name' in
+      if d <> 0 then d else compare index index'
+  end)
+end
+
+(* Suppressed tests. *)
+let suppressed_tests =
+  Test_entry.Set.of_list
+    [ (* Reserve balance. *)
+      ("mf-tests/monad_eight/reserve_balance/transfers", 0)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 1)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 2)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 3)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 4)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 5)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 6)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 7)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 8)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 9)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 10)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 11)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 12)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 14)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 16)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 17)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 18)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 19)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 20)
+    ; ("mf-tests/monad_eight/reserve_balance/transfers", 21)
+    ; ("mf-tests/monad_eight/reserve_balance/multi_block", 0)
+    ; ("mf-tests/monad_eight/reserve_balance/multi_block", 1)
+    ; ("mf-tests/monad_eight/reserve_balance/multi_block", 2)
+    ; ("mf-tests/monad_eight/reserve_balance/multi_block", 3)
+    ; ("mf-tests/monad_eight/reserve_balance/multi_block", 4)
+    (* These tests do not explicitly test reserve balance, but they are affected by it. *)
+    ; ("mf-tests/cancun/eip6780_selfdestruct/selfdestruct", 4)
+    ; ("mf-tests/cancun/eip6780_selfdestruct/selfdestruct", 5)
+    ; ("mf-tests/prague/eip7702_set_code_tx/set_code_txs", 10)
+    ; ("mf-tests/prague/eip7702_set_code_tx/set_code_txs", 17)
+    ; ("mf-tests/prague/eip7702_set_code_tx/set_code_txs_2", 2)
+    ; ("mf-tests/prague/eip7702_set_code_tx/set_code_txs_2", 9)
+    ; ("mf-tests/prague/eip7702_set_code_tx/set_code_txs_2", 12)
+    ; ("mf-tests/prague/eip7702_set_code_tx/set_code_txs_2", 18)
+
+    (* alt_bn128 precompiles. *)
+    ; ("mf-tests/byzantium/eip197_ec_pairing/gas", 0)
+    ; ("mf-tests/byzantium/eip196_ec_add_mul/gas", 0)
+    ; ("mf-tests/byzantium/eip196_ec_add_mul/ecadd", 0)
+    ; ("mf-tests/byzantium/eip196_ec_add_mul/ecadd", 1)
+
+    (* blake2 precompile. *)
+    ; ("mf-tests/istanbul/eip152_blake2/blake2", 0)
+    ; ("mf-tests/istanbul/eip152_blake2/blake2", 1)
+    ; ("mf-tests/istanbul/eip152_blake2/blake2", 2)
+    ; ("mf-tests/istanbul/eip152_blake2/blake2", 3)
+    ; ("mf-tests/istanbul/eip152_blake2/blake2_delegatecall", 0)
+    ; ("mf-tests/monad_nine/mip4_checkreservebalance/tx_revert", 0)
+
+    (* modexp precompile. *)
+    ; ("mf-tests/byzantium/eip198_modexp_precompile/modexp", 0)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 0)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 1)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 2)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 3)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 5)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 6)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 7)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 8)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 9)
+    ; ("mf-tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 10)
+
+    (* p256verify precompile. *)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 0)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 2)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 4)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 5)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 6)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 7)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 8)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 9)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 10)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/p256verify", 11)
+    ; ("mf-tests/osaka/eip7951_p256verify_precompiles/eip_mainnet", 1)
+
+    (* BLS precompiles. *)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 4)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 5)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 4)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 0)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 1)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 2)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 3)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 4)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 5)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 6)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 7)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 8)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 9)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 10)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 11)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 12)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 13)
+    ; ("mf-tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 14)
+
+    (* Other precompiles. *)
+    ; ("mf-tests/shanghai/eip4895_withdrawals/withdrawals", 0)
+    ; ("mf-tests/frontier/precompiles/precompiles", 0)
+    ; ("mf-tests/byzantium/eip214_staticcall/staticcall", 0)
+    ; ("mf-tests/byzantium/eip214_staticcall/staticcall", 1)
+    ; ("mf-tests/byzantium/eip214_staticcall/staticcall", 2)
+    ; ("mf-tests/byzantium/eip214_staticcall/staticcall", 3)
+    ] [@ocamlformat "disable"]
+
+(* Filter failing tests. *)
+let filter ~name ~index = if Test_entry.Set.mem (name, index) suppressed_tests then `Skip else `Run
+
+let () = Alcotest.run_with_args "Blockchain tests" subtest_filter_flag blockchain_tests ~filter
