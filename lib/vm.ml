@@ -1530,13 +1530,10 @@ struct
 
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
     let$ delegation = access_delegation code_address in
-    let code_address, access_gas =
+    let access_gas =
       match delegation with
-      | Direct _delegation -> (code_address, access_gas)
-      | Delegated {delegation_access_gas; _} ->
-          (* The host will resolve the delegation, so we keep the original code_address. This is necessary
-            in order to prevent accidentally following two delegation pointers. *)
-          (code_address, Gas.(access_gas + delegation_access_gas))
+      | Direct _delegation -> access_gas
+      | Delegated {delegation_access_gas; _} -> Gas.(access_gas + delegation_access_gas)
     in
 
     let transfer_value = kind <> Evmc.Message.CallKind.DelegateCall && U256.(value <> zero) in
