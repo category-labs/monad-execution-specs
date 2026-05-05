@@ -75,14 +75,16 @@ let is_substring needle haystack =
 
 let blockchain_tests =
   traverse_folder blockchain_tests_folder
-  |> Seq.filter (fun (_path, filename) -> Filename.extension filename = ".json")
+  |> Seq.filter (fun (_path, filename) -> Filename.extension filename = ".json" && filename <> "index.json")
   |> Seq.group (fun (path_1, _) (path_2, _) -> path_1 = path_2)
   |> Seq.map (fun test_group ->
       let (path, filename), tl = Option.get (Seq.uncons test_group) in
       let group_name = drop_test_folder_prefix path in
       let tests =
         Seq.cons (path, filename) tl
-        |> Seq.map (fun (path, filename) ->
+        |> List.of_seq
+        |> List.sort (fun (_, f1) (_, f2) -> compare f1 f2)
+        |> List.map (fun (path, filename) ->
             let path = path $/ filename in
             Alcotest.test_case filename `Quick (fun subtest_filter ->
                 let fixtures =
@@ -96,7 +98,6 @@ let blockchain_tests =
                   | Some filter -> List.filter (fun (name, _test) -> is_substring filter name) fixtures
                 in
                 List.iter run_blockchain_test fixtures ) )
-        |> List.of_seq
       in
       (group_name, tests) )
   |> List.of_seq
@@ -121,8 +122,6 @@ let suppressed_tests =
   Test_entry.Set.of_list
     [ (* Reserve balance. *)
       ("mf_tests/monad_eight/reserve_balance/transfers", 0)
-    ; ("mf_tests/monad_eight/reserve_balance/transfers", 1)
-    ; ("mf_tests/monad_eight/reserve_balance/transfers", 2)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 3)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 4)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 5)
@@ -133,7 +132,9 @@ let suppressed_tests =
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 10)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 11)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 12)
+    ; ("mf_tests/monad_eight/reserve_balance/transfers", 13)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 14)
+    ; ("mf_tests/monad_eight/reserve_balance/transfers", 15)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 16)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 17)
     ; ("mf_tests/monad_eight/reserve_balance/transfers", 18)
@@ -146,14 +147,14 @@ let suppressed_tests =
     ; ("mf_tests/monad_eight/reserve_balance/multi_block", 3)
     ; ("mf_tests/monad_eight/reserve_balance/multi_block", 4)
     (* These tests do not explicitly test reserve balance, but they are affected by it. *)
-    ; ("mf_tests/cancun/eip6780_selfdestruct/selfdestruct", 4)
     ; ("mf_tests/cancun/eip6780_selfdestruct/selfdestruct", 5)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 10)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 17)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 2)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 9)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 12)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 18)
+    ; ("mf_tests/cancun/eip6780_selfdestruct/selfdestruct", 6)
+    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 43)
+    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 44)
+    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1)
+    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 3)
+    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 8)
+    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15)
 
     (* alt_bn128 precompiles. *)
     ; ("mf_tests/byzantium/eip197_ec_pairing/gas", 0)
@@ -173,8 +174,8 @@ let suppressed_tests =
     ; ("mf_tests/byzantium/eip198_modexp_precompile/modexp", 0)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 0)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 1)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 2)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 3)
+    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 4)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 5)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 6)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 7)
@@ -184,10 +185,10 @@ let suppressed_tests =
 
     (* p256verify precompile. *)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 0)
+    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 1)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 2)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 4)
+    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 3)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 5)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 6)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 7)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 8)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 9)
@@ -250,7 +251,7 @@ let suppressed_tests =
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 14)
 
     (* Other precompiles. *)
-    ; ("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 0)
+    ; ("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10)
     ; ("mf_tests/frontier/precompiles/precompiles", 0)
     ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 0)
     ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 1)
