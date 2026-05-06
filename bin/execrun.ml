@@ -139,6 +139,7 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
+  assert (B32.(Host.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
   |> Result.get_ok'
@@ -176,16 +177,6 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
 let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
   let open Yojson.Safe.Util in
   let open Fixtures in
-  let fixture =
-    let initial_state_root =
-      Host.WorldState.empty
-      |> load_genesis_block fixture.genesis_block_header
-      |> load_preconditions fixture.pre
-      |> Host.WorldState.state_root
-    in
-    let genesis_block_header = {fixture.genesis_block_header with state_root = initial_state_root} in
-    {fixture with genesis_block_header}
-  in
   (* TODO: this is a hack to add necessary extra fields *)
   let fixture_json = Fixtures.BlockchainTest.test_case_to_yojson fixture in
   let fixture_json =

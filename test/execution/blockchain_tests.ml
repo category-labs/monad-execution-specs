@@ -1,6 +1,7 @@
 open Monad_lib
 open Test_utils.Utils
 open Chain.Ethereum
+open Byte_string
 
 let blockchain_tests_folder = "fixtures" $/ "blockchain_tests"
 
@@ -58,6 +59,7 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
+  assert (B32.(Host.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
   |> expect_ok
