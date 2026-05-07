@@ -331,6 +331,13 @@ struct
   end
   open M
 
+  let traceM ?(print = Params.trace) msg =
+    if print then (
+      let$ msg = msg () in
+      Format.print_string msg ;
+      return (Format.print_flush ()) )
+    else return ()
+
   let spend (amount : Uint.t) =
     let$ gas_remaining = !(machine_state |-- gas) in
     if Uint.(gas_remaining < amount) then fail Out_of_gas
@@ -1875,29 +1882,48 @@ struct
     in
     impl
 
-  let trace_stack =
-    if Params.trace then ( fun stack ->
-      Format.printf "<top>\n" ;
-      List.iter (fun elt -> Format.printf "%s\n" (U256.to_string elt)) stack ;
-      Format.printf "<bottom>\n" ;
-      Format.print_flush () )
-    else fun _ -> ()
+  type trace_entry =
+    { pc : int
+    ; op : int
+    ; gas : Uint.t
+    ; gas_cost : string [@key "gasCost"]
+    ; mem_size : int [@key "memSize"]
+    ; stack : U256.t list
+    ; depth : int
+    ; return_data : Bytes.t [@key "returnData"]
+    ; refund : Integer.t
+    ; op_name : string [@key "opName"] }
+  [@@deriving to_yojson]
 
-  let trace_state =
-    if Params.trace then (
-      let$ ms = !machine_state in
-      Format.printf "PC: %s\n" (U256.to_string ms.pc) ;
-      Format.printf "Gas: %s\n" (Uint.to_string ms.gas) ;
-      Format.printf "Stack: \n" ;
-      trace_stack ms.stack ;
-      Format.printf "Memory: \n" ;
-      Memory.dump ms.memory ;
-      Format.print_flush () ;
-      return () )
-    else return ()
+  let trace_entry =
+    let$ {bytecode; depth; _} = !execution_environment in
+    let$ {pc; gas; memory; stack; output_buffer; gas_refund} = !machine_state in
+    let opcode =
+      match U256.to_int_opt pc with None -> Opcode.Stop | Some i -> Opcode.of_byte bytecode.[i]
+    in
+    let gas_cost =
+      (* TODO: pre-calculating this is not easy. *)
+      "<TODO>"
+    in
+    let mem_size = Uint.(to_int (~$B32.byte_width * Memory.active_words memory)) in
+    return
+      { pc = U256.to_int pc
+      ; op = Char.code (Opcode.to_byte opcode)
+      ; gas
+      ; gas_cost
+      ; mem_size
+      ; stack
+      ; depth
+      ; return_data = output_buffer
+      ; refund = gas_refund
+      ; op_name = (Opcode.info opcode).name }
 
   let rec run (code : Bytes.t) : unit M.t =
-    let$ () = trace_state in
+    let$ () =
+      traceM (fun () ->
+          let$ tr = trace_entry in
+          return (Yojson.Safe.to_string ~suf:"\n" (trace_entry_to_yojson tr)) )
+    in
     let$ pc = !(machine_state |-- pc) in
     let opcode =
       (* YP (157) *)
@@ -1905,9 +1931,6 @@ struct
       | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
       | _ -> Opcode.Stop
     in
-    trace (fun () ->
-        let info = Opcode.info opcode in
-        Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
     let$ continue = execute_opcode opcode in
     if continue then run code else return ()
 
