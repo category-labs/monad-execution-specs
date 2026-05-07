@@ -373,6 +373,13 @@ struct
         Vm.execute msg Bytes.empty
     | None -> otherwise
 
+  let touch_account addr = M.update_field accessed_addresses (Address.Set.add addr)
+
+  let touch_storage addr key =
+    M.(
+      let$ () = touch_account addr in
+      update_field accessed_keys (StorageKey.Set.add (addr, key)) )
+
   let process_call (msg : Evmc.Message.t) =
     assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
     let$ transfer_ok =
@@ -401,6 +408,7 @@ struct
         ~create2:
           (if msg.kind = Create2 then Some {salt = msg.create2_salt; initcode = msg.input_data} else None)
     in
+    let$ () = touch_account create_address in
     let$ pre_existent_account = !(account create_address) in
     if U64.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
       (* EIP-684 *)
@@ -540,13 +548,6 @@ struct
   let emit_log address ~(data : Bytes.t) ~(topics : B32.t list) =
     let log : Log.t = {address; topics; data} in
     update_field logs (fun logs -> log :: logs)
-
-  let touch_account addr = M.update_field accessed_addresses (Address.Set.add addr)
-
-  let touch_storage addr key =
-    M.(
-      let$ () = touch_account addr in
-      update_field accessed_keys (StorageKey.Set.add (addr, key)) )
 
   let access_account addr : [`Warm | `Cold] t =
     let$ accessed = !accessed_addresses in
