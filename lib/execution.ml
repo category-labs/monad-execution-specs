@@ -247,8 +247,6 @@ struct
             ; nonce = U64.(sender_account.nonce + one) } )
       in
 
-      let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
-
       (* Process EIP-7702 authorizations. *)
       let authorities, transaction_state =
         List.fold_left
@@ -261,6 +259,10 @@ struct
       (* Bump the emptying transaction counter for valid authorizations. This accounts for auth_condition
          in Monad §6 Algorithm 4. *)
       let transaction_state = bump_emptying_transaction_counters authorities transaction_state in
+
+      (* Note that the access set is initialized after authorizations are processed. In particular, if the
+         recipient changes delegation, it is the new delegation that is warmed up. *)
+      let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
       let message = prepare_message sender available_gas tx in
