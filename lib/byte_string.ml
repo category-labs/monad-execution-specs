@@ -28,24 +28,36 @@ module Bytes = struct
   (** Parse a string consisting of an even number of hex digits (\[a-f\]\[A-F\]\[0-9\]), optionally prefixed by
       '0x', into an array of bytes. If the [width] argument is provided, the resulting byte-string is left-padded
       with zeros up to the desired width. Raises an exception if the given string does not follow the correct format. *)
-  let of_hex_string ?width str =
-    assert (String.length str mod 2 = 0) ;
-    (* Optionally discard 0x prefix *)
-    let start = if String.starts_with ~prefix:"0x" str || String.starts_with ~prefix:"0X" str then 2 else 0 in
-    let padding, len =
-      let len = (String.length str - start) / 2 in
-      match width with None -> (0, len) | Some w -> (max w len - len, max w len)
+  let of_hex_string =
+    let hex_table =
+      Iarray.init 256 (fun i ->
+          let i_c = Char.(chr i) in
+          if i_c >= '0' && i_c <= '9' then i - Char.code '0'
+          else if i_c >= 'a' && i_c <= 'f' then 10 + i - Char.code 'a'
+          else if i_c >= 'A' && i_c <= 'F' then 10 + i - Char.code 'A'
+          else -256 )
     in
-    let byte_i i =
-      if i < padding then '\x00'
-      else
-        let i = i - padding in
-        let c1 = str.[start + (i * 2)] in
-        let c0 = str.[start + (i * 2) + 1] in
-        (* TODO: this is very inefficient. It can be replaced with a lookup table. *)
-        Char.chr (int_of_string (Printf.sprintf "0x%c%c" c1 c0))
-    in
-    String.init len byte_i
+    fun ?width str ->
+      assert (String.length str mod 2 = 0) ;
+      (* Optionally discard 0x prefix *)
+      let start =
+        if String.starts_with ~prefix:"0x" str || String.starts_with ~prefix:"0X" str then 2 else 0
+      in
+      let padding, len =
+        let len = (String.length str - start) / 2 in
+        match width with None -> (0, len) | Some w -> (max w len - len, max w len)
+      in
+      let byte_i i =
+        if i < padding then '\x00'
+        else
+          let i = i - padding in
+          let c1 = Char.code str.[start + (i * 2)] in
+          let c0 = Char.code str.[start + (i * 2) + 1] in
+          let num = (Iarray.get hex_table c1 * 16) + Iarray.get hex_table c0 in
+          (* num is positive if and only if both c1 and c0 are valid hex digits. *)
+          Char.chr num
+      in
+      String.init len byte_i
 
   let ( ~@ ) str = of_hex_string str
 
