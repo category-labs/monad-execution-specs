@@ -2,16 +2,18 @@
 
 include Int64
 
-let div = Stdlib.Int64.unsigned_div
-let rem = Stdlib.Int64.unsigned_rem
-let ( / ) = Stdlib.Int64.unsigned_div
+let div = unsigned_div
+let rem = unsigned_rem
+let ( / ) = unsigned_div
 
-let ( ~$ ) = Stdlib.Int64.of_int
+let ( ~$ ) = of_int
 
 include Comparable.Make (struct
-  type t = Stdlib.Int64.t
-  let compare = Stdlib.Int64.unsigned_compare
+  type nonrec t = t
+  let compare = unsigned_compare
 end)
+
+let shift_right = shift_right_logical
 
 let max_uint = 0xffffffffffffffffL
 
