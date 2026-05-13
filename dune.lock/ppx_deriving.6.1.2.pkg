@@ -1,4 +1,4 @@
-(version 6.1.1)
+(version 6.1.2)
 
 (build
  (all_platforms
@@ -14,5 +14,6 @@
 (source
  (fetch
   (url
-   https://github.com/ocaml-ppx/ppx_deriving/releases/download/v6.1.1/ppx_deriving-6.1.1.tar.gz)
-  (checksum md5=3208e6028fbb5a417f751d3529eae031)))
+   https://github.com/ocaml-ppx/ppx_deriving/releases/download/6.1.2/ppx_deriving-6.1.2.tbz)
+  (checksum
+   sha256=5595bfe668d3434b1f1babb3ccb43d4cab3dc1d562b8d8c47c410d88546253ff)))
