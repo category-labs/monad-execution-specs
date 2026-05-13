@@ -77,7 +77,8 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
     let le_bytes = Z.to_bits (to_z x) in
     if index_le >= String.length le_bytes then '\x00' else le_bytes.[index_le]
 
-  let significant_bytes x = (Z.numbits (to_z x) + 7) / 8
+  let significant_bits x = Z.numbits (to_z x)
+  let significant_bytes x = (significant_bits x + 7) / 8
 
   let of_bool b = if b then one else zero
 
@@ -233,11 +234,20 @@ module Uint = struct
 
   let of_rlp (rlp : Rlp.t) : t option = match rlp with Bytes bs -> Some (of_bytes_be bs) | List _ -> None
   let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
+
+  (* Ceiling division. This is not implemented in fixed-width types to avoid dealing with the wraparound case. *)
+  let ceil_div (x : t) (y : t) = (x + y - ~$1) / y
+
+  let inv_mod (x : t) (y : t) = of_z_exn (Z.invert (to_z x) (to_z y))
 end
 module Integer = struct
   include IntegerBase
 
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
+
+  let div_rem (x : t) (y : t) : t * t =
+    let quot, rem = Z.ediv_rem (to_z x) (to_z y) in
+    (of_z_exn quot, of_z_exn rem)
 end
 
 (** Helper functor to create pairs of signed and unsigned types for a given bit width, together with conversion
