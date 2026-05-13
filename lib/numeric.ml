@@ -77,7 +77,8 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
     let le_bytes = Z.to_bits (to_z x) in
     if index_le >= String.length le_bytes then '\x00' else le_bytes.[index_le]
 
-  let significant_bytes x = (Z.numbits (to_z x) + 7) / 8
+  let significant_bits x = Z.numbits (to_z x)
+  let significant_bytes x = (significant_bits x + 7) / 8
 
   let of_bool b = if b then one else zero
 
@@ -180,8 +181,11 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   let ( * ) = lift_2 Z.( * )
   let ( / ) = lift_2 Z.( / )
 
+  (* Always unsigned. *)
+  let modulo = lift_2 Z.erem
+
   (* Will be signed or unsigned depending on the signedness of the module. *)
-  let modulo = lift_2 Z.rem
+  let rem = lift_2 Z.rem
 
   let addmod x y m = of_z_after_op Z.(rem (to_z x + to_z y) (to_z m))
   let mulmod x y m = of_z_after_op Z.(rem (to_z x * to_z y) (to_z m))
@@ -238,11 +242,36 @@ module Uint = struct
 
   let of_rlp (rlp : Rlp.t) : t option = match rlp with Bytes bs -> Some (of_bytes_be bs) | List _ -> None
   let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
+
+  (* Ceiling division. This is not implemented in fixed-width types to avoid dealing with the wraparound case. *)
+  let ceil_div (x : t) (y : t) = (x + y - ~$1) / y
+
+  let inv_mod (x : t) (y : t) = of_z_exn (Z.invert (to_z x) (to_z y))
+
+  let div_rem (x : t) (y : t) : t * t =
+    let quot, rem = Z.ediv_rem (to_z x) (to_z y) in
+    (of_z_exn quot, of_z_exn rem)
+
+  (* Modular exponentiation. *)
+  let pow_mod base exp modulus = of_z_exn (Z.powm (to_z base) (to_z exp) (to_z modulus))
 end
 module Integer = struct
   include IntegerBase
 
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
+
+  (* This always returns a nonnegative integer. *)
+  let of_bytes_be (bs : Bytes.t) = of_z_exn (Z.of_bits (Bytes.reverse bs))
+
+  let div_rem (x : t) (y : t) : t * t =
+    let quot, rem = Z.ediv_rem (to_z x) (to_z y) in
+    (of_z_exn quot, of_z_exn rem)
+
+  (* Legendre symbol, used in elliptic curve code to check whether a number is a quadratic residue. *)
+  let legendre a modulus = Z.legendre (to_z a) (to_z modulus)
+
+  (* Modular exponentiation. *)
+  let pow_mod base exp modulus = of_z_exn (Z.powm (to_z base) (to_z exp) (to_z modulus))
 end
 
 (** Helper functor to create pairs of signed and unsigned types for a given bit width, together with conversion
@@ -331,6 +360,10 @@ struct
     let of_uint_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
     let of_uint_truncating (x : Uint.t) : t = of_z_truncating (Uint.to_z x)
 
+    let to_integer (x : t) : Integer.t = Integer.of_z_exn (to_z x)
+    let of_integer_opt (x : Integer.t) = of_z_opt (Integer.to_z x)
+    let of_integer_exn (x : Integer.t) : t = of_z_exn (Integer.to_z x)
+
     let of_bytes_be_exn (bs : Bytes.t) = of_uint_exn (Uint.of_bytes_be bs)
     let to_bytes_be (x : t) = Uint.to_bytes_be (to_uint x)
 
@@ -357,6 +390,12 @@ module Bits64 = TwosComplement (Traits.Byte_width.Bytes8)
 
 module U64 = Bits64.Unsigned
 module I64 = Bits64.Signed
+
+(** Signed and unsigned 32-bit integers. More operations than the versions in stdlib. *)
+module Bits32 = TwosComplement (Traits.Byte_width.Bytes4)
+
+module U32 = Bits32.Unsigned
+module I32 = Bits32.Signed
 
 module Bits8 = TwosComplement (Traits.Byte_width.Bytes1)
 module U8 = Bits8.Unsigned
