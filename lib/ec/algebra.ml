@@ -95,20 +95,24 @@ end
 module Prime_field (Mod : sig
   val modulus : Integer.t
 end) =
-  Quotient_field (Integer) (Mod)
+struct
+  include Quotient_field (Integer) (Mod)
+
+  (* Returns None if the input is not already reduced. Useful for precompile input validation. *)
+  let of_uint_opt (i : Uint.t) =
+    let i = Uint.as_signed i in
+    if Integer.(i >= Mod.modulus) then None else Some (reduce i)
+end
 
 (* Polynomial ring over a field. *)
-module Polynomial_ring (F : FIELD) : sig
-  include EUCLIDEAN_DOMAIN with type t = private F.t Iarray.t
-  val x : t
-end = struct
+module Polynomial_ring (F : FIELD) = struct
   module Impl : sig
     type impl = F.t Iarray.t
     type t = private impl
     val trim : F.t Iarray.t -> t
   end = struct
     (* A polynomial is represented by an array of its non-zero coefficients. To ensure unique representations,
-     we require no trailing zeros. *)
+       we require no trailing zeros. *)
     type impl = F.t Iarray.t
     type t = impl
 
@@ -158,6 +162,8 @@ end = struct
           in
           loop Stdlib.(min i (len_1 - 1)) F.zero )
 
+  let const (a : F.t) = trim (Iarray.init 1 (fun _ -> a))
+
   (* Computes the monomial ax^n. *)
   let monomial a n = init Stdlib.(n + 1) (fun i -> if Stdlib.(i = n) then a else F.zero)
 
@@ -189,8 +195,13 @@ module Polynomial_extension
       val modulus : Polynomial_ring(F).t
     end) =
 struct
-  include Quotient_field (Polynomial_ring (F)) (Mod)
-  let x : t =
-    let open Polynomial_ring (F) in
-    reduce x
+  module Underlying_ring = Polynomial_ring (F)
+
+  include Quotient_field (Underlying_ring) (Mod)
+
+  let x : t = reduce Underlying_ring.x
+
+  let const (p : F.t) = reduce (Underlying_ring.const p)
+
+  let ( .$() ) (p : t) (i : int) : F.t = Underlying_ring.((p :> t).$(i))
 end

@@ -226,6 +226,7 @@ struct
 end
 
 module B256 = Fixed (Traits.Byte_width.Bytes256)
+module B48 = Fixed (Traits.Byte_width.Bytes48)
 module B32 = Fixed (Traits.Byte_width.Bytes32)
 module B20 = struct
   include Fixed (Traits.Byte_width.Bytes20)

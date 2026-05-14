@@ -124,19 +124,22 @@ let suppressed_tests =
   Test_entry.Set.of_list
     [
     (* alt_bn128 precompiles. *)
+      (*
       ("mf_tests/byzantium/eip197_ec_pairing/gas", 0)
     ; ("mf_tests/byzantium/eip196_ec_add_mul/gas", 0)
     ; ("mf_tests/byzantium/eip196_ec_add_mul/ecadd", 0)
     ; ("mf_tests/byzantium/eip196_ec_add_mul/ecadd", 1)
+       *)
 
     (* blake2 precompile. *)
-    ; ("mf_tests/istanbul/eip152_blake2/blake2", 0)
+     ("mf_tests/istanbul/eip152_blake2/blake2", 0)
     ; ("mf_tests/istanbul/eip152_blake2/blake2", 1)
     ; ("mf_tests/istanbul/eip152_blake2/blake2", 2)
     ; ("mf_tests/istanbul/eip152_blake2/blake2", 3)
     ; ("mf_tests/istanbul/eip152_blake2/blake2_delegatecall", 0)
 
     (* modexp precompile. *)
+      (*
     ; ("mf_tests/byzantium/eip198_modexp_precompile/modexp", 0)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 0)
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 1)
@@ -150,6 +153,7 @@ let suppressed_tests =
     ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 10)
     ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1)
     ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15)
+       *)
 
     (* p256verify precompile. *)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 0)
@@ -219,12 +223,12 @@ let suppressed_tests =
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 14)
 
     (* Other precompiles. *)
-    ; ("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10)
-    ; ("mf_tests/frontier/precompiles/precompiles", 0)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 0)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 1)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 2)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 3)
+    (* ; ("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10) *)
+    (* ; ("mf_tests/frontier/precompiles/precompiles", 0) *)
+    (* ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 0) *)
+    (* ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 1) *)
+    (* ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 2) *)
+    (* ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 3) *)
     ] [@ocamlformat "disable"]
 
 (* Filter failing tests. *)

@@ -1,55 +1,6 @@
 open Numeric
 open Algebra
 
-module Elliptic_curve
-    (F : FIELD)
-    (P : sig
-      (* y^2 = x^3 + ax + b *)
-      val a : F.t
-      val b : F.t
-    end) =
-struct
-  type t = Point of F.t * F.t | Infinity
-
-  let of_coords (x : F.t) (y : F.t) =
-    if F.(x = zero) && F.(y = zero) then Some Infinity
-    else if F.(y * y = (x * x * x) + (P.a * x) + P.b) then Some (Point (x, y))
-    else None
-
-  let three = F.(~@"3")
-  let two = F.(~@"2")
-
-  let ( + ) (p_1 : t) (p_2 : t) =
-    match (p_1, p_2) with
-    | Infinity, _ -> p_2
-    | _, Infinity -> p_1
-    | Point (x_1, y_1), Point (x_2, y_2) when F.(x_1 <> x_2) ->
-        (* YP (250), case x_1 <> x_2 *)
-        let lambda = F.((y_2 - y_1) / (x_2 - x_1)) in
-        let x = F.((lambda * lambda) - x_1 - x_2) in
-        let y = F.((lambda * (x_1 - x)) - y_1) in
-        assert (Option.is_some (of_coords x y)) ;
-        Point (x, y)
-    | Point (_, y_1), Point (_, y_2) when F.(y_1 <> y_2) ->
-        (* YP (250), case x_1 = x_2 *)
-        Infinity
-    | Point (x_1, y_1), Point (_, _) when F.(y_1 <> zero) ->
-        (* YP (251), case y_1 = y_2 <> zero *)
-        let lambda = F.(((three * x_1 * x_1) + P.a) / (two * y_1)) in
-        let x = F.((lambda * lambda) - x_1 - x_1) in
-        let y = F.((lambda * (x_1 - x)) - y_1) in
-        assert (Option.is_some (of_coords x y)) ;
-        Point (x, y)
-    | _ ->
-        (* YP (251), case y_1 = y_2 = zero *)
-        Infinity
-
-  (* YP (252) *)
-  let ( * ) (n : Uint.t) (p : t) =
-    let rec loop n acc = if Uint.(n = zero) then acc else loop Uint.(n - one) (acc + p) in
-    loop n Infinity
-end
-
 (* YP (247) *)
 (* field_modulus in py_ecc *)
 let p = Uint.of_string "21888242871839275222246405745257275088696311157297823662689037894645226208583"
@@ -65,7 +16,7 @@ end)
 (* YP (249) *)
 (* Curve equation: y² = x³ + 3 *)
 module C_1 =
-  Elliptic_curve
+  Curve.Make
     (F_p)
     (struct
       let a = F_p.zero
@@ -77,20 +28,21 @@ let p_1 = Option.get (C_1.of_coords F_p.(one) F_p.(one + one))
 
 (* Fₚ₂ = Fₚ[x]/(x²+1) *)
 module F_p2 = struct
+  module Poly2 = Polynomial_ring (F_p)
+
   include
     Polynomial_extension
       (F_p)
       (struct
-        let modulus =
-          let open Polynomial_ring (F_p) in
-          (x * x) + one
+        let modulus = Poly2.((x * x) + one)
       end)
+
   let i = x
 end
 
 (* YP (253) *)
 module C_2 =
-  Elliptic_curve
+  Curve.Make
     (F_p2)
     (struct
       let a = F_p2.zero
@@ -101,8 +53,89 @@ let p_2 =
   Option.get
     (C_2.of_coords
        F_p2.(
-         ~@"8495653923123431417604973247489272438418190587263600148770280649306958101930"
-         + (i * ~@"4082367875863433681332203403145435568316851327593401208105741076214120093531") )
-       F_p2.(
          ~@"10857046999023057135944570762232829481370756359578518086990519993285655852781"
-         + (i * ~@"11559732032986387107991004021392285783925812861821192530917403151452391805634") ) )
+         + (i * ~@"11559732032986387107991004021392285783925812861821192530917403151452391805634") )
+       F_p2.(
+         ~@"8495653923123431417604973247489272438418190587263600148770280649306958101930"
+         + (i * ~@"4082367875863433681332203403145435568316851327593401208105741076214120093531") ) )
+
+(* Fₚ₁₂ = Fₚ[w]/(w¹²  − 18w⁶ + 82)
+   Same factoring trick: save Poly12 so reduce : Poly12.t -> F_p12.t is usable. *)
+module F_p12 = struct
+  module Underlying = Polynomial_ring (F_p)
+
+  include
+    Polynomial_extension
+      (F_p)
+      (struct
+        let modulus = Underlying.(monomial F_p.one 12 + monomial F_p.(~@"18") 6 + ~@"82")
+      end)
+
+  let w : t = reduce Underlying.x
+end
+
+(* Powers of w used in the twist map (precomputed once at init). *)
+let w2 = F_p12.(F_p12.w * F_p12.w)
+let w3 = F_p12.(w2 * F_p12.w)
+let w6 = F_p12.(w3 * w3)
+
+(* Frobenius endomorphism on F_p12: x ↦ x^p *)
+let f12_pow (f : F_p12.t) (n : Uint.t) : F_p12.t =
+  let rec loop n f acc =
+    if Uint.(n = zero) then acc
+    else
+      let n, rem = Uint.div_rem n Uint.(~$2) in
+      let acc = if Uint.(rem = one) then F_p12.(acc * f) else acc in
+      loop n F_p12.(f * f) acc
+  in
+  loop n f F_p12.one
+
+let frob12 (x : F_p12.t) : F_p12.t = f12_pow x p
+
+(* BN128 pairing using the optimal Ate algorithm.
+   final_exp_exp = (p^12 - 1) / r, computed once at module initialization. *)
+module BN128_Pairing =
+  Pairing.Make
+    (F_p12)
+    (struct
+      let a12 = F_p12.zero
+      let b12 = F_p12.(~@"3")
+      let ate_loop_count = Uint.(~@"29793968203157093288")
+      let frob12 = frob12
+      let apply_post_loop = true
+
+      let final_exp_exp =
+        let p12 = Uint.( ** ) p 12 in
+        fst (Uint.div_rem Uint.(p12 - one) q)
+    end)
+
+(* "Twist" a point in C_2 (over Fₚ₂) into a point in BN128_Pairing.C12 (over Fₚ₁₂).
+   The isomorphism maps Fₚ₂ ≅ Fₚ[w⁶] inside Fₚ[w]/(w¹² − 18w⁶ + 82).
+   See bn128_curve.py::twist for the reference. *)
+let twist (pt : C_2.t) : BN128_Pairing.C12.t =
+  match pt with
+  | C_2.Infinity -> BN128_Pairing.C12.Infinity
+  | C_2.Point (xq, yq) ->
+      let x0 = F_p2.(xq.$(0)) in
+      let x1 = F_p2.(xq.$(1)) in
+      let y0 = F_p2.(yq.$(0)) in
+      let y1 = F_p2.(yq.$(1)) in
+      let nine = F_p.(~@"9") in
+      let nx_c0 = F_p.(x0 - (nine * x1)) in
+      let ny_c0 = F_p.(y0 - (nine * y1)) in
+      let nx = F_p12.(const nx_c0 + (const x1 * w6)) in
+      let ny = F_p12.(const ny_c0 + (const y1 * w6)) in
+      let tx = F_p12.(nx * w2) in
+      let ty = F_p12.(ny * w3) in
+      BN128_Pairing.C12.Point (tx, ty)
+
+(* Embed a G1 point (over Fₚ) into BN128_Pairing.C12 as a constant. *)
+let cast_g1 (pt : C_1.t) : BN128_Pairing.C12.t =
+  match pt with
+  | C_1.Infinity -> BN128_Pairing.C12.Infinity
+  | C_1.Point (x, y) -> BN128_Pairing.C12.Point (F_p12.const x, F_p12.const y)
+
+(* Check that ∏ e(P_i, Q_i) = 1 in Fₚ₁₂, where P_i ∈ C_1, Q_i ∈ C_2.
+   Returns None if any coordinate is out of range or not on the curve. *)
+let pairing_check (pairs : (C_1.t * C_2.t) list) : bool =
+  BN128_Pairing.pairing_check (List.map (fun (p, q) -> (twist q, cast_g1 p)) pairs)
