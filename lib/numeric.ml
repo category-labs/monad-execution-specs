@@ -176,8 +176,10 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   let ( * ) = lift_2 Z.( * )
   let ( / ) = lift_2 Z.( / )
 
+  (* Always unsigned. *)
+  let modulo = lift_2 Z.erem
   (* Will be signed or unsigned depending on the signedness of the module. *)
-  let modulo = lift_2 Z.rem
+  let rem = lift_2 Z.rem
 
   let addmod x y m = of_z_after_op Z.(rem (to_z x + to_z y) (to_z m))
   let mulmod x y m = of_z_after_op Z.(rem (to_z x * to_z y) (to_z m))
@@ -243,15 +245,28 @@ module Uint = struct
   let div_rem (x : t) (y : t) : t * t =
     let quot, rem = Z.ediv_rem (to_z x) (to_z y) in
     (of_z_exn quot, of_z_exn rem)
+
+  (* Modular exponentiation. *)
+  let pow_mod base exp modulus = of_z_exn (Z.powm (to_z base) (to_z exp) (to_z modulus))
 end
 module Integer = struct
   include IntegerBase
 
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
 
+  (* This always returns a nonnegative integer. *)
+  let of_bytes_be (bs : Bytes.t) =
+    of_z_exn (Z.of_bits (Bytes.reverse bs))
+
   let div_rem (x : t) (y : t) : t * t =
     let quot, rem = Z.ediv_rem (to_z x) (to_z y) in
     (of_z_exn quot, of_z_exn rem)
+
+  (* Legendre symbol, used in elliptic curve code to check whether a number is a quadratic residue. *)
+  let legendre a modulus = Z.legendre (to_z a) (to_z modulus)
+
+  (* Modular exponentiation. *)
+  let pow_mod base exp modulus = of_z_exn (Z.powm (to_z base) (to_z exp) (to_z modulus))
 end
 
 (** Helper functor to create pairs of signed and unsigned types for a given bit width, together with conversion
@@ -340,6 +355,7 @@ struct
     let of_uint_exn (x : Uint.t) : t = of_z_exn (Uint.to_z x)
     let of_uint_truncating (x : Uint.t) : t = of_z_truncating (Uint.to_z x)
 
+    let to_integer (x : t) : Integer.t = Integer.of_z_exn (to_z x)
     let of_integer_opt (x : Integer.t) = of_z_opt (Integer.to_z x)
     let of_integer_exn (x : Integer.t) : t = of_z_exn (Integer.to_z x)
 

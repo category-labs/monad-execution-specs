@@ -8,6 +8,7 @@ let p = Uint.of_string "21888242871839275222246405745257275088696311157297823662
 (* YP (248) *)
 (* curve_order in py_ecc *)
 let q = Uint.of_string "21888242871839275222246405745257275088548364400416034343698204186575808495617"
+let curve_order = q
 
 module F_p = Prime_field (struct
   let modulus = Uint.as_signed p
@@ -22,22 +23,23 @@ module C_1 =
       let a = F_p.zero
       let b = F_p.(one + one + one)
     end)
+module G_1 = C_1.Subgroup (struct
+  let order = curve_order
+  let generator = Option.get (C_1.of_coords F_p.one F_p.(one + one))
+end)
 
-(* p₁ = (1, 2) ∈ C₁ *)
-let p_1 = Option.get (C_1.of_coords F_p.(one) F_p.(one + one))
-
-(* Fₚ₂ = Fₚ[x]/(x²+1) *)
+(* Fₚ₂ = Fₚ[i]/(i²+1) *)
 module F_p2 = struct
-  module Poly2 = Polynomial_ring (F_p)
-
   include
     Polynomial_extension
       (F_p)
       (struct
-        let modulus = Poly2.((x * x) + one)
+        let modulus =
+          let open Polynomial_ring (F_p) in
+          (monomial_x * monomial_x) + one
       end)
 
-  let i = x
+  let i = monomial_x
 end
 
 (* YP (253) *)
@@ -48,30 +50,31 @@ module C_2 =
       let a = F_p2.zero
       let b = F_p2.(~@"3" / (i + ~@"9"))
     end)
+module G_2 = C_2.Subgroup (struct
+  let order = curve_order
+  let generator =
+    Option.get
+      (C_2.of_coords
+         F_p2.(
+           ~@"10857046999023057135944570762232829481370756359578518086990519993285655852781"
+           + (i * ~@"11559732032986387107991004021392285783925812861821192530917403151452391805634") )
+         F_p2.(
+           ~@"8495653923123431417604973247489272438418190587263600148770280649306958101930"
+           + (i * ~@"4082367875863433681332203403145435568316851327593401208105741076214120093531") ) )
+end)
 
-let p_2 =
-  Option.get
-    (C_2.of_coords
-       F_p2.(
-         ~@"10857046999023057135944570762232829481370756359578518086990519993285655852781"
-         + (i * ~@"11559732032986387107991004021392285783925812861821192530917403151452391805634") )
-       F_p2.(
-         ~@"8495653923123431417604973247489272438418190587263600148770280649306958101930"
-         + (i * ~@"4082367875863433681332203403145435568316851327593401208105741076214120093531") ) )
-
-(* Fₚ₁₂ = Fₚ[w]/(w¹²  − 18w⁶ + 82)
-   Same factoring trick: save Poly12 so reduce : Poly12.t -> F_p12.t is usable. *)
+(* Fₚ₁₂ = Fₚ[w]/(w¹²  − 18w⁶ + 82) *)
 module F_p12 = struct
-  module Underlying = Polynomial_ring (F_p)
-
   include
     Polynomial_extension
       (F_p)
       (struct
-        let modulus = Underlying.(monomial F_p.one 12 + monomial F_p.(~@"18") 6 + ~@"82")
+        let modulus =
+          let open Polynomial_ring (F_p) in
+          monomial F_p.one 12 - monomial F_p.(~@"18") 6 + ~@"82"
       end)
 
-  let w : t = reduce Underlying.x
+  let w : t = reduce Underlying_ring.monomial_x
 end
 
 (* Powers of w used in the twist map (precomputed once at init). *)
@@ -84,8 +87,8 @@ let f12_pow (f : F_p12.t) (n : Uint.t) : F_p12.t =
   let rec loop n f acc =
     if Uint.(n = zero) then acc
     else
-      let n, rem = Uint.div_rem n Uint.(~$2) in
-      let acc = if Uint.(rem = one) then F_p12.(acc * f) else acc in
+      let n, remainder = Uint.div_rem n Uint.(~$2) in
+      let acc = if Uint.(remainder = one) then F_p12.(acc * f) else acc in
       loop n F_p12.(f * f) acc
   in
   loop n f F_p12.one
@@ -109,13 +112,13 @@ module BN128_Pairing =
         fst (Uint.div_rem Uint.(p12 - one) q)
     end)
 
-(* "Twist" a point in C_2 (over Fₚ₂) into a point in BN128_Pairing.C12 (over Fₚ₁₂).
+(* "Twist" a point in G_2 (over Fₚ₂) into a point in BN128_Pairing.C12 (over Fₚ₁₂).
    The isomorphism maps Fₚ₂ ≅ Fₚ[w⁶] inside Fₚ[w]/(w¹² − 18w⁶ + 82).
    See bn128_curve.py::twist for the reference. *)
-let twist (pt : C_2.t) : BN128_Pairing.C12.t =
-  match pt with
-  | C_2.Infinity -> BN128_Pairing.C12.Infinity
-  | C_2.Point (xq, yq) ->
+let twist (pt : G_2.t) : BN128_Pairing.C12.t =
+  match (pt :> C_2.t) with
+  | Infinity -> BN128_Pairing.C12.Infinity
+  | Point (xq, yq) ->
       let x0 = F_p2.(xq.$(0)) in
       let x1 = F_p2.(xq.$(1)) in
       let y0 = F_p2.(yq.$(0)) in
@@ -130,12 +133,12 @@ let twist (pt : C_2.t) : BN128_Pairing.C12.t =
       BN128_Pairing.C12.Point (tx, ty)
 
 (* Embed a G1 point (over Fₚ) into BN128_Pairing.C12 as a constant. *)
-let cast_g1 (pt : C_1.t) : BN128_Pairing.C12.t =
-  match pt with
-  | C_1.Infinity -> BN128_Pairing.C12.Infinity
-  | C_1.Point (x, y) -> BN128_Pairing.C12.Point (F_p12.const x, F_p12.const y)
+let cast_g1 (pt : G_1.t) : BN128_Pairing.C12.t =
+  match (pt :> C_1.t) with
+  | Infinity -> BN128_Pairing.C12.Infinity
+  | Point (x, y) -> BN128_Pairing.C12.Point (F_p12.const x, F_p12.const y)
 
-(* Check that ∏ e(P_i, Q_i) = 1 in Fₚ₁₂, where P_i ∈ C_1, Q_i ∈ C_2.
+(* Check that ∏ e(P_i, Q_i) = 1 in Fₚ₁₂, where P_i ∈ G_1, Q_i ∈ G_2.
    Returns None if any coordinate is out of range or not on the curve. *)
-let pairing_check (pairs : (C_1.t * C_2.t) list) : bool =
+let pairing_check (pairs : (G_1.t * G_2.t) list) : bool =
   BN128_Pairing.pairing_check (List.map (fun (p, q) -> (twist q, cast_g1 p)) pairs)

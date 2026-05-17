@@ -473,7 +473,7 @@ struct
     let$ () = spend Gas.low in
 
     (* Operation *)
-    let$ () = push I256.(as_unsigned (if y = zero then zero else modulo x y)) in
+    let$ () = push I256.(as_unsigned (if y = zero then zero else rem x y)) in
 
     (* PC *)
     increase_pc_and_continue

@@ -34,8 +34,8 @@ struct
     let rec loop n f acc =
       if Uint.(n = zero) then acc
       else
-        let n, rem = Uint.div_rem n Uint.(~$2) in
-        let acc = if Uint.(rem = one) then F12.(acc * f) else acc in
+        let n, remainder = Uint.div_rem n Uint.(~$2) in
+        let acc = if Uint.(remainder = one) then F12.(acc * f) else acc in
         loop n F12.(f * f) acc
     in
     loop n f F12.one

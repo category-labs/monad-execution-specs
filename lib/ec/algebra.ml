@@ -9,7 +9,8 @@ module type FIELD = sig
   val zero : t
   val one : t
 
-  (* This can be derived, but all our instances can provide more efficient implementations. *)
+  (* Read the input as an unsigned integer and embed it in the field. This can be derived, but all our instances
+     can provide more efficient implementations. *)
   val ( ~@ ) : String.t -> t
 
   val ( + ) : t -> t -> t
@@ -69,7 +70,8 @@ end = struct
   let ( - ) = lift_2 D.( - )
   let ( * ) = lift_2 D.( * )
 
-  (* Compute the Bezout coefficients of two polynomials, using the extended Euclidean algorithm.
+  (* Compute the Bezout coefficients of two elements in the underlying domain, using the extended Euclidean
+     algorithm.
      This does more work than necessary as we are only interested in one coefficient.
    *)
   let bezout_coeffs (u : D.t) (v : D.t) =
@@ -92,16 +94,31 @@ end = struct
     reduce D.((u :> t) * inv_v)
 end
 
+(* Prime fields over a prime modulus. We do not check primality. We also require modulus mod 4 = 3 to implement
+   sqrt. *)
 module Prime_field (Mod : sig
   val modulus : Integer.t
 end) =
 struct
+  include Mod
   include Quotient_field (Integer) (Mod)
 
   (* Returns None if the input is not already reduced. Useful for precompile input validation. *)
   let of_uint_opt (i : Uint.t) =
     let i = Uint.as_signed i in
     if Integer.(i >= Mod.modulus) then None else Some (reduce i)
+
+  (* When modulo mod 4 = 3, we can efficiently compute square roots. *)
+  let sqrt_opt =
+    if Integer.(modulo modulus ~$4 = ~$3) then
+      let sqrt_exp = Integer.((modulus + one) / ~$4) in
+      Some
+        (fun (x : t) : t option ->
+          (* Check x really is a square. *)
+          if Stdlib.(Integer.(legendre (x :> Integer.t) modulus) = 1) then
+            Some (reduce (Integer.pow_mod (x :> Integer.t) sqrt_exp modulus))
+          else None )
+    else None
 end
 
 (* Polynomial ring over a field. *)
@@ -132,8 +149,7 @@ module Polynomial_ring (F : FIELD) = struct
   let degree (p : t) = Stdlib.(length p - 1)
   let init length p_i = trim (Iarray.init length p_i)
 
-  let ( .$() ) (p : t) i =
-    if i < Iarray.length (p :> F.t Iarray.t) then Iarray.get (p :> F.t Iarray.t) i else F.zero
+  let ( .$() ) (p : t) i = if i < length p then Iarray.get (p :> F.t Iarray.t) i else F.zero
 
   let ( <> ) (p_1 : t) (p_2 : t) =
     length p_1 <> length p_2 || Iarray.exists2 F.( <> ) (p_1 :> F.t Iarray.t) (p_2 :> F.t Iarray.t)
@@ -142,7 +158,7 @@ module Polynomial_ring (F : FIELD) = struct
   let zero = trim (Iarray.init 0 (fun _ -> F.zero))
   let one = trim (Iarray.init 1 (fun _ -> F.one))
   let ( ~@ ) i = trim (Iarray.init 1 (fun _ -> F.(~@i)))
-  let x = trim (Iarray.init 2 (fun i -> if Stdlib.(i = 1) then F.one else F.zero))
+  let monomial_x = trim (Iarray.init 2 (fun i -> if Stdlib.(i = 1) then F.one else F.zero))
 
   let ( + ) (p_1 : t) (p_2 : t) = init (max (length p_1) (length p_2)) (fun i -> F.(p_1.$(i) + p_2.$(i)))
 
@@ -199,7 +215,7 @@ struct
 
   include Quotient_field (Underlying_ring) (Mod)
 
-  let x : t = reduce Underlying_ring.x
+  let monomial_x : t = reduce Underlying_ring.monomial_x
 
   let const (p : F.t) = reduce (Underlying_ring.const p)
 

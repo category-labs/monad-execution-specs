@@ -2,14 +2,21 @@ open Numeric
 open Algebra
 
 (* BLS12-381 field modulus *)
-let p = Uint.of_string "4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787"
+let p =
+  Uint.of_string
+    "4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787"
 
 (* BLS12-381 curve order *)
 let q = Uint.of_string "52435875175126190479447740508185965837690552500527637822603658699938581184513"
+let curve_order = q
 
-module F_p = Prime_field (struct
-  let modulus = Uint.as_signed p
-end)
+module F_p = struct
+  include Prime_field (struct
+    let modulus = Uint.as_signed p
+  end)
+
+  let sqrt_opt = Option.get sqrt_opt
+end
 
 (* G1 curve: y² = x³ + 4 *)
 module C_1 =
@@ -19,32 +26,56 @@ module C_1 =
       let a = F_p.zero
       let b = F_p.(~@"4")
     end)
+module G_1 = C_1.Subgroup (struct
+  let order = curve_order
+  let generator =
+    Option.get
+      (C_1.of_coords
+         F_p.(
+           ~@"3685416753713387016781088315183077757961620795782546409894578378688607592378376318836054947676345821548104185464507" )
+         F_p.(
+           ~@"1339506544944476473020471379941921221584933875938349620426543736416511423956333506472724655353366534992391756441569" ) )
+end)
 
-(* G1 generator *)
-let p_1 =
-  Option.get
-    (C_1.of_coords
-       F_p.(~@"3685416753713387016781088315183077757961620795782546409894578378688607592378376318836054947676345821548104185464507")
-       F_p.(~@"1339506544944476473020471379941921221584933875938349620426543736416511423956333506472724655353366534992391756441569") )
-
-(* Fₚ₂ = Fₚ[u]/(u² + 1) *)
+(* Fₚ₂ = Fₚ[i]/(i² + 1) *)
 module F_p2 = struct
-  module Poly2 = Polynomial_ring (F_p)
-
   include
     Polynomial_extension
       (F_p)
       (struct
-        let modulus = Poly2.((x * x) + one)
+        let modulus =
+          let open Polynomial_ring (F_p) in
+          (monomial_x * monomial_x) + one
       end)
 
-  let i = x
+  let i = monomial_x
 
-  let of_fp (fp : F_p.t) : t = reduce (Poly2.const fp)
-
-  let get_coeff (e : t) (n : int) : F_p.t =
-    let arr = ((e :> Poly2.t) :> F_p.t Iarray.t) in
-    if n < Iarray.length arr then Iarray.get arr n else F_p.zero
+  (* Square root in F_p2 = Fₚ[i]/(i²+1).
+     Let v = a + bi.
+       - If b = 0, we take the square root of a or -a in Fₚ
+       - If b ≠ 0, then sqrt(a + bi) = sqrt((a±r)/2) + (b/(2c))i *)
+  let sqrt_opt =
+    let two = F_p.(one + one) in
+    fun (v : t) : t option ->
+      Option.(
+        let a, b = (v.$(0), v.$(1)) in
+        if F_p.(b = zero) then
+          (* b = 0, return sqrt(a) (which may be imaginary). *)
+          match F_p.sqrt_opt a with
+          | Some y -> return (const y)
+          | None ->
+              (* Root must be imaginary. *)
+              let$ w = F_p.(sqrt_opt (zero - a)) in
+              return (i * const w)
+        else
+          let$ r = F_p.(sqrt_opt ((a * a) + (b * b))) in
+          let$ c =
+            match F_p.(sqrt_opt ((a + r) / two)) with
+            | Some c -> return c
+            | None -> F_p.(sqrt_opt ((a - r) / two))
+          in
+          let d = F_p.(b / (two * c)) in
+          return (const c + (i * const d)) )
 end
 
 (* G2 twisted curve: y² = x³ + (4 + 4u) over Fₚ₂ *)
@@ -55,35 +86,35 @@ module C_2 =
       let a = F_p2.zero
       let b = F_p2.(~@"4" + (i * ~@"4"))
     end)
+module G_2 = C_2.Subgroup (struct
+  let order = curve_order
 
-(* G2 generator *)
-let p_2 =
-  Option.get
-    (C_2.of_coords
-       F_p2.(
-         ~@"352701069587466618187139116011060144890029952792775240219908644239793785735715026873347600343865175952761926303160"
-         + (i * ~@"3059144344244213709971259814753781636986470325476647558659373206291635324768958432433509563104347017837885763365758") )
-       F_p2.(
-         ~@"1985150602287291935568054521177171638300868978215655730859378665066344726373823718423869104263333984641494340347905"
-         + (i * ~@"927553665492332455747201965776037880757740193453592970025027978793976877002675564980949289727957565575433344219582") ) )
+  let generator =
+    Option.get
+      (C_2.of_coords
+         F_p2.(
+           ~@"352701069587466618187139116011060144890029952792775240219908644239793785735715026873347600343865175952761926303160"
+           + i
+             * ~@"3059144344244213709971259814753781636986470325476647558659373206291635324768958432433509563104347017837885763365758" )
+         F_p2.(
+           ~@"1985150602287291935568054521177171638300868978215655730859378665066344726373823718423869104263333984641494340347905"
+           + i
+             * ~@"927553665492332455747201965776037880757740193453592970025027978793976877002675564980949289727957565575433344219582" ) )
+end)
 
 (* Fₚ₁₂ = Fₚ[w]/(w¹² − 2w⁶ + 2) *)
 module F_p12 = struct
-  module Poly12 = Polynomial_ring (F_p)
-
   include
-    Quotient_field
-      (Poly12)
+    Polynomial_extension
+      (F_p)
       (struct
         let modulus =
-          let open Poly12 in
-          let x6 = x * x * x * x * x * x in
-          (x6 * x6) - (~@"2" * x6) + ~@"2"
+          let two = F_p.(one + one) in
+          let open Polynomial_ring (F_p) in
+          monomial F_p.one 12 - monomial two 6 + const two
       end)
 
-  let w : t = reduce Poly12.x
-
-  let embed_fp (x : F_p.t) : t = reduce (Poly12.const x)
+  let w : t = reduce Underlying_ring.monomial_x
 end
 
 (* Powers of w used in the M-type twist map (precomputed once at init). *)
@@ -120,27 +151,24 @@ module BLS12_Pairing =
    the twisted point has nz = w³ (for z = 1), giving affine coordinates:
      x_twisted = ((x₀ − x₁) + x₁w⁶) · w⁻²  =  (x₀ − x₁)w⁻² + x₁w⁴
      y_twisted = ((y₀ − y₁) + y₁w⁶) · w⁻³  =  (y₀ − y₁)w⁻³ + y₁w³  *)
-let twist (pt : C_2.t) : BLS12_Pairing.C12.t =
-  match pt with
-  | C_2.Infinity -> BLS12_Pairing.C12.Infinity
-  | C_2.Point (xq, yq) ->
-      let x0 = F_p2.get_coeff xq 0 in
-      let x1 = F_p2.get_coeff xq 1 in
-      let y0 = F_p2.get_coeff yq 0 in
-      let y1 = F_p2.get_coeff yq 1 in
-      let emb = F_p12.embed_fp in
-      let tx = F_p12.(emb F_p.(x0 - x1) * winv2 + emb x1 * w4) in
-      let ty = F_p12.(emb F_p.(y0 - y1) * winv3 + emb y1 * w3) in
+let twist (pt : G_2.t) : BLS12_Pairing.C12.t =
+  match (pt :> C_2.t) with
+  | Infinity -> BLS12_Pairing.C12.Infinity
+  | Point (xq, yq) ->
+      let x0 = F_p2.(xq.$(0)) in
+      let x1 = F_p2.(xq.$(1)) in
+      let y0 = F_p2.(yq.$(0)) in
+      let y1 = F_p2.(yq.$(1)) in
+      let tx = F_p12.((const F_p.(x0 - x1) * winv2) + (const x1 * w4)) in
+      let ty = F_p12.((const F_p.(y0 - y1) * winv3) + (const y1 * w3)) in
       BLS12_Pairing.C12.Point (tx, ty)
 
 (* Embed a G1 point (over Fₚ) into BLS12_Pairing.C12 as a constant. *)
-let cast_g1 (pt : C_1.t) : BLS12_Pairing.C12.t =
-  match pt with
-  | C_1.Infinity -> BLS12_Pairing.C12.Infinity
-  | C_1.Point (x, y) ->
-      BLS12_Pairing.C12.Point (F_p12.embed_fp x, F_p12.embed_fp y)
+let cast_g1 (pt : G_1.t) : BLS12_Pairing.C12.t =
+  match (pt :> C_1.t) with
+  | Infinity -> BLS12_Pairing.C12.Infinity
+  | Point (x, y) -> BLS12_Pairing.C12.Point (F_p12.const x, F_p12.const y)
 
-(* Check that ∏ e(Pᵢ, Qᵢ) = 1 in Fₚ₁₂, where Pᵢ ∈ C_1, Qᵢ ∈ C_2. *)
-let pairing_check (pairs : (C_1.t * C_2.t) list) : bool =
-  BLS12_Pairing.pairing_check
-    (List.map (fun (p, q) -> (twist q, cast_g1 p)) pairs)
+(* Check that ∏ e(Pᵢ, Qᵢ) = 1 in Fₚ₁₂, where Pᵢ ∈ G_1, Qᵢ ∈ G_2. *)
+let pairing_check (pairs : (G_1.t * G_2.t) list) : bool =
+  BLS12_Pairing.pairing_check (List.map (fun (p, q) -> (twist q, cast_g1 p)) pairs)
