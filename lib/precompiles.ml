@@ -46,6 +46,7 @@ module Precompile = struct
     val byte_width : int
     val sub_with_zero_padding : Bytes.t -> int -> t
     val reverse : t -> t
+    val to_bytes : t -> Bytes.t
   end
 
   let byte_reader (type bs) (module B : BYTES with type t = bs) : bs t =
@@ -257,14 +258,24 @@ module Ec_precompile_utils (M : sig
     include Ec.Algebra.FIELD with type t = private Integer.t
     val of_uint_opt : Uint.t -> t option
   end
+  module C1_coord_repr : Precompile.BYTES
+  module C_1 : Ec.Curve.SIG with type Underlying.t = F_p.t
+  module G_1 : sig
+    include Ec.Curve.SIG with type Underlying.t = F_p.t and type t = private C_1.t
+    val in_subgroup : C_1.t -> t option
+  end
+
   module F_p2 : sig
     include Ec.Algebra.FIELD
     val i : t
     val const : F_p.t -> t
     val ( .$() ) : t -> int -> F_p.t
   end
-  module G_1 : Ec.Curve.SIG with type Underlying.t = F_p.t
-  module G_2 : Ec.Curve.SIG with type Underlying.t = F_p2.t
+  module C_2 : Ec.Curve.SIG with type Underlying.t = F_p2.t
+  module G_2 : sig
+    include Ec.Curve.SIG with type Underlying.t = F_p2.t and type t = private C_2.t
+    val in_subgroup : C_2.t -> t option
+  end
 end) =
 struct
   open M
@@ -272,21 +283,26 @@ struct
   (* YP (257) *)
   let f_p =
     Precompile.(
-      let$ x = U256.to_uint <$> u256 in
+      let$ x = Uint.of_bytes_be <$> (M.C1_coord_repr.to_bytes <$> byte_reader (module M.C1_coord_repr)) in
       Option.or_fail (F_p.of_uint_opt x) )
 
-  (* YP (258) *)
-  let point_g1 =
+  let point_c1 =
     Precompile.(
+      let$ () = return () in
       (* YP (260) *)
       let$ x = f_p in
       (* YP (261) *)
       let$ y = f_p in
-      (* YP (258), YP (259) *)
-      Option.or_fail G_1.(of_coords x y) )
+      (* YP (259) *)
+      Option.or_fail C_1.(of_coords x y) )
 
-  (* YP (262) *)
-  let point_g2 =
+  (* YP (258) *)
+  let point_g1 =
+    Precompile.(
+      let$ p = point_c1 in
+      Option.or_fail G_1.(in_subgroup p) )
+
+  let point_c2 =
     Precompile.(
       (* YP (264) *)
       let$ x_0 = f_p in
@@ -298,29 +314,45 @@ struct
       let$ y_1 = f_p in
       let g_x = F_p2.(const x_0 + (i * const x_1)) in
       let g_y = F_p2.(const y_0 + (i * const y_1)) in
-      Option.or_fail G_2.(of_coords g_x g_y) )
+      (* YP (263) *)
+      Option.or_fail (C_2.of_coords g_x g_y) )
+
+  (* YP (262) *)
+  let point_g2 =
+    Precompile.(
+      let$ p = point_c2 in
+      Option.or_fail G_2.(in_subgroup p) )
+
+  let c1_coord_to_repr (x : F_p.t) : Bytes.t =
+    (x :> Integer.t)
+    |> Integer.as_unsigned_exn
+    |> Uint.to_bytes_be
+    |> fun bs ->
+    let padding_length = M.C1_coord_repr.byte_width - Bytes.length bs in
+    assert (padding_length >= 0) ;
+    Bytes.make padding_length '\x00' ^ bs
 
   (* Inverse of YP (258) *)
-  let delta_1_inv (p : G_1.t) =
-    let x, y = G_1.(coords p) in
-    [x; y]
-    |> List.map (fun (x : F_p.t) -> (x :> Integer.t) |> U256.of_integer_exn |> U256.to_repr_bytes)
-    |> Bytes.(concat empty)
+  let delta_1_inv (p : C_1.t) =
+    let x, y = C_1.(coords p) in
+    [x; y] |> List.map c1_coord_to_repr |> Bytes.(concat empty)
 
   (* Inverse of YP (262) *)
-  let delta_2_inv (p : G_2.t) =
-    let x, y = G_2.(coords p) in
+  let delta_2_inv (p : C_2.t) =
+    let x, y = C_2.(coords p) in
     let x_re, x_im = F_p2.(x.$(0), x.$(1)) in
     let y_re, y_im = F_p2.(y.$(0), y.$(1)) in
-    [x_re; x_im; y_re; y_im]
-    |> List.map (fun (x : F_p.t) -> (x :> Integer.t) |> U256.of_integer_exn |> U256.to_repr_bytes)
-    |> Bytes.(concat empty)
+    [x_re; x_im; y_re; y_im] |> List.map c1_coord_to_repr |> Bytes.(concat empty)
 end
 
 (* EIP-196 and EIP-197. *)
 module Alt_bn128 = struct
   open Ec.Alt_bn128
-  open Ec_precompile_utils (Ec.Alt_bn128)
+  open Ec_precompile_utils (struct
+    (* As per EIP-196, field elements and scalars are encoded as 32 byte big-endian numbers. *)
+    module C1_coord_repr = B32
+    include Ec.Alt_bn128
+  end)
 
   let add_address = Address.of_hex_string "0x06"
   let add (msg : Evmc.Message.t) : Evmc.Result.t =
@@ -328,10 +360,10 @@ module Alt_bn128 = struct
       run msg
         (let$ () = spend_gas Gas.(of_int 300) in
 
-         let$ p_0 = point_g1 in
-         let$ p_1 = point_g1 in
+         let$ p_0 = point_c1 in
+         let$ p_1 = point_c1 in
 
-         return (delta_1_inv G_1.(p_0 + p_1)) ) )
+         return (delta_1_inv C_1.(p_0 + p_1)) ) )
 
   let mul_address = Address.of_hex_string "0x07"
   let mul (msg : Evmc.Message.t) : Evmc.Result.t =
@@ -340,10 +372,10 @@ module Alt_bn128 = struct
         (let$ () = spend_gas Gas.(of_int 30_000) in
 
          let open Ec.Alt_bn128 in
-         let$ p_0 = point_g1 in
+         let$ p_0 = point_c1 in
          let$ n = U256.to_uint <$> u256 in
 
-         return (delta_1_inv G_1.(n * p_0)) ) )
+         return (delta_1_inv C_1.(n * p_0)) ) )
 
   let pairing_check_address = Address.of_hex_string "0x08"
   let pairing_check (msg : Evmc.Message.t) : Evmc.Result.t =
@@ -512,7 +544,291 @@ end
 (* EIP-2537. *)
 module Bls12 = struct
   open Ec.Bls12_381
-  open Ec_precompile_utils (Ec.Bls12_381)
+  open Ec_precompile_utils (struct
+    include Ec.Bls12_381
+    module C1_coord_repr = B64
+  end)
+
+  (* Constants for gas cost calculation. *)
+  let g1_add_cost = Gas.of_int 375
+  let g1_mul_cost = Gas.of_int 12_000
+  let g2_add_cost = Gas.of_int 600
+  let g2_mul_cost = Gas.of_int 22_500
+  let multiplier = Gas.of_int 1_000
+
+  module IntMap = Map.Make (Int)
+
+  let g1_discount =
+    let open Gas in
+    let max_discount = ~$519 in
+    let discount_table =
+      IntMap.of_list
+        [ (1, ~$1000)
+        ; (2, ~$949)
+        ; (3, ~$848)
+        ; (4, ~$797)
+        ; (5, ~$764)
+        ; (6, ~$750)
+        ; (7, ~$738)
+        ; (8, ~$728)
+        ; (9, ~$719)
+        ; (10, ~$712)
+        ; (11, ~$705)
+        ; (12, ~$698)
+        ; (13, ~$692)
+        ; (14, ~$687)
+        ; (15, ~$682)
+        ; (16, ~$677)
+        ; (17, ~$673)
+        ; (18, ~$669)
+        ; (19, ~$665)
+        ; (20, ~$661)
+        ; (21, ~$658)
+        ; (22, ~$654)
+        ; (23, ~$651)
+        ; (24, ~$648)
+        ; (25, ~$645)
+        ; (26, ~$642)
+        ; (27, ~$640)
+        ; (28, ~$637)
+        ; (29, ~$635)
+        ; (30, ~$632)
+        ; (31, ~$630)
+        ; (32, ~$627)
+        ; (33, ~$625)
+        ; (34, ~$623)
+        ; (35, ~$621)
+        ; (36, ~$619)
+        ; (37, ~$617)
+        ; (38, ~$615)
+        ; (39, ~$613)
+        ; (40, ~$611)
+        ; (41, ~$609)
+        ; (42, ~$608)
+        ; (43, ~$606)
+        ; (44, ~$604)
+        ; (45, ~$603)
+        ; (46, ~$601)
+        ; (47, ~$599)
+        ; (48, ~$598)
+        ; (49, ~$596)
+        ; (50, ~$595)
+        ; (51, ~$593)
+        ; (52, ~$592)
+        ; (53, ~$591)
+        ; (54, ~$589)
+        ; (55, ~$588)
+        ; (56, ~$586)
+        ; (57, ~$585)
+        ; (58, ~$584)
+        ; (59, ~$582)
+        ; (60, ~$581)
+        ; (61, ~$580)
+        ; (62, ~$579)
+        ; (63, ~$577)
+        ; (64, ~$576)
+        ; (65, ~$575)
+        ; (66, ~$574)
+        ; (67, ~$573)
+        ; (68, ~$572)
+        ; (69, ~$570)
+        ; (70, ~$569)
+        ; (71, ~$568)
+        ; (72, ~$567)
+        ; (73, ~$566)
+        ; (74, ~$565)
+        ; (75, ~$564)
+        ; (76, ~$563)
+        ; (77, ~$562)
+        ; (78, ~$561)
+        ; (79, ~$560)
+        ; (80, ~$559)
+        ; (81, ~$558)
+        ; (82, ~$557)
+        ; (83, ~$556)
+        ; (84, ~$555)
+        ; (85, ~$554)
+        ; (86, ~$553)
+        ; (87, ~$552)
+        ; (88, ~$551)
+        ; (89, ~$550)
+        ; (90, ~$549)
+        ; (91, ~$548)
+        ; (92, ~$547)
+        ; (93, ~$547)
+        ; (94, ~$546)
+        ; (95, ~$545)
+        ; (96, ~$544)
+        ; (97, ~$543)
+        ; (98, ~$542)
+        ; (99, ~$541)
+        ; (100, ~$540)
+        ; (101, ~$540)
+        ; (102, ~$539)
+        ; (103, ~$538)
+        ; (104, ~$537)
+        ; (105, ~$536)
+        ; (106, ~$536)
+        ; (107, ~$535)
+        ; (108, ~$534)
+        ; (109, ~$533)
+        ; (110, ~$532)
+        ; (111, ~$532)
+        ; (112, ~$531)
+        ; (113, ~$530)
+        ; (114, ~$529)
+        ; (115, ~$528)
+        ; (116, ~$528)
+        ; (117, ~$527)
+        ; (118, ~$526)
+        ; (119, ~$525)
+        ; (120, ~$525)
+        ; (121, ~$524)
+        ; (122, ~$523)
+        ; (123, ~$522)
+        ; (124, ~$522)
+        ; (125, ~$521)
+        ; (126, ~$520)
+        ; (127, ~$520)
+        ; (128, ~$519) ]
+    in
+    fun k -> IntMap.find_opt k discount_table |> Option.value ~default:max_discount
+
+  let g2_discount =
+    let open Gas in
+    let max_discount = ~$524 in
+    let discount_table =
+      IntMap.of_list
+        [ (1, ~$1000)
+        ; (2, ~$1000)
+        ; (3, ~$923)
+        ; (4, ~$884)
+        ; (5, ~$855)
+        ; (6, ~$832)
+        ; (7, ~$812)
+        ; (8, ~$796)
+        ; (9, ~$782)
+        ; (10, ~$770)
+        ; (11, ~$759)
+        ; (12, ~$749)
+        ; (13, ~$740)
+        ; (14, ~$732)
+        ; (15, ~$724)
+        ; (16, ~$717)
+        ; (17, ~$711)
+        ; (18, ~$704)
+        ; (19, ~$699)
+        ; (20, ~$693)
+        ; (21, ~$688)
+        ; (22, ~$683)
+        ; (23, ~$679)
+        ; (24, ~$674)
+        ; (25, ~$670)
+        ; (26, ~$666)
+        ; (27, ~$663)
+        ; (28, ~$659)
+        ; (29, ~$655)
+        ; (30, ~$652)
+        ; (31, ~$649)
+        ; (32, ~$646)
+        ; (33, ~$643)
+        ; (34, ~$640)
+        ; (35, ~$637)
+        ; (36, ~$634)
+        ; (37, ~$632)
+        ; (38, ~$629)
+        ; (39, ~$627)
+        ; (40, ~$624)
+        ; (41, ~$622)
+        ; (42, ~$620)
+        ; (43, ~$618)
+        ; (44, ~$615)
+        ; (45, ~$613)
+        ; (46, ~$611)
+        ; (47, ~$609)
+        ; (48, ~$607)
+        ; (49, ~$606)
+        ; (50, ~$604)
+        ; (51, ~$602)
+        ; (52, ~$600)
+        ; (53, ~$598)
+        ; (54, ~$597)
+        ; (55, ~$595)
+        ; (56, ~$593)
+        ; (57, ~$592)
+        ; (58, ~$590)
+        ; (59, ~$589)
+        ; (60, ~$587)
+        ; (61, ~$586)
+        ; (62, ~$584)
+        ; (63, ~$583)
+        ; (64, ~$582)
+        ; (65, ~$580)
+        ; (66, ~$579)
+        ; (67, ~$578)
+        ; (68, ~$576)
+        ; (69, ~$575)
+        ; (70, ~$574)
+        ; (71, ~$573)
+        ; (72, ~$571)
+        ; (73, ~$570)
+        ; (74, ~$569)
+        ; (75, ~$568)
+        ; (76, ~$567)
+        ; (77, ~$566)
+        ; (78, ~$565)
+        ; (79, ~$563)
+        ; (80, ~$562)
+        ; (81, ~$561)
+        ; (82, ~$560)
+        ; (83, ~$559)
+        ; (84, ~$558)
+        ; (85, ~$557)
+        ; (86, ~$556)
+        ; (87, ~$555)
+        ; (88, ~$554)
+        ; (89, ~$553)
+        ; (90, ~$552)
+        ; (91, ~$552)
+        ; (92, ~$551)
+        ; (93, ~$550)
+        ; (94, ~$549)
+        ; (95, ~$548)
+        ; (96, ~$547)
+        ; (97, ~$546)
+        ; (98, ~$545)
+        ; (99, ~$545)
+        ; (100, ~$544)
+        ; (101, ~$543)
+        ; (102, ~$542)
+        ; (103, ~$541)
+        ; (104, ~$541)
+        ; (105, ~$540)
+        ; (106, ~$539)
+        ; (107, ~$538)
+        ; (108, ~$537)
+        ; (109, ~$537)
+        ; (110, ~$536)
+        ; (111, ~$535)
+        ; (112, ~$535)
+        ; (113, ~$534)
+        ; (114, ~$533)
+        ; (115, ~$532)
+        ; (116, ~$532)
+        ; (117, ~$531)
+        ; (118, ~$530)
+        ; (119, ~$530)
+        ; (120, ~$529)
+        ; (121, ~$528)
+        ; (122, ~$528)
+        ; (123, ~$527)
+        ; (124, ~$526)
+        ; (125, ~$526)
+        ; (126, ~$525)
+        ; (127, ~$524)
+        ; (128, ~$524) ]
+    in
+    fun k -> IntMap.find_opt k discount_table |> Option.value ~default:max_discount
 
   let g1_add_address = Address.of_hex_string "0x0b"
   let g1_add (msg : Evmc.Message.t) : Evmc.Result.t =
@@ -520,15 +836,29 @@ module Bls12 = struct
       run msg
         (let$ () = ensure (Bytes.length msg.input_data = 256) in
 
-         let$ () = spend_gas Gas.(of_int 375) in
+         let$ () = spend_gas g1_add_cost in
 
-         let$ p_0 = point_g1 in
-         let$ p_1 = point_g1 in
+         (* g1_add does not check that its inputs are in G1. *)
+         let$ p_0 = point_c1 in
+         let$ p_1 = point_c1 in
 
-         return (delta_1_inv G_1.(p_0 + p_1)) ) )
+         return (delta_1_inv C_1.(p_0 + p_1)) ) )
 
   let g1_msm_address = Address.of_hex_string "0x0c"
-  let g1_msm (_msg : Evmc.Message.t) : Evmc.Result.t = Evmc.Result.failure Precompile_failure
+  let g1_msm (msg : Evmc.Message.t) : Evmc.Result.t =
+    Precompile.(
+      run msg
+        (let$ () = ensure (Bytes.length msg.input_data mod 160 = 0) in
+         let k = Bytes.length msg.input_data / 160 in
+         let$ () = ensure (k > 0) in
+
+         let$ () = spend_gas Gas.(~$k * g1_mul_cost * g1_discount k / multiplier) in
+
+         let$ points = list k (pair point_g1 u256) in
+
+         (* TODO: this can be done faster with Pippenger's algorithm. *)
+         let sum = List.fold_left (fun acc (pt, s) -> G_1.(acc + (U256.to_uint s * pt))) G_1.zero points in
+         return (delta_1_inv (sum :> C_1.t)) ) )
 
   let g2_add_address = Address.of_hex_string "0x0d"
   let g2_add (msg : Evmc.Message.t) : Evmc.Result.t =
@@ -536,15 +866,29 @@ module Bls12 = struct
       run msg
         (let$ () = ensure (Bytes.length msg.input_data = 512) in
 
-         let$ () = spend_gas Gas.(of_int 600) in
+         let$ () = spend_gas g2_add_cost in
 
-         let$ p_0 = point_g2 in
-         let$ p_1 = point_g2 in
+         (* g2_add does not check that its inputs are in G2. *)
+         let$ p_0 = point_c2 in
+         let$ p_1 = point_c2 in
 
-         return (delta_2_inv G_2.(p_0 + p_1)) ) )
+         return (delta_2_inv C_2.(p_0 + p_1)) ) )
 
   let g2_msm_address = Address.of_hex_string "0x0e"
-  let g2_msm (_msg : Evmc.Message.t) : Evmc.Result.t = Evmc.Result.failure Precompile_failure
+  let g2_msm (msg : Evmc.Message.t) : Evmc.Result.t =
+    Precompile.(
+      run msg
+        (let$ () = ensure (Bytes.length msg.input_data mod 288 = 0) in
+         let k = Bytes.length msg.input_data / 288 in
+         let$ () = ensure (k > 0) in
+
+         let$ () = spend_gas Gas.(~$k * g2_mul_cost * g2_discount k / multiplier) in
+
+         let$ points = list k (pair point_g2 u256) in
+
+         (* TODO: this can be done faster with Pippenger's algorithm. *)
+         let sum = List.fold_left (fun acc (pt, s) -> G_2.(acc + (U256.to_uint s * pt))) G_2.zero points in
+         return (delta_2_inv (sum :> C_2.t)) ) )
 
   let pairing_address = Address.of_hex_string "0x0f"
   let pairing (_msg : Evmc.Message.t) : Evmc.Result.t = Evmc.Result.failure Precompile_failure
