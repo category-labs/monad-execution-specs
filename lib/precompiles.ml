@@ -187,16 +187,19 @@ module Modexp = struct
       words ** 2 )
 
   let calculate_iteration_count ~exponent_length ~exponent =
-    Uint.(
-      let k =
-        match () with
-        | () when exponent_length <= ~$32 && exponent = zero -> zero
-        | () when exponent_length <= ~$32 -> ~$Stdlib.(significant_bits exponent - 1)
-        | () ->
+    let k =
+      match () with
+      | () when Uint.(exponent_length <= ~$32 && exponent = zero) -> Integer.zero
+      | () when Uint.(exponent_length <= ~$32) -> Integer.of_int (Uint.significant_bits exponent - 1)
+      | () ->
+          let exponent_length = Uint.as_signed exponent_length in
+          let exponent = Uint.as_signed exponent in
+          Integer.(
             (~$8 * (exponent_length - ~$32))
-            + ~$Stdlib.(significant_bits (logand exponent Uint.((~$2 ** 256) - ~$1)) - 1)
-      in
-      max k ~$1 )
+            + ~$(significant_bits (logand exponent ((~$2 ** 256) - ~$1)))
+            - ~$1 )
+    in
+    Integer.(as_unsigned_exn (max k one))
 
   let calculate_gas_cost ~base_length ~modulus_length ~exponent_length ~exponent =
     let multiplication_complexity = calculate_multiplication_complexity ~base_length ~modulus_length in
@@ -208,7 +211,7 @@ module Modexp = struct
       let$ len = u256 in
       (* Input length bounds checking. EIP-7823. *)
       match U256.(to_int_opt len) with
-      | Some i when i <= 1024 -> return i
+      | Some i when i <= 1_000_000_000 -> return i
       | _ -> precompile_failure )
 
   let address = Address.of_hex_string "0x05"
@@ -218,8 +221,11 @@ module Modexp = struct
     Precompile.(
       run msg
         (let$ base_length = parameter_length in
+         Format.eprintf "base_length: %d\n" base_length ;
          let$ exponent_length = parameter_length in
+         Format.eprintf "exponent_length: %d\n" exponent_length ;
          let$ modulus_length = parameter_length in
+         Format.eprintf "modulus_length: %d\n" modulus_length ;
          let$ base = Uint.of_bytes_be <$> bytes base_length in
          let$ exponent = Uint.of_bytes_be <$> bytes exponent_length in
          let$ () =
@@ -229,16 +235,24 @@ module Modexp = struct
              let exponent_length = Uint.of_int exponent_length in
              calculate_gas_cost ~base_length ~modulus_length ~exponent_length ~exponent
            in
+           Format.eprintf "gas_cost: %s\n" Gas.(to_string gas_cost) ;
            spend_gas gas_cost
          in
          let$ modulus = Uint.of_bytes_be <$> bytes modulus_length in
-         let$ () = ensure Uint.(modulus <> zero) in
-         let result = Uint.exp_mod base exponent ~modulo:modulus in
+         Format.eprintf "base: %s\n" Uint.(to_string base) ;
+         Format.eprintf "exponent: %s\n" Uint.(to_string exponent) ;
+         Format.eprintf "modulus: %s\n" Uint.(to_string modulus) ;
+         let result =
+           if Uint.(modulus = zero) then Uint.zero else Uint.exp_mod base exponent ~modulo:modulus
+         in
+         Format.eprintf "result: %s\n" Uint.(to_string result) ;
          let result_bytes = Uint.to_bytes_be result in
          (* As per EIP-198, the result must be a byte array of the same length as modulus_length, so
             it may be necessary to add padding. *)
          let padding_length = modulus_length - Bytes.length result_bytes in
          assert (padding_length >= 0) ;
+         Format.eprintf "result bytes: %s\n"
+           (Bytes.to_hex_string (Bytes.make padding_length '\x00' ^ result_bytes)) ;
          return (Bytes.make padding_length '\x00' ^ result_bytes) ) )
 end
 
@@ -308,6 +322,7 @@ struct
     |> Bytes.(concat empty)
 end
 
+(* EIP-196 and EIP-197. *)
 module Alt_bn128 = struct
   open Ec.Alt_bn128
   open Ec_precompile_utils (Ec.Alt_bn128)

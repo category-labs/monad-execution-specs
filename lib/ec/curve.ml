@@ -31,19 +31,7 @@ struct
   let three = F.(~@"3")
   let two = F.(~@"2")
 
-  let eqn_l y = F.(y * y)
-  let eqn_r x = F.((x * x * x) + (P.a * x) + P.b)
-  let in_curve ?tracer x y =
-    let l = eqn_l y in
-    let r = eqn_r x in
-    Option.iter
-      (fun to_string ->
-        Format.printf "x: %s\n" (to_string x) ;
-        Format.printf "y: %s\n" (to_string y) ;
-        Format.printf "l: %s\n" (to_string l) ;
-        Format.printf "r: %s\n" (to_string r) )
-      tracer ;
-    F.(l = r)
+  let in_curve x y = F.(y * y = (x * x * x) + (P.a * x) + P.b)
 
   let ( + ) (p_1 : t) (p_2 : t) =
     match (p_1, p_2) with
@@ -83,7 +71,8 @@ struct
     in
     loop n p Infinity
 
-  let of_coords (x : F.t) (y : F.t) = if in_curve x y then Some (Point (x, y)) else None
+  let of_coords (x : F.t) (y : F.t) =
+    if F.(x = zero && y = zero) then Some Infinity else if in_curve x y then Some (Point (x, y)) else None
 
   let coords = function Infinity -> (F.zero, F.zero) | Point (x, y) -> (x, y)
 
