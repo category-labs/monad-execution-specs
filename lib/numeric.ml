@@ -387,7 +387,7 @@ module U64 = Bits64.Unsigned
 module I64 = Bits64.Signed
 
 (** Signed and unsigned 32-bit integers. More operations than the versions in stdlib. *)
-module Bits32 = TwosComplement (Traits.Byte_width.Bytes8)
+module Bits32 = TwosComplement (Traits.Byte_width.Bytes4)
 
 module U32 = Bits32.Unsigned
 module I32 = Bits32.Signed
