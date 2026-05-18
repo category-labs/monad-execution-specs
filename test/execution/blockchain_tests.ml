@@ -132,11 +132,13 @@ let suppressed_tests =
        *)
 
     (* blake2 precompile. *)
+      (*
      ("mf_tests/istanbul/eip152_blake2/blake2", 0)
     ; ("mf_tests/istanbul/eip152_blake2/blake2", 1)
     ; ("mf_tests/istanbul/eip152_blake2/blake2", 2)
     ; ("mf_tests/istanbul/eip152_blake2/blake2", 3)
     ; ("mf_tests/istanbul/eip152_blake2/blake2_delegatecall", 0)
+       *)
 
     (* modexp precompile. *)
       (*
@@ -156,7 +158,7 @@ let suppressed_tests =
        *)
 
     (* p256verify precompile. *)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 0)
+      ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 0)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 1)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 2)
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 3)
@@ -169,13 +171,11 @@ let suppressed_tests =
     ; ("mf_tests/osaka/eip7951_p256verify_precompiles/eip_mainnet", 1)
 
     (* BLS precompiles. *)
+      (*
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 0)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 1)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 2)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 2)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 0)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 1)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 2)
@@ -184,6 +184,15 @@ let suppressed_tests =
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 1)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 2)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 3)
+    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 0)
+    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 1)
+    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 2)
+    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 3)
+       *)
+
+    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 0)
+    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 1)
+    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 2)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 0)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 1)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 2)
@@ -197,10 +206,6 @@ let suppressed_tests =
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 3)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 4)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 5)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 3)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 0)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 1)
     ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 2)

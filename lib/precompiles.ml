@@ -187,19 +187,24 @@ module Modexp = struct
       words ** 2 )
 
   let calculate_iteration_count ~exponent_length ~exponent =
+    (* EIP-2565 and EIP-7883 use n.bit_length()-1. However, they implicitly take 0.bit_length() = 1. This is
+       consistent with the behavior in EIP-198 and the Ethereum execution spec. *)
+    let bit_length_minus_one n =
+      Uint.of_int
+        (let b = Uint.significant_bits n in
+         if b = 0 then 0 else b - 1 )
+    in
     let k =
       match () with
-      | () when Uint.(exponent_length <= ~$32 && exponent = zero) -> Integer.zero
-      | () when Uint.(exponent_length <= ~$32) -> Integer.of_int (Uint.significant_bits exponent - 1)
+      | () when Uint.(exponent_length <= ~$32 && exponent = zero) -> Uint.zero
+      | () when Uint.(exponent_length <= ~$32) -> bit_length_minus_one exponent
       | () ->
-          let exponent_length = Uint.as_signed exponent_length in
-          let exponent = Uint.as_signed exponent in
-          Integer.(
-            (~$8 * (exponent_length - ~$32))
-            + ~$(significant_bits (logand exponent ((~$2 ** 256) - ~$1)))
-            - ~$1 )
+          (* EIP-2565 and EIP-7883 use a formula that would compute the least significant 256 bits. We follow
+            the Ethereum execution spec, which instead uses the most significant 256 bits. *)
+          let upper_256_bits = Uint.shift_right exponent ((8 * Uint.to_int exponent_length) - 256) in
+          Uint.((~$8 * (exponent_length - ~$32)) + bit_length_minus_one upper_256_bits)
     in
-    Integer.(as_unsigned_exn (max k one))
+    Uint.(max k one)
 
   let calculate_gas_cost ~base_length ~modulus_length ~exponent_length ~exponent =
     let multiplication_complexity = calculate_multiplication_complexity ~base_length ~modulus_length in
@@ -221,11 +226,8 @@ module Modexp = struct
     Precompile.(
       run msg
         (let$ base_length = parameter_length in
-         Format.eprintf "base_length: %d\n" base_length ;
          let$ exponent_length = parameter_length in
-         Format.eprintf "exponent_length: %d\n" exponent_length ;
          let$ modulus_length = parameter_length in
-         Format.eprintf "modulus_length: %d\n" modulus_length ;
          let$ base = Uint.of_bytes_be <$> bytes base_length in
          let$ exponent = Uint.of_bytes_be <$> bytes exponent_length in
          let$ () =
@@ -235,24 +237,17 @@ module Modexp = struct
              let exponent_length = Uint.of_int exponent_length in
              calculate_gas_cost ~base_length ~modulus_length ~exponent_length ~exponent
            in
-           Format.eprintf "gas_cost: %s\n" Gas.(to_string gas_cost) ;
            spend_gas gas_cost
          in
          let$ modulus = Uint.of_bytes_be <$> bytes modulus_length in
-         Format.eprintf "base: %s\n" Uint.(to_string base) ;
-         Format.eprintf "exponent: %s\n" Uint.(to_string exponent) ;
-         Format.eprintf "modulus: %s\n" Uint.(to_string modulus) ;
          let result =
            if Uint.(modulus = zero) then Uint.zero else Uint.exp_mod base exponent ~modulo:modulus
          in
-         Format.eprintf "result: %s\n" Uint.(to_string result) ;
          let result_bytes = Uint.to_bytes_be result in
          (* As per EIP-198, the result must be a byte array of the same length as modulus_length, so
             it may be necessary to add padding. *)
          let padding_length = modulus_length - Bytes.length result_bytes in
          assert (padding_length >= 0) ;
-         Format.eprintf "result bytes: %s\n"
-           (Bytes.to_hex_string (Bytes.make padding_length '\x00' ^ result_bytes)) ;
          return (Bytes.make padding_length '\x00' ^ result_bytes) ) )
 end
 
@@ -393,6 +388,7 @@ let blake2f (msg : Evmc.Message.t) : Evmc.Result.t =
        |> Bytes.(concat empty)
        |> return ) )
 
+(* EIP-4844 point evaluation precompile. *)
 module Point_evaluation = struct
   (* All references to PolyCom refer to the Deneb Polynomial Commitments document, as cited in EIP-4844.
      https://github.com/ethereum/consensus-specs/blob/86fb82b221474cc89387fa6436806507b3849d88/specs/deneb/polynomial-commitments.md *)
@@ -513,6 +509,7 @@ module Point_evaluation = struct
          return precompile_result ) )
 end
 
+(* EIP-2537. *)
 module Bls12 = struct
   open Ec.Bls12_381
   open Ec_precompile_utils (Ec.Bls12_381)
@@ -587,8 +584,7 @@ module Secp256r1 = struct
   let verify (msg : Evmc.Message.t) : Evmc.Result.t =
     Precompile.(
       run msg
-        (let$ () = ensure (Bytes.length msg.input_data = 160) in
-         let$ () = spend_gas Gas.(of_int 6_900) in
+        (let$ () = spend_gas Gas.(of_int 6_900) in
 
          let$ h = U256.to_integer <$> u256 in
 
@@ -599,6 +595,9 @@ module Secp256r1 = struct
          let$ q_y = U256.to_uint <$> u256 in
 
          Option.(
+           (* If input length validation fails here, the contract does not revert but instead returns the empty
+              byte string, as per EIP-7951. *)
+           let$ () = ensure (Bytes.length msg.input_data = 160) in
            let$ r = F_q.of_uint_opt r in
            let$ s = F_q.of_uint_opt s in
            (* TODO: double-check? *)
