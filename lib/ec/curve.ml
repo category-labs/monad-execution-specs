@@ -4,6 +4,14 @@ open Algebra
 module type SIG = sig
   module Underlying : FIELD
 
+  module Params : sig
+    val a : Underlying.t
+    val b : Underlying.t
+  end
+
+  (* g(x) = x³ + a x + b *)
+  val g : Underlying.t -> Underlying.t
+
   type t
 
   val zero : t
@@ -24,12 +32,16 @@ module Make
 struct
   module Underlying = F
 
+  module Params = P
+
+  let g x = F.((x * ((x * x) + Params.a)) + Params.b)
+
   type t = Point of F.t * F.t | Infinity
 
   let zero = Infinity
 
-  let three = F.(~@"3")
-  let two = F.(~@"2")
+  let three = F.(~$3)
+  let two = F.(~$2)
 
   let in_curve x y = F.(y * y = (x * x * x) + (P.a * x) + P.b)
 
@@ -87,6 +99,8 @@ struct
   struct
     include O
     module Underlying = Underlying
+    module Params = Params
+    let g = g
     type curve = t
     module Impl : sig
       type nonrec t = private t
@@ -110,4 +124,86 @@ struct
 
     let generator = Option.get (in_subgroup generator)
   end
+end
+
+(* Simplified Shallue-van de Woestijne-Ulas method. See RFC-9380 §6.6 and Appendix F.1. *)
+module SWU_method
+    (C : SIG)
+    (P : sig
+      val z : C.Underlying.t
+
+      (* We require the field F to be equipped with squre root and sign operators as defined in RFC-9380
+         Appendix I  and §4.1. A generic implementation of this would require us to abstract across Fₚ and
+         Fₚ₂ which is unwieldy. *)
+      val sqrt : C.Underlying.t -> C.Underlying.t option
+      val sgn0 : C.Underlying.t -> bool
+    end) =
+struct
+  module Curve = C
+  module F = C.Underlying
+
+  open P
+
+  let a = C.Params.a
+  let b = C.Params.b
+  let g = C.g
+  let g_z = g z
+
+  (* We require the equation in RFC-9380 §6.6 to hold:
+       4 a³ + 27 b² ≠ 0
+
+     Additionally, we require the four conditions in §6.6.2 to hold:
+       1. z is not a square
+       2. z ≠ -1
+       3. g(x) - z is irreducible
+       4. g(b / (z a)) is a square
+   *)
+  let () =
+    assert (F.((~$4 * a * a * a) + (~$27 * b * b) <> zero)) ;
+    assert (Option.is_none (sqrt z)) ;
+    assert (F.(z <> zero - one)) ;
+    (* We cannot check 3 easily. *)
+    assert (Option.is_some (sqrt F.(g (b / (z * a)))))
+
+  (* As RFC-9380 Appendix F.2.1, but we require the underlying F to provide sqrt for us. *)
+  let sqrt_ratio u v =
+    let q = F.(u / v) in
+    match sqrt q with
+    | Some root -> (true, root)
+    | None ->
+        (* Here z * q must be a square.
+           Observe that x is a square modulo p if Legendre(x, p) ≠ -1. But since neither z nor q are squares,
+           we must have Legendre(z * q, p) = Legendre(z, p) * Legendre(z, q) = -1 * -1 = 1.
+           Hence z * q is a square. *)
+        (false, Option.get F.(sqrt (z * q)))
+
+  (* RFC-9380, Appendix F.2. *)
+  let map_to_curve_simple_swu (u : F.t) =
+    let open F in
+    let tv1 = u * u in
+    let tv1 = z * tv1 in
+    let tv2 = tv1 * tv1 in
+    let tv2 = tv2 + tv1 in
+    let tv3 = tv2 + one in
+    let tv3 = b * tv3 in
+    let tv4 = if tv2 = zero then z else zero - tv2 in
+    let tv4 = a * tv4 in
+    let tv2 = tv3 * tv3 in
+    let tv6 = tv4 * tv4 in
+    let tv5 = a * tv6 in
+    let tv2 = tv2 + tv5 in
+    let tv2 = tv2 * tv3 in
+    let tv6 = tv6 * tv4 in
+    let tv5 = b * tv6 in
+    let tv2 = tv2 + tv5 in
+    let x = tv1 * tv3 in
+    let is_gx1_square, y1 = sqrt_ratio tv2 tv6 in
+    let y = tv1 * u in
+    let y = y * y1 in
+    let x = if is_gx1_square then tv3 else x in
+    let y = if is_gx1_square then y1 else y in
+    let e1 = Stdlib.(sgn0 u = sgn0 y) in
+    let y = if e1 then y else zero - y in
+    let x = x / tv4 in
+    Option.get (C.of_coords x y)
 end

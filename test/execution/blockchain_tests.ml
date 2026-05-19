@@ -119,39 +119,8 @@ module Test_entry = struct
   end)
 end
 
-(* Suppressed tests. *)
-let suppressed_tests =
-  Test_entry.Set.of_list
-    [ ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 4)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 5)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 4)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 4)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 5)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 6)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 7)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 8)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 9)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 10)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 11)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 12)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 13)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 14) ]
+(* Suppressed tests. This is currently empty. *)
+let suppressed_tests = Test_entry.Set.of_list []
 
 (* Filter failing tests. *)
 let filter ~name ~index = if Test_entry.Set.mem (name, index) suppressed_tests then `Skip else `Run

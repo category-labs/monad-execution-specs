@@ -178,6 +178,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
 
   (* Always unsigned. *)
   let modulo = lift_2 Z.erem
+
   (* Will be signed or unsigned depending on the signedness of the module. *)
   let rem = lift_2 Z.rem
 
@@ -255,8 +256,7 @@ module Integer = struct
   let as_unsigned_exn (x : t) : Uint.t = Uint.of_z_exn (to_z x)
 
   (* This always returns a nonnegative integer. *)
-  let of_bytes_be (bs : Bytes.t) =
-    of_z_exn (Z.of_bits (Bytes.reverse bs))
+  let of_bytes_be (bs : Bytes.t) = of_z_exn (Z.of_bits (Bytes.reverse bs))
 
   let div_rem (x : t) (y : t) : t * t =
     let quot, rem = Z.ediv_rem (to_z x) (to_z y) in

@@ -48,7 +48,7 @@ module C_2 =
     (F_p2)
     (struct
       let a = F_p2.zero
-      let b = F_p2.(~@"3" / (i + ~@"9"))
+      let b = F_p2.(~$3 / (i + ~$9))
     end)
 module G_2 = C_2.Subgroup (struct
   let order = curve_order
@@ -71,7 +71,7 @@ module F_p12 = struct
       (struct
         let modulus =
           let open Polynomial_ring (F_p) in
-          monomial F_p.one 12 - monomial F_p.(~@"18") 6 + ~@"82"
+          monomial F_p.one 12 - monomial F_p.(~$18) 6 + ~$82
       end)
 
   let w : t = reduce Underlying_ring.monomial_x
@@ -102,7 +102,7 @@ module BN128_Pairing =
     (F_p12)
     (struct
       let a12 = F_p12.zero
-      let b12 = F_p12.(~@"3")
+      let b12 = F_p12.(~$3)
       let ate_loop_count = Uint.(~@"29793968203157093288")
       let frob12 = frob12
       let apply_post_loop = true
@@ -112,33 +112,31 @@ module BN128_Pairing =
         fst (Uint.div_rem Uint.(p12 - one) q)
     end)
 
-(* "Twist" a point in G_2 (over Fₚ₂) into a point in BN128_Pairing.C12 (over Fₚ₁₂).
+(* "Twist" a point in G_2 (over Fₚ₂) into a point in BN128_Pairing.C_12 (over Fₚ₁₂).
    The isomorphism maps Fₚ₂ ≅ Fₚ[w⁶] inside Fₚ[w]/(w¹² − 18w⁶ + 82).
    See bn128_curve.py::twist for the reference. *)
-let twist (pt : G_2.t) : BN128_Pairing.C12.t =
+let twist (pt : G_2.t) : BN128_Pairing.C_12.t =
   match (pt :> C_2.t) with
-  | Infinity -> BN128_Pairing.C12.Infinity
+  | Infinity -> BN128_Pairing.C_12.Infinity
   | Point (xq, yq) ->
       let x0 = F_p2.(xq.$(0)) in
       let x1 = F_p2.(xq.$(1)) in
       let y0 = F_p2.(yq.$(0)) in
       let y1 = F_p2.(yq.$(1)) in
-      let nine = F_p.(~@"9") in
-      let nx_c0 = F_p.(x0 - (nine * x1)) in
-      let ny_c0 = F_p.(y0 - (nine * y1)) in
+      let nx_c0 = F_p.(x0 - (~$9 * x1)) in
+      let ny_c0 = F_p.(y0 - (~$9 * y1)) in
       let nx = F_p12.(const nx_c0 + (const x1 * w6)) in
       let ny = F_p12.(const ny_c0 + (const y1 * w6)) in
       let tx = F_p12.(nx * w2) in
       let ty = F_p12.(ny * w3) in
-      BN128_Pairing.C12.Point (tx, ty)
+      BN128_Pairing.C_12.Point (tx, ty)
 
-(* Embed a G1 point (over Fₚ) into BN128_Pairing.C12 as a constant. *)
-let cast_g1 (pt : G_1.t) : BN128_Pairing.C12.t =
+(* Embed a G1 point (over Fₚ) into BN128_Pairing.C_12 as a constant. *)
+let cast_g1 (pt : G_1.t) : BN128_Pairing.C_12.t =
   match (pt :> C_1.t) with
-  | Infinity -> BN128_Pairing.C12.Infinity
-  | Point (x, y) -> BN128_Pairing.C12.Point (F_p12.const x, F_p12.const y)
+  | Infinity -> BN128_Pairing.C_12.Infinity
+  | Point (x, y) -> BN128_Pairing.C_12.Point (F_p12.const x, F_p12.const y)
 
-(* Check that ∏ e(P_i, Q_i) = 1 in Fₚ₁₂, where P_i ∈ G_1, Q_i ∈ G_2.
-   Returns None if any coordinate is out of range or not on the curve. *)
+(* Check that ∏ e(P_i, Q_i) = 1 in Fₚ₁₂. *)
 let pairing_check (pairs : (G_1.t * G_2.t) list) : bool =
   BN128_Pairing.pairing_check (List.map (fun (p, q) -> (twist q, cast_g1 p)) pairs)

@@ -25,10 +25,13 @@ module Make
       val final_exp_exp : Uint.t
     end) =
 struct
-  module C12 = Curve.Make (F12) (struct
-    let a = Params.a12
-    let b = Params.b12
-  end)
+  module C_12 =
+    Curve.Make
+      (F12)
+      (struct
+        let a = Params.a12
+        let b = Params.b12
+      end)
 
   let f12_pow (f : F12.t) (n : Uint.t) : F12.t =
     let rec loop n f acc =
@@ -41,11 +44,7 @@ struct
     loop n f F12.one
 
   (* Evaluate the line through P1 and P2 at point T (all non-infinity). *)
-  let linefunc
-      ((x1, y1) : F12.t * F12.t)
-      ((x2, y2) : F12.t * F12.t)
-      ((xt, yt) : F12.t * F12.t)
-      : F12.t =
+  let linefunc ((x1, y1) : F12.t * F12.t) ((x2, y2) : F12.t * F12.t) ((xt, yt) : F12.t * F12.t) : F12.t =
     let open F12 in
     if x1 <> x2 then
       let m = (y2 - y1) / (x2 - x1) in
@@ -53,13 +52,12 @@ struct
     else if y1 = y2 then
       let m = ((~@"3" * x1 * x1) + Params.a12) / (~@"2" * y1) in
       (m * (xt - x1)) - (yt - y1)
-    else
-      xt - x1
+    else xt - x1
 
   let c12_add ((x1, y1) : F12.t * F12.t) ((x2, y2) : F12.t * F12.t) : F12.t * F12.t =
-    match C12.(Point (x1, y1) + Point (x2, y2)) with
-    | C12.Infinity -> failwith "Pairing.c12_add: unexpected infinity"
-    | C12.Point (x, y) -> (x, y)
+    match C_12.(Point (x1, y1) + Point (x2, y2)) with
+    | C_12.Infinity -> failwith "Pairing.c12_add: unexpected infinity"
+    | C_12.Point (x, y) -> (x, y)
 
   let post_loop ~q:(qx, qy) ~r ~p f =
     if not Params.apply_post_loop then f
@@ -71,13 +69,12 @@ struct
       let f = F12.(f * linefunc r (q1x, q1y) p) in
       let r = c12_add r (q1x, q1y) in
       let f = F12.(f * linefunc r (nq2x, nq2y) p) in
-      ignore r ;
-      f
+      ignore r ; f
 
-  let miller_loop (q : C12.t) (p : C12.t) : F12.t =
+  let miller_loop (q : C_12.t) (p : C_12.t) : F12.t =
     match (q, p) with
-    | C12.Infinity, _ | _, C12.Infinity -> F12.one
-    | C12.Point (qx, qy), C12.Point (px, py) ->
+    | C_12.Infinity, _ | _, C_12.Infinity -> F12.one
+    | C_12.Point (qx, qy), C_12.Point (px, py) ->
         let qp = (qx, qy) in
         let pp = (px, py) in
         let rec loop i r f =
@@ -86,10 +83,8 @@ struct
             let f = F12.(f * f * linefunc r r pp) in
             let r = c12_add r r in
             let r, f =
-              if Uint.testbit Params.ate_loop_count i then
-                (c12_add r qp, F12.(f * linefunc r qp pp))
-              else
-                (r, f)
+              if Uint.testbit Params.ate_loop_count i then (c12_add r qp, F12.(f * linefunc r qp pp))
+              else (r, f)
             in
             loop (i - 1) r f
         in
@@ -98,9 +93,7 @@ struct
         let f = post_loop ~q:qp ~r ~p:pp f in
         f12_pow f Params.final_exp_exp
 
-  let pairing_check (pairs : (C12.t * C12.t) list) : bool =
-    let result =
-      List.fold_left (fun acc (q, p) -> F12.(acc * miller_loop q p)) F12.one pairs
-    in
+  let pairing_check (pairs : (C_12.t * C_12.t) list) : bool =
+    let result = List.fold_left (fun acc (q, p) -> F12.(acc * miller_loop q p)) F12.one pairs in
     F12.(result = one)
 end

@@ -177,10 +177,7 @@ let identity (msg : Evmc.Message.t) : Evmc.Result.t =
        return msg.input_data ) )
 
 module Modexp = struct
-  (* TODO: Revert EIP-7883 and EIP-7823. *)
-  (* Modexp gas cost calculation functions. EIP-7883, obsoleting EIP-2565. *)
-
-  (* EIP-2565 *)
+  (* Modexp gas cost calculation functions. EIP-2565. *)
   let calculate_multiplication_complexity ~base_length ~modulus_length =
     Uint.(
       let max_length = max base_length modulus_length in
@@ -212,12 +209,14 @@ module Modexp = struct
     let iteration_count = calculate_iteration_count ~exponent_length ~exponent in
     Uint.(max ~$200 (multiplication_complexity * iteration_count / ~$3))
 
+  (* Input length bounds checking. Currently incorrect but required since all indices must be int. EIP-7823
+     introduces stricter constraints, so this will become irrelevant in MONAD_NINE.
+   *)
   let parameter_length =
     Precompile.(
       let$ len = u256 in
-      (* Input length bounds checking. EIP-7823. *)
       match U256.(to_int_opt len) with
-      | Some i when i <= 1_000_000_000 -> return i
+      | Some i when i <= Sys.max_string_length -> return i
       | _ -> precompile_failure )
 
   let address = Address.of_hex_string "0x05"
@@ -302,18 +301,24 @@ struct
       let$ p = point_c1 in
       Option.or_fail G_1.(in_subgroup p) )
 
+  let f_p2 =
+    Precompile.(
+      let$ x =
+        let$ x = Uint.of_bytes_be <$> (M.C1_coord_repr.to_bytes <$> byte_reader (module M.C1_coord_repr)) in
+        Option.or_fail (F_p.of_uint_opt x)
+      in
+      let$ y =
+        let$ y = Uint.of_bytes_be <$> (M.C1_coord_repr.to_bytes <$> byte_reader (module M.C1_coord_repr)) in
+        Option.or_fail (F_p.of_uint_opt y)
+      in
+      return F_p2.(const x + (i * const y)) )
+
   let point_c2 =
     Precompile.(
-      (* YP (264) *)
-      let$ x_0 = f_p in
-      (* YP (265) *)
-      let$ x_1 = f_p in
-      (* YP (266) *)
-      let$ y_0 = f_p in
-      (* YP (267) *)
-      let$ y_1 = f_p in
-      let g_x = F_p2.(const x_0 + (i * const x_1)) in
-      let g_y = F_p2.(const y_0 + (i * const y_1)) in
+      (* YP (264), YP (265) *)
+      let$ g_x = f_p2 in
+      (* YP (266), YP (267) *)
+      let$ g_y = f_p2 in
       (* YP (263) *)
       Option.or_fail (C_2.of_coords g_x g_y) )
 
@@ -891,13 +896,42 @@ module Bls12 = struct
          return (delta_2_inv (sum :> C_2.t)) ) )
 
   let pairing_address = Address.of_hex_string "0x0f"
-  let pairing (_msg : Evmc.Message.t) : Evmc.Result.t = Evmc.Result.failure Precompile_failure
+  let pairing (msg : Evmc.Message.t) : Evmc.Result.t =
+    Precompile.(
+      run msg
+        (let$ () = ensure (Bytes.length msg.input_data mod 384 = 0) in
+         let k = Bytes.length msg.input_data / 384 in
+         let$ () = ensure (k > 0) in
+
+         let$ () = spend_gas Gas.((~$k * ~$32_600) + ~$37_700) in
+
+         let$ points = list k (pair point_g1 point_g2) in
+
+         return
+           (if Ec.Bls12_381.pairing_check points then U256.(to_repr_bytes one) else U256.(to_repr_bytes zero))
+        ) )
 
   let map_fp_to_g1_address = Address.of_hex_string "0x10"
-  let map_fp_to_g1 (_msg : Evmc.Message.t) : Evmc.Result.t = Evmc.Result.failure Precompile_failure
+  let map_fp_to_g1 (msg : Evmc.Message.t) : Evmc.Result.t =
+    Precompile.(
+      run msg
+        (let$ () = ensure (Bytes.length msg.input_data = 64) in
+
+         let$ () = spend_gas Gas.(of_int 5_500) in
+
+         let$ fp_elem = f_p in
+         return (delta_1_inv (Ec.Bls12_381.map_fp_to_g1 fp_elem :> C_1.t)) ) )
 
   let map_fp2_to_g2_address = Address.of_hex_string "0x11"
-  let map_fp2_to_g2 (_msg : Evmc.Message.t) : Evmc.Result.t = Evmc.Result.failure Precompile_failure
+  let map_fp2_to_g2 (msg : Evmc.Message.t) : Evmc.Result.t =
+    Precompile.(
+      run msg
+        (let$ () = ensure (Bytes.length msg.input_data = 128) in
+
+         let$ () = spend_gas Gas.(of_int 23_800) in
+
+         let$ fp2_elem = f_p2 in
+         return (delta_2_inv (Ec.Bls12_381.map_fp2_to_g2 fp2_elem :> C_2.t)) ) )
 end
 
 (* EIP-7951 *)

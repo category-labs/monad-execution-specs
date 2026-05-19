@@ -12,6 +12,7 @@ module type FIELD = sig
   (* Read the input as an unsigned integer and embed it in the field. This can be derived, but all our instances
      can provide more efficient implementations. *)
   val ( ~@ ) : String.t -> t
+  val ( ~$ ) : int -> t
 
   val ( + ) : t -> t -> t
   val ( - ) : t -> t -> t
@@ -28,6 +29,7 @@ module type EUCLIDEAN_DOMAIN = sig
   val zero : t
   val one : t
   val ( ~@ ) : String.t -> t
+  val ( ~$ ) : int -> t
 
   val ( + ) : t -> t -> t
   val ( - ) : t -> t -> t
@@ -63,6 +65,7 @@ end = struct
   let zero = reduce D.zero
   let one = reduce D.one
   let ( ~@ ) str = reduce D.(~@str)
+  let ( ~$ ) x = reduce D.(~$x)
 
   let lift_2 f (u : t) (v : t) = reduce (f (u :> D.t) (v :> D.t))
 
@@ -158,6 +161,7 @@ module Polynomial_ring (F : FIELD) = struct
   let zero = trim (Iarray.init 0 (fun _ -> F.zero))
   let one = trim (Iarray.init 1 (fun _ -> F.one))
   let ( ~@ ) i = trim (Iarray.init 1 (fun _ -> F.(~@i)))
+  let ( ~$ ) i = trim (Iarray.init 1 (fun _ -> F.(~$i)))
   let monomial_x = trim (Iarray.init 2 (fun i -> if Stdlib.(i = 1) then F.one else F.zero))
 
   let ( + ) (p_1 : t) (p_2 : t) = init (max (length p_1) (length p_2)) (fun i -> F.(p_1.$(i) + p_2.$(i)))
@@ -195,6 +199,10 @@ module Polynomial_ring (F : FIELD) = struct
         loop (u - (q * v)) (quot_acc + q)
     in
     loop u zero
+
+  (* Point evaluation via Horner's rule. *)
+  let eval (p : t) (x : F.t) =
+    Iarray.fold_right (fun coeff acc -> F.(coeff + (x * acc))) (p :> F.t Iarray.t) F.zero
 end
 
 module Polynomial (F : FIELD) = struct
