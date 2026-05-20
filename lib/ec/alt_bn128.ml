@@ -40,6 +40,8 @@ module F_p2 = struct
       end)
 
   let i = monomial_x
+
+  let components (u : t) = (u.$(0), u.$(1))
 end
 
 (* YP (253) *)
@@ -77,11 +79,6 @@ module F_p12 = struct
   let w : t = reduce Underlying_ring.monomial_x
 end
 
-(* Powers of w used in the twist map (precomputed once at init). *)
-let w2 = F_p12.(F_p12.w * F_p12.w)
-let w3 = F_p12.(w2 * F_p12.w)
-let w6 = F_p12.(w3 * w3)
-
 (* Frobenius endomorphism on F_p12: x ↦ x^p *)
 let f12_pow (f : F_p12.t) (n : Uint.t) : F_p12.t =
   let rec loop n f acc =
@@ -101,42 +98,45 @@ module BN128_Pairing =
   Pairing.Make
     (F_p12)
     (struct
-      let a12 = F_p12.zero
-      let b12 = F_p12.(~$3)
-      let ate_loop_count = Uint.(~@"29793968203157093288")
-      let frob12 = frob12
-      let apply_post_loop = true
+      let a = F_p12.zero
+      let b = F_p12.(~$3)
 
-      let final_exp_exp =
-        let p12 = Uint.( ** ) p 12 in
-        fst (Uint.div_rem Uint.(p12 - one) q)
+      let field_characteristic = p
+      let curve_order = curve_order
+
+      let ate_loop_count = Uint.(~@"29793968203157093288")
+
+      let curve_family = Pairing.BN
     end)
 
 (* "Twist" a point in G_2 (over Fₚ₂) into a point in BN128_Pairing.C_12 (over Fₚ₁₂).
-   The isomorphism maps Fₚ₂ ≅ Fₚ[w⁶] inside Fₚ[w]/(w¹² − 18w⁶ + 82).
-   See bn128_curve.py::twist for the reference. *)
-let twist (pt : G_2.t) : BN128_Pairing.C_12.t =
-  match (pt :> C_2.t) with
-  | Infinity -> BN128_Pairing.C_12.Infinity
-  | Point (xq, yq) ->
-      let x0 = F_p2.(xq.$(0)) in
-      let x1 = F_p2.(xq.$(1)) in
-      let y0 = F_p2.(yq.$(0)) in
-      let y1 = F_p2.(yq.$(1)) in
-      let nx_c0 = F_p.(x0 - (~$9 * x1)) in
-      let ny_c0 = F_p.(y0 - (~$9 * y1)) in
-      let nx = F_p12.(const nx_c0 + (const x1 * w6)) in
-      let ny = F_p12.(const ny_c0 + (const y1 * w6)) in
-      let tx = F_p12.(nx * w2) in
-      let ty = F_p12.(ny * w3) in
-      BN128_Pairing.C_12.Point (tx, ty)
+   See py_ecc bn128_curve.py for the reference. *)
+let twist =
+  (* Powers of w used in the twist map (precomputed once at init). *)
+  let w2 = F_p12.(w * w) in
+  let w3 = F_p12.(w2 * w) in
+  let w6 = F_p12.(w3 * w3) in
+
+  fun (pt : G_2.t) : BN128_Pairing.C_12.t ->
+    match (pt :> C_2.t) with
+    | Infinity -> BN128_Pairing.C_12.Infinity
+    | Point (xq, yq) ->
+        let (x0, x1) = F_p2.components xq in
+        let (y0, y1) = F_p2.components yq in
+        let nx_c0 = F_p.(x0 - (~$9 * x1)) in
+        let ny_c0 = F_p.(y0 - (~$9 * y1)) in
+        let nx = F_p12.(const nx_c0 + (const x1 * w6)) in
+        let ny = F_p12.(const ny_c0 + (const y1 * w6)) in
+        let tx = F_p12.(nx * w2) in
+        let ty = F_p12.(ny * w3) in
+        BN128_Pairing.C_12.Point (tx, ty)
 
 (* Embed a G1 point (over Fₚ) into BN128_Pairing.C_12 as a constant. *)
-let cast_g1 (pt : G_1.t) : BN128_Pairing.C_12.t =
+let embed_g1_c12 (pt : G_1.t) : BN128_Pairing.C_12.t =
   match (pt :> C_1.t) with
   | Infinity -> BN128_Pairing.C_12.Infinity
   | Point (x, y) -> BN128_Pairing.C_12.Point (F_p12.const x, F_p12.const y)
 
 (* Check that ∏ e(P_i, Q_i) = 1 in Fₚ₁₂. *)
 let pairing_check (pairs : (G_1.t * G_2.t) list) : bool =
-  BN128_Pairing.pairing_check (List.map (fun (p, q) -> (twist q, cast_g1 p)) pairs)
+  BN128_Pairing.pairing_check (List.map (fun (p, q) -> (twist q, embed_g1_c12 p)) pairs)

@@ -50,6 +50,8 @@ module F_p2 = struct
 
   let i = monomial_x
 
+  let components (u : t) = (u.$(0), u.$(1))
+
   (* Square root in F_p2 = Fₚ[i]/(i²+1).
      Let v = a + bi.
        - If b = 0, we take the square root of a or -a in Fₚ
@@ -58,7 +60,7 @@ module F_p2 = struct
     let two = F_p.(one + one) in
     fun (v : t) : t option ->
       Option.(
-        let a, b = (v.$(0), v.$(1)) in
+        let a, b = components v in
         if F_p.(b = zero) then
           (* b = 0, return sqrt(a) (which may be imaginary). *)
           match F_p.sqrt_opt a with
@@ -134,31 +136,24 @@ module BLS12_Pairing =
   Pairing.Make
     (F_p12)
     (struct
-      let a12 = F_p12.zero
-      let b12 = F_p12.(~$4)
-      let ate_loop_count = Uint.(~@"15132376222941642752")
-      let frob12 (x : F_p12.t) : F_p12.t = x
-      let apply_post_loop = false
+      let a = F_p12.zero
+      let b = F_p12.(~$4)
 
-      let final_exp_exp =
-        let p12 = Uint.( ** ) p 12 in
-        fst (Uint.div_rem Uint.(p12 - one) q)
+      let field_characteristic = p
+      let curve_order = curve_order
+
+      let ate_loop_count = Uint.(~@"15132376222941642752")
+      let curve_family = Pairing.BLS12
     end)
 
-(* "Twist" a G2 point (over Fₚ₂) into BLS12_Pairing.C_12 (over Fₚ₁₂).
-   BLS12-381 M-type twist: the field isomorphism maps u ↦ w⁶ − 1, so an
-   element a₀ + a₁u becomes (a₀ − a₁) + a₁w⁶. In projective coordinates
-   the twisted point has nz = w³ (for z = 1), giving affine coordinates:
-     x_twisted = ((x₀ − x₁) + x₁w⁶) · w⁻²  =  (x₀ − x₁)w⁻² + x₁w⁴
-     y_twisted = ((y₀ − y₁) + y₁w⁶) · w⁻³  =  (y₀ − y₁)w⁻³ + y₁w³  *)
+(* "Twist" a point in G_2 (over Fₚ₂) into a point in BLS12_Pairing.C_12 (over Fₚ₁₂).
+   See py_ecc bls12_381_curve.py for the reference. *)
 let twist (pt : G_2.t) : BLS12_Pairing.C_12.t =
   match (pt :> C_2.t) with
   | Infinity -> BLS12_Pairing.C_12.Infinity
   | Point (xq, yq) ->
-      let x0 = F_p2.(xq.$(0)) in
-      let x1 = F_p2.(xq.$(1)) in
-      let y0 = F_p2.(yq.$(0)) in
-      let y1 = F_p2.(yq.$(1)) in
+      let x0, x1 = F_p2.components xq in
+      let y0, y1 = F_p2.components yq in
       let tx = F_p12.((const F_p.(x0 - x1) * winv2) + (const x1 * w4)) in
       let ty = F_p12.((const F_p.(y0 - y1) * winv3) + (const y1 * w3)) in
       BLS12_Pairing.C_12.Point (tx, ty)

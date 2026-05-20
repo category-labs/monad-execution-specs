@@ -376,7 +376,6 @@ module Alt_bn128 = struct
       run msg
         (let$ () = spend_gas Gas.(of_int 30_000) in
 
-         let open Ec.Alt_bn128 in
          let$ p_0 = point_c1 in
          let$ n = U256.to_uint <$> u256 in
 
@@ -391,7 +390,6 @@ module Alt_bn128 = struct
          let k = n / 192 in
          let$ () = spend_gas Gas.(of_int 225_000) in
 
-         let open Ec.Alt_bn128 in
          let$ pairs : (G_1.t * G_2.t) list = list k (pair point_g1 point_g2) in
 
          let result = pairing_check pairs in
@@ -459,8 +457,8 @@ module Point_evaluation = struct
      PolyCom. *)
   let decompress_G1 (bs : B48.t) : G_1.t option =
     let {compressed; infinity; negative} = read_flags B48.(bs.$(0)) in
-    assert compressed ;
-    if infinity then Some G_1.zero
+    if not compressed then None
+    else if infinity then Some G_1.zero
     else
       Option.(
         let x : F_p.t = F_p.reduce Integer.(modulo (of_bytes_be (B48.to_bytes bs)) (~$2 ** 381)) in
@@ -476,8 +474,8 @@ module Point_evaluation = struct
      Format: bytes[0..48] = x.c1 with 3 flag bits in MSB, bytes[48..96] = x.c0. *)
   let decompress_G2 (bs : Bytes.t) : G_2.t option =
     let {compressed; infinity; negative} = read_flags (Bytes.get bs 0) in
-    assert compressed ;
-    if infinity then Some G_2.zero
+    if not compressed then None
+    else if infinity then Some G_2.zero
     else
       Option.(
         let x_c1 : F_p.t = F_p.reduce Integer.(modulo (of_bytes_be (Bytes.sub bs 0 48)) (~$2 ** 381)) in
@@ -895,8 +893,8 @@ module Bls12 = struct
          let sum = List.fold_left (fun acc (pt, s) -> G_2.(acc + (U256.to_uint s * pt))) G_2.zero points in
          return (delta_2_inv (sum :> C_2.t)) ) )
 
-  let pairing_address = Address.of_hex_string "0x0f"
-  let pairing (msg : Evmc.Message.t) : Evmc.Result.t =
+  let pairing_check_address = Address.of_hex_string "0x0f"
+  let pairing_check (msg : Evmc.Message.t) : Evmc.Result.t =
     Precompile.(
       run msg
         (let$ () = ensure (Bytes.length msg.input_data mod 384 = 0) in
@@ -1016,7 +1014,7 @@ let precompiles : precompile Address.Map.t =
     ; Bls12.(g1_msm_address, g1_msm)
     ; Bls12.(g2_add_address, g2_add)
     ; Bls12.(g2_msm_address, g2_msm)
-    ; Bls12.(pairing_address, pairing)
+    ; Bls12.(pairing_check_address, pairing_check)
     ; Bls12.(map_fp_to_g1_address, map_fp_to_g1)
     ; Bls12.(map_fp2_to_g2_address, map_fp2_to_g2)
     ; Secp256r1.(address, verify) ]
