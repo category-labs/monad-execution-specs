@@ -2,7 +2,6 @@ open Monad_lib
 open Chain.Ethereum
 open Numeric
 open Byte_string
-open Host
 
 let fixtures_file = ref None
 let test_kind = ref None
@@ -94,7 +93,7 @@ let check_postconditions (state : State.WorldState.t) (post : Accounts.t) : bool
         false
     | None, None -> assert false
   in
-  let all_addresses = Address.(Set.union (Accounts.keys state.accounts) (Accounts.keys post)) in
+  let all_addresses = Address.(Set.of_seq (Seq.append (Accounts.keys state.accounts) (Accounts.keys post))) in
   Address.Set.fold
     (fun addr acc ->
       let ok = check_account_existence_and_state addr in
@@ -149,7 +148,7 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  assert (B32.(State.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
+  assert (B32.(fst (State.WorldState.state_root s) = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
   |> Result.get_ok'

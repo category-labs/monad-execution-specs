@@ -23,8 +23,8 @@ let execution_consensus_delay = Uint.of_int 3
 let dipped_into_reserve
     ~(chain_id : Uint.t)
     ~(base_fee_per_gas : Uint.t)
-    ~(original_balances : Account.t Address.Map.t)
-    ~(new_state : Account.t Address.Map.t)
+    ~(original_balances : Accounts.t)
+    ~(new_state : Accounts.t)
     ~(t : Transaction.t)
     ~(is_emptying : bool) : bool =
   let t_sender = Option.get (Transaction.sender chain_id t) in
@@ -50,7 +50,7 @@ let dipped_into_reserve
     in
     (Address.(addr <> t_sender) || not is_emptying) && U256.(current_balance < violation_threshold)
   in
-  Address.Map.to_seq original_balances
+  Accounts.to_seq original_balances
   |> Seq.exists (fun (addr, orig_account) ->
-      let new_account = Address.Map.find_opt addr new_state |> Option.value ~default:Account.empty in
+      let new_account = Accounts.find_opt addr new_state |> Option.value ~default:Account.empty in
       (not (Account.is_smart_contract new_account)) && account_reserve_violated addr orig_account new_account )
