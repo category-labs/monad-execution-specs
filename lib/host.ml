@@ -7,28 +7,6 @@ let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
 let ( .^$()<- ) x lens f = Lens.modify lens f x
 
-module Accounts = struct
-  include
-    Mpt.Make
-      (struct
-        let hash_keys = true
-      end)
-      (Address)
-      (struct
-        include Account
-        let commit acc = merkleized acc
-        let to_bytes acc = Rlp.encode (to_rlp acc)
-      end)
-  let to_yojson = to_yojson Account.to_yojson
-  let of_yojson =
-    let key_of_string key =
-      try Ok (Address.of_hex_string key)
-      with _ -> Error (Format.sprintf "Cannot parse \"%s\" as Address.t" key)
-    in
-    let value_of_yojson = Account.of_yojson in
-    of_yojson key_of_string value_of_yojson
-end
-
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
       includes the world state as per YP 4.1.

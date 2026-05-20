@@ -695,3 +695,25 @@ module Account = struct
     let storage_root = Storage.merkle_root storage in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
 end
+
+module Accounts = struct
+  include
+    Mpt.Make
+      (struct
+        let hash_keys = true
+      end)
+      (Address)
+      (struct
+        include Account
+        let commit acc = merkleized acc
+        let to_bytes acc = Rlp.encode (to_rlp acc)
+      end)
+  let to_yojson = to_yojson Account.to_yojson
+  let of_yojson =
+    let key_of_string key =
+      try Ok (Address.of_hex_string key)
+      with _ -> Error (Format.sprintf "Cannot parse \"%s\" as Address.t" key)
+    in
+    let value_of_yojson = Account.of_yojson in
+    of_yojson key_of_string value_of_yojson
+end
