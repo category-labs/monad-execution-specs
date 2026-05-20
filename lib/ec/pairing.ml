@@ -1,44 +1,34 @@
 open Numeric
 open Algebra
 
-(* Generic Miller-loop-based pairing for curves of the form y² = x³ + b over
-   a degree-12 extension field F12.
+type curve_family = BN | BLS12
 
-   PARAMS captures everything curve-specific:
-   - The extension field F12 and the curve coefficient b12 (a12 is usually zero).
-   - The Ate loop count and its bit-length (log_ate_loop_count).
-   - frob12: the Frobenius endomorphism x -> x^p on F12. For BN128 this is
-     x -> x^field_modulus; for BLS12-381 it is the identity (set
-     apply_post_loop to false instead of passing the identity).
-   - apply_post_loop: whether to perform Frobenius correction steps after the
-     main Miller loop. True for BN128 (D-type twist), false for BLS12-381.
-   - final_exp_exp: the exponent (p^12 - 1) / r for the final exponentiation.
-*)
+(* Generic Miller-loop-based pairing for curves of the form y² = x³ + b over a degree-12 extension field F12. *)
 module Make
     (F12 : FIELD)
     (Params : sig
-      val a12 : F12.t
-      val b12 : F12.t
+      (* Curve parameters. *)
+      val a : F12.t
+      val b : F12.t
+
+      val field_characteristic : Uint.t
+      val curve_order : Uint.t
+
       val ate_loop_count : Uint.t
-      val frob12 : F12.t -> F12.t
-      val apply_post_loop : bool
-      val final_exp_exp : Uint.t
+
+      (* Some curves (bn128) need an extra adjustment step after the Miller loop. See Vercauteren 2009 for the
+         algebra or py_ecc for a concrete implementation. *)
+      val curve_family : curve_family
     end) =
 struct
-  module C_12 =
-    Curve.Make
-      (F12)
-      (struct
-        let a = Params.a12
-        let b = Params.b12
-      end)
+  module C_12 = Curve.Make (F12) (Params)
 
-  let f12_pow (f : F12.t) (n : Uint.t) : F12.t =
+  let ( ** ) (f : F12.t) (n : Uint.t) : F12.t =
     let rec loop n f acc =
       if Uint.(n = zero) then acc
       else
-        let n, remainder = Uint.div_rem n Uint.(~$2) in
-        let acc = if Uint.(remainder = one) then F12.(acc * f) else acc in
+        let n, r = Uint.div_rem n Uint.(~$2) in
+        let acc = if Uint.(r = one) then F12.(acc * f) else acc in
         loop n F12.(f * f) acc
     in
     loop n f F12.one
@@ -50,7 +40,7 @@ struct
       let m = (y2 - y1) / (x2 - x1) in
       (m * (xt - x1)) - (yt - y1)
     else if y1 = y2 then
-      let m = ((~@"3" * x1 * x1) + Params.a12) / (~@"2" * y1) in
+      let m = ((~$3 * x1 * x1) + Params.a) / (~$2 * y1) in
       (m * (xt - x1)) - (yt - y1)
     else xt - x1
 
@@ -59,18 +49,29 @@ struct
     | C_12.Infinity -> failwith "Pairing.c12_add: unexpected infinity"
     | C_12.Point (x, y) -> (x, y)
 
-  let post_loop ~q:(qx, qy) ~r ~p f =
-    if not Params.apply_post_loop then f
-    else
-      let q1x = Params.frob12 qx in
-      let q1y = Params.frob12 qy in
-      let nq2x = Params.frob12 q1x in
-      let nq2y = F12.(zero - Params.frob12 q1y) in
-      let f = F12.(f * linefunc r (q1x, q1y) p) in
-      let r = c12_add r (q1x, q1y) in
-      let f = F12.(f * linefunc r (nq2x, nq2y) p) in
-      ignore r ; f
+  (* Frobenius map. frob x = xᵖ where p is the field characteristic. *)
+  let frob x = x ** Params.field_characteristic
 
+  let post_loop_adjustment =
+    match Params.curve_family with
+    | BN ->
+        fun ~q:(qx, qy) ~r ~p f ->
+          (* See Vercauteren 2009 §IV *)
+          let ((q1x, q1y) as q1) = (frob qx, frob qy) in
+          let nq2 = (frob q1x, F12.(zero - frob q1y)) in
+          let f = F12.(f * linefunc r q1 p) in
+          let r = c12_add r q1 in
+          let f = F12.(f * linefunc r nq2 p) in
+          f
+    | BLS12 ->
+        fun ~q:_ ~r:_ ~p:_ f ->
+          (* The BLS12 family of curves requires no adjustment, see e.g. "Implementing Pairings at the 192-bit
+             Security Level" §4. *)
+          f
+
+  let post_loop_exponent = Uint.(((Params.field_characteristic ** 12) - ~$1) / Params.curve_order)
+
+  (* Miller loop implementation, modelled after py_ecc. *)
   let miller_loop (q : C_12.t) (p : C_12.t) : F12.t =
     match (q, p) with
     | C_12.Infinity, _ | _, C_12.Infinity -> F12.one
@@ -90,8 +91,8 @@ struct
         in
         let log_ate_loop_count = Uint.significant_bits Params.ate_loop_count - 2 in
         let r, f = loop log_ate_loop_count qp F12.one in
-        let f = post_loop ~q:qp ~r ~p:pp f in
-        f12_pow f Params.final_exp_exp
+        let f = post_loop_adjustment ~q:qp ~p:pp ~r f in
+        f ** post_loop_exponent
 
   let pairing_check (pairs : (C_12.t * C_12.t) list) : bool =
     let result = List.fold_left (fun acc (q, p) -> F12.(acc * miller_loop q p)) F12.one pairs in
