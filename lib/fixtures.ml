@@ -85,8 +85,8 @@ module BlockchainTest = struct
     ; genesis_block_header : Block.Header.t [@key "genesisBlockHeader"]
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
     ; last_blockhash : U256.t [@key "lastblockhash"]
-    ; pre : Account.t Address.Map.t
-    ; post : Account.t Address.Map.t [@key "postState"] }
+    ; pre : Accounts.t
+    ; post : Accounts.t [@key "postState"] }
   [@@deriving yojson {strict = false}]
 
   type t = (string * test_case) list

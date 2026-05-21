@@ -13,7 +13,7 @@ module WorldState = struct
    *)
   type t =
     { history : Block.t list
-    ; accounts : Account.t Address.Map.t (* σ[a] *)
+    ; accounts : Accounts.t (* σ[a] *)
     ; next_emptying_transaction_block : Uint.t Address.Map.t
           (** [next_emptying_transaction_block] maps every address to the next block number in which a
         transaction from it would be emptying. The counter for an account is bumped by
@@ -24,13 +24,13 @@ module WorldState = struct
 
   include TLens
 
-  let empty = {history = []; accounts = Address.Map.empty; next_emptying_transaction_block = Address.Map.empty}
+  let empty = {history = []; accounts = Accounts.empty; next_emptying_transaction_block = Address.Map.empty}
 
   (* EIP-161 deletion of touched empty accounts is done here, which frees the implementation from keeping
      track of touched accounts. Note that the Ethereum executable spec uses a similar approach by intercepting
      any state updates to an account and deleting it if it is empty after the update. *)
   let account_opt ?(keep_empty = false) addr =
-    let Lens.{get; set} = accounts |-- Address.Map.at addr in
+    let Lens.{get; set} = accounts |-- Accounts.at addr in
     let set =
       if keep_empty then set
       else fun acct state ->
@@ -44,24 +44,16 @@ module WorldState = struct
   let next_emptying_transaction_block_for addr =
     next_emptying_transaction_block |-- Address.Map.at addr |-- Option.get_or_default Uint.zero
 
-  let state_root state =
-    let mpt =
-      state.accounts
-      |> Address.Map.to_seq
-      |> Seq.map (fun (addr, acc) ->
-          (* YP (11) *)
-          let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
-          (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
-      |> Mpt.of_seq
-    in
-    mpt.root_hash
+  let state_root (state : t) : B32.t * t =
+    let accounts = Accounts.merkleized state.accounts in
+    let state_root = Accounts.merkle_root accounts in
+    (state_root, {state with accounts})
 
   let dump_accounts ws =
-    Address.Map.iter
-      (fun addr acc ->
+    Accounts.to_seq ws.accounts
+    |> Seq.iter (fun (addr, acc) ->
         Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
           (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) )
-      ws.accounts
 end
 
 module BlockState = struct
@@ -90,33 +82,39 @@ module BlockState = struct
 
   (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
       new state after block execution. If the block already carries its MPT roots are already calculated,
-      they are overwritten. *)
-  let finalize_current_block (block_state : t) : Block.t =
+      they are overwritten.
+      Since computing the state root requires merkleizing the world state, the merkleized world state is
+      also returned here.
+   *)
+  let finalize_current_block (block_state : t) : Block.t * WorldState.t =
     (* YP (46) *)
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
     (* YP (35) *)
-    let state_root = WorldState.state_root block_state.world_state in
+    let state_root, world_state = WorldState.state_root block_state.world_state in
     let transactions_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (tx, _) -> Transaction.encode tx)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let receipts_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (_, receipt) -> Receipt.encode receipt)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let withdrawals_root =
-      ( block_state.withdrawals_processed
+      block_state.withdrawals_processed
       |> List.to_seq
       |> Seq.map (fun w -> Withdrawal.encode w)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let logs_bloom =
       block_state.transactions_processed
@@ -150,7 +148,7 @@ module BlockState = struct
       ; blob_gas_used
       ; parent_hash }
     in
-    {block_state.current_block with header}
+    ({block_state.current_block with header}, world_state)
 end
 
 module TransactionState = struct
@@ -288,25 +286,25 @@ struct
       return true
     else return false
 
-  let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
+  let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Accounts.at addr)
 
   let get_storage addr key =
-    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
+    !(account addr |-- Account.storage |-- Storage.at key |-- Option.get_or_default B32.zeros)
 
   let set_storage addr key v =
     let$ o =
       !( initial_world_state
        |-- WorldState.account addr
        |-- storage
-       |-- B32.Map.at key
+       |-- Storage.at key
        |-- Option.get_or_default B32.zeros )
     in
-    let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
+    let$ c = !(account addr |-- storage |-- Storage.at key |-- Option.get_or_default B32.zeros) in
     (* In practice there is no way to modify the storage of an account with zero nonce, so there is no
        need to keep empty accounts here. However, for the purpose of unit tests, it is useful to allow storage
        operations to work on empty accounts without clearing them up automatically. *)
     let$ () =
-      account ~keep_empty:true addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v
+      account ~keep_empty:true addr |-- storage |-- Storage.at key := if B32.(v = zeros) then None else Some v
     in
     let zero u = B32.(u = zeros) in
     let x u = B32.(u <> zeros && u = o) in
@@ -424,7 +422,7 @@ struct
         update_field accounts_created_in_current_transaction (fun addresses ->
             Address.Set.add create_address addresses )
       in
-      let$ () = account create_address |-- storage := B32.Map.empty in
+      let$ () = account create_address |-- storage := Storage.empty in
       let$ () = account create_address |-- nonce := U64.one in
       let$ transfer_ok = transfer_ether msg.sender create_address msg.value in
 
