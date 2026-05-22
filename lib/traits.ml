@@ -8,12 +8,17 @@ module Byte_width = struct
     let byte_width : [> `Fixed of int] = `Fixed 256
   end
 
+  (* 768 bits, used for reading compressed BLS G2 points. *)
+  module Bytes96 = struct
+    let byte_width : [> `Fixed of int] = `Fixed 96
+  end
+
   (* 512 bits, used for decoding points in BLS12-381. *)
   module Bytes64 = struct
     let byte_width : [> `Fixed of int] = `Fixed 64
   end
 
-  (* 384 bits, used for reading BLS G1 points *)
+  (* 384 bits, used for reading compressed BLS G1 points *)
   module Bytes48 = struct
     let byte_width : [> `Fixed of int] = `Fixed 48
   end

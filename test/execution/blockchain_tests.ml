@@ -23,46 +23,15 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
      executed normally. *)
   let disabled_tests =
     String.Set.of_list
-      [ (* alt_bn128 precompiles. *)
-        "mf_tests/byzantium/eip197_ec_pairing/gas"
-      ; "mf_tests/byzantium/eip196_ec_add_mul/gas"
-      ; "mf_tests/byzantium/eip196_ec_add_mul/ecadd"
-
-        (* blake2 precompile. *)
-      ; "mf_tests/istanbul/eip152_blake2/blake2"
-      ; "mf_tests/istanbul/eip152_blake2/blake2_delegatecall"
-
-        (* modexp precompile. *)
-      ; "mf_tests/byzantium/eip198_modexp_precompile/modexp"
-      ; "mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds"
-
-        (* p256verify precompile. *)
-      ; "mf_tests/osaka/eip7951_p256verify_precompiles/p256verify"
-      ; "mf_tests/osaka/eip7951_p256verify_precompiles/eip_mainnet"
-
-        (* BLS precompiles. *)
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1"
-      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts"
-
-        (* Other precompiles. *)
-      ; "mf_tests/byzantium/eip214_staticcall/staticcall"
-
-        (* MIP-4. *)
-      ; "mf_tests/monad_nine/mip4_checkreservebalance/fork_transition"
+      [ (* MIP-4. *)
+        "mf_tests/monad_nine/mip4_checkreservebalance/fork_transition"
       ; "mf_tests/monad_nine/mip4_checkreservebalance/tx_revert"
       ; "mf_tests/monad_nine/mip4_checkreservebalance/transfers"
       ; "mf_tests/monad_nine/mip4_checkreservebalance/precompile_call"
       ; "mf_tests/monad_nine/mip4_checkreservebalance/multi_block"
 
         (* MIP-5. *)
+      ; "mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds"
       ; "mf_tests/osaka/eip7823_modexp_upper_bounds/modexp_upper_bounds"
       ; "mf_tests/osaka/eip7939_count_leading_zeros/count_leading_zeros"
       ] [@ocamlformat "disable"]
@@ -73,14 +42,11 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
      filename, just the test family name and the test index. *)
   let enabled_revisions_map =
     Test_entry.Map.of_list
-      [ (* modexp precompile. *)
-        (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1), [])
-      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15), [])
-      ; (("mf_tests/monad_nine/mip3_linear_memory/oom", 19), [])
-
-        (* Other precompiles. *)
-      ; (("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10), [])
-      ; (("mf_tests/frontier/precompiles/precompiles", 0), [])
+      [ (* MIP-4 *)
+        (("mf_tests/frontier/precompiles/precompiles", 0), [`Eight])
+      ; (("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10), [`Eight])
+      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1), [`Eight])
+      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15), [`Eight])
 
         (* Misc. *)
       ; (("mf_tests/shanghai/eip3860_initcode/initcode", 1), [`Eight])
