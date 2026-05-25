@@ -31,6 +31,45 @@ let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex
 
 module StateTest = struct end
 module BlockchainTest = struct
+  (* An EEST fixture's revision field can contain a single fork name or otherwise two fork names encoded in the
+     format "<FORK_NAME>To<FORK_NAME>AtTime15k", to indicate that the fixture's blocks span a fork transition.
+   *)
+  type revision =
+    | Invalid (* Some fixtures have mixed revisions like "PragueToMONAD_EIGHT" which are unrepresentable. *)
+    | Single of Chain.Monad.Revision.t
+    | Transition of {pre : Chain.Monad.Revision.t; post : Chain.Monad.Revision.t; timestamp : U256.t}
+  let revision_of_yojson (json : Yojson.Safe.t) : (revision, string) result =
+    match json with
+    | `String "PragueToMONAD_EIGHTAtTime15k" ->
+        (* Currently this is the only unrepresentable revision that appears in Foundation tests. If more
+           are added later, this pattern can be extended. *)
+        Ok Invalid
+    | `String str -> (
+      match Chain.Monad.Revision.of_string str with
+      | Some rev -> Ok (Single rev)
+      | None ->
+          Option.(
+            let$ to_index = String.find_substring ~substring:"To" str in
+            let$ () = ensure (String.ends_with ~suffix:"AtTime15k" str) in
+            let$ pre = Chain.Monad.Revision.of_string (String.sub str 0 to_index) in
+            let$ post =
+              Chain.Monad.Revision.of_string
+                (String.sub str (to_index + 2)
+                   (String.length str - String.length "To" - String.length "AtTime15k" - to_index) )
+            in
+            Some (Transition {pre; post; timestamp = U256.of_int 15_000}) )
+          |> Option.to_result ~none:"Fixtures.BlockchainTest.revision" )
+    | _ -> Error "Fixtures.BlockchainTest.revision"
+
+  let revision_to_yojson : revision -> Yojson.Safe.t = function
+    | Invalid -> assert false (* We should never be serializing an invalid revision. *)
+    | Single rev -> `String (Chain.Monad.Revision.to_string rev)
+    | Transition {pre; post; timestamp} ->
+        assert (U256.(timestamp = ~$15_000)) ;
+        `String
+          (Format.sprintf "%sTo%sAtTime15k" (Chain.Monad.Revision.to_string pre)
+             (Chain.Monad.Revision.to_string post) )
+
   type info =
     { filling_rpc_server : string option [@key "filling-rpc-server"] [@default None]
     ; filling_tool_version : string option [@key "filling-tool-version"] [@default None]
@@ -49,7 +88,7 @@ module BlockchainTest = struct
   type config =
     { blob_schedule : blob_schedule object_as_alist [@key "blobSchedule"]
     ; chain_id : Uint.t [@key "chainid"]
-    ; network : string }
+    ; network : revision }
   [@@deriving yojson]
 
   (* Test case blocks come in a different format when the test case expects an exception to be raised. *)
@@ -79,15 +118,24 @@ module BlockchainTest = struct
 
   type test_case =
     { info : info [@key "_info"]
-    ; network : string
+    ; network : revision option [@key "network"] [@default None] (* To be deprecated. *)
     ; blocks : test_case_block list
     ; config : config
     ; genesis_block_header : Block.Header.t [@key "genesisBlockHeader"]
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
     ; last_blockhash : U256.t [@key "lastblockhash"]
     ; pre : Account.t Address.Map.t
-    ; post : Account.t Address.Map.t [@key "postState"] }
-  [@@deriving yojson {strict = false}]
+    ; post : Account.t Address.Map.t [@key "postState"]
+    ; seal_engine : string option [@key "sealEngine"] [@default None] (* Deprecated. *) }
+  [@@deriving yojson]
+
+  let is_active_revision (test : test_case) =
+    match test.config.network with
+    | Single rev -> Option.is_some (Chain.Monad.Revision.is_active rev)
+    | Transition {pre; post; _} ->
+        Option.is_some (Chain.Monad.Revision.is_active pre)
+        && Option.is_some (Chain.Monad.Revision.is_active post)
+    | Invalid -> false
 
   type t = (string * test_case) list
   let of_yojson ~skip_invalid (test_cases : Yojson.Safe.t) : (t, string) result =
@@ -96,7 +144,13 @@ module BlockchainTest = struct
       | `Assoc kv ->
           List.filter_mapM kv ~f:(fun (name, v) ->
               match test_case_of_yojson v with
-              | Ok test_case -> return (Some (name, test_case))
+              | Ok test_case -> (
+                (* According to the EEST format spec, test_case.network is deprecated and the authoritative
+                   source is test_case.config.network. If present, we expect it to be identical to the network
+                   in the config field. *)
+                match test_case.network with
+                | Some network when network <> test_case.config.network -> fail "Fixtures.BlockchainTest.t"
+                | _ -> return (Some (name, test_case)) )
               | Error _ when skip_invalid -> return None
               | Error err -> fail err )
       | _ -> fail "Fixtures.BlockchainTest.t" )

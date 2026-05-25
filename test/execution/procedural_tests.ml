@@ -7,7 +7,8 @@ open Chain.Monad
 open Host
 
 module ChainParams = struct
-  include Mainnet
+  let chain_id = Mainnet.chain_id
+  let revision = `Eight
   let trace = false
 end
 

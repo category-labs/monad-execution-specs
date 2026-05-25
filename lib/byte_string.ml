@@ -5,6 +5,9 @@
 module Bytes = struct
   include String
 
+  (* Shadow the monomorphic comparison operators introduced in String. *)
+  open Stdlib
+
   let of_char (chr : char) = make 1 chr
   let of_chars (chars : char list) = of_seq (List.to_seq chars)
 
@@ -31,6 +34,7 @@ module Bytes = struct
   let of_hex_string =
     let hex_table =
       Iarray.init 256 (fun i ->
+          let open Stdlib in
           let i_c = Char.(chr i) in
           if i_c >= '0' && i_c <= '9' then i - Char.code '0'
           else if i_c >= 'a' && i_c <= 'f' then 10 + i - Char.code 'a'

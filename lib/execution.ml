@@ -56,6 +56,7 @@ struct
 
   module Instantiation = Host.Instantiate (Params) (Vm.Make (Params))
   module Host = Instantiation.Host
+  module Vm = Vm.Make (Params) (Host)
 
   let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
     let kind, current_target, data, code, code_address =
