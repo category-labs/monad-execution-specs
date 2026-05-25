@@ -2,10 +2,13 @@ open Monad_lib
 open Numeric
 open Byte_string
 open Chain.Ethereum
+open Chain.Monad
 
 let usage_str =
-  "Usage: evmrun [--gas N] [--trace] (--bytecode_file FILE | --bytecode HEX) (--calldata_file FILE | \
-   --bytecode HEX)"
+  "Usage: evmrun [--gas N] [--trace] [--chain_id ID] [--revision REV] (--bytecode_file FILE | --bytecode \
+   HEX) (--calldata_file FILE | --calldata HEX)"
+let revision : Revision.active ref = ref `Eight
+let chain_id : Uint.t ref = ref Testnet.chain_id
 let bytecode_source = ref None
 let calldata_source = ref None
 let gas_limit = ref 100000L
@@ -14,10 +17,34 @@ let trace = ref false
 let set_source_file r = Arg.String (fun s -> r := Some (`File s))
 let set_source_literal r = Arg.String (fun s -> r := Some (`Literal s))
 
+let set_revision =
+  Arg.String
+    (fun s ->
+      revision :=
+        let rev =
+          match Revision.of_string s with
+          | Some rev -> rev
+          | None -> raise (Arg.Bad (Format.sprintf "Invalid revision %s" s))
+        in
+        let rev =
+          match Revision.is_active rev with
+          | Some rev -> rev
+          | None ->
+              raise
+                (Arg.Bad
+                   (Format.sprintf "Revision %s is unsupported in this version" (Revision.to_string rev)) )
+        in
+        rev )
+
+let set_chain_id = Arg.String (fun s -> chain_id := Uint.of_string s)
 let () =
   Arg.(
     parse
-      [ ("--bytecode_file", set_source_file bytecode_source, "Bytecode file")
+      [ ( "--revision"
+        , set_revision
+        , Format.sprintf "Revision to use (default: %s)" Revision.(to_string (!revision :> t)) )
+      ; ("--chain_id", set_chain_id, Format.sprintf "Chain ID to use (default: %s)" (Uint.to_string !chain_id))
+      ; ("--bytecode_file", set_source_file bytecode_source, "Bytecode file")
       ; ("--calldata_file", set_source_file calldata_source, "Calldata file")
       ; ("--bytecode", set_source_literal bytecode_source, "Bytecode")
       ; ("--calldata", set_source_literal calldata_source, "Calldata")
@@ -36,8 +63,6 @@ let read_source place =
 
 let bytecode = read_source bytecode_source
 let calldata = read_source calldata_source
-
-let trace = !trace
 
 let sender = Address.zero
 
@@ -58,8 +83,9 @@ let tx =
 let block = Block.{header = Header.empty; transactions = [tx]; ommers = []; withdrawals = []}
 
 module Params = struct
-  include Chain.Monad.Testnet
-  let trace = trace
+  let chain_id = !chain_id
+  let revision = !revision
+  let trace = !trace
 end
 module Execution = Execution.Make (Params)
 

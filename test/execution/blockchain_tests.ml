@@ -2,8 +2,116 @@ open Monad_lib
 open Test_utils.Utils
 open Chain.Ethereum
 open Byte_string
+open Numeric
 
 let blockchain_tests_folder = "fixtures" $/ "blockchain_tests"
+
+module Test_entry = struct
+  type t = string * int
+  include Comparable.Make (struct
+    type nonrec t = t
+    let compare (name, index) (name', index') =
+      let d = compare name name' in
+      if d <> 0 then d else compare index index'
+  end)
+end
+
+(* Suppressed tests. *)
+let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active list =
+  (* Tests disabled at the folder level. None of the fixtures inside these folders will be executed. Note that
+     only the test fixtures directly inside the folders will be disabled, fixtures in subfolders will be
+     executed normally. *)
+  let disabled_tests =
+    String.Set.of_list
+      [ (* alt_bn128 precompiles. *)
+        "mf_tests/byzantium/eip197_ec_pairing/gas"
+      ; "mf_tests/byzantium/eip196_ec_add_mul/gas"
+      ; "mf_tests/byzantium/eip196_ec_add_mul/ecadd"
+
+        (* blake2 precompile. *)
+      ; "mf_tests/istanbul/eip152_blake2/blake2"
+      ; "mf_tests/istanbul/eip152_blake2/blake2_delegatecall"
+
+        (* modexp precompile. *)
+      ; "mf_tests/byzantium/eip198_modexp_precompile/modexp"
+      ; "mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds"
+
+        (* p256verify precompile. *)
+      ; "mf_tests/osaka/eip7951_p256verify_precompiles/p256verify"
+      ; "mf_tests/osaka/eip7951_p256verify_precompiles/eip_mainnet"
+
+        (* BLS precompiles. *)
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1"
+      ; "mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts"
+
+        (* Other precompiles. *)
+      ; "mf_tests/byzantium/eip214_staticcall/staticcall"
+
+        (* MIP-3. *)
+      ; "mf_tests/monad_nine/mip3_linear_memory/oom_deep"
+      ; "mf_tests/monad_nine/mip3_linear_memory/oom"
+      ; "mf_tests/monad_nine/mip3_linear_memory/gas_cost"
+
+        (* MIP-4. *)
+      ; "mf_tests/monad_nine/mip4_checkreservebalance/fork_transition"
+      ; "mf_tests/monad_nine/mip4_checkreservebalance/tx_revert"
+      ; "mf_tests/monad_nine/mip4_checkreservebalance/transfers"
+      ; "mf_tests/monad_nine/mip4_checkreservebalance/precompile_call"
+      ; "mf_tests/monad_nine/mip4_checkreservebalance/multi_block"
+
+        (* MIP-5. *)
+      ; "mf_tests/osaka/eip7823_modexp_upper_bounds/modexp_upper_bounds"
+      ; "mf_tests/osaka/eip7939_count_leading_zeros/count_leading_zeros"
+      ] [@ocamlformat "disable"]
+  in
+  (* Tests disabled at the individual test fixture or revision level, specified as a mapping from the test
+     folder plus fixture index to the list of revisions for which the tests are to be run (or an empty list
+     to suppress the entire test fixture file). Alcotest's filter mechanism does not provide the actual
+     filename, just the test family name and the test index. *)
+  let enabled_revisions_map =
+    Test_entry.Map.of_list
+      [ (* modexp precompile. *)
+        (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1), [])
+      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15), [])
+
+        (* Other precompiles. *)
+      ; (("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10), [])
+      ; (("mf_tests/frontier/precompiles/precompiles", 0), [])
+
+        (* MIP-3. *)
+      ; (("mf_tests/cancun/eip5656_mcopy/mcopy_memory_expansion", 1), [`Eight])
+      ; (("mf_tests/frontier/opcodes/call", 1), [`Eight])
+      ; (("mf_tests/frontier/opcodes/call", 2), [`Eight])
+
+        (* Misc. *)
+      ; (("mf_tests/shanghai/eip3860_initcode/initcode", 1), [`Eight])
+      ; (("mf_tests/shanghai/eip3860_initcode/initcode", 2), [`Eight])
+      ; (("mf_tests/cancun/eip6780_selfdestruct/selfdestruct", 5), [`Eight])
+      ; (("mf_tests/cancun/eip6780_selfdestruct/selfdestruct", 6), [`Eight])
+      ; (("mf_tests/frontier/create/create_deposit_oog", 0), [`Eight])
+      ; (("mf_tests/frontier/opcodes/all_opcodes", 0), [`Eight])
+      ; (("mf_tests/frontier/opcodes/all_opcodes", 1), [`Eight])
+      ; (("mf_tests/monad_eight/reserve_balance/transfers", 4), [`Eight])
+      ; (("mf_tests/monad_eight/reserve_balance/transfers", 5), [`Eight])
+      ; (("mf_tests/monad_eight/reserve_balance/transfers", 21), [`Eight])
+      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 40), [`Eight])
+      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 41), [`Eight])
+      ; (("mf_tests/berlin/eip2929_gas_cost_increases/precompile_warming", 0), [`Eight])
+      ] [@ocamlformat "disable"]
+  in
+  fun (name, idx) ->
+    if String.Set.mem name disabled_tests then []
+    else
+      Test_entry.Map.find_opt (name, idx) enabled_revisions_map
+      |> Option.value ~default:Chain.Monad.Revision.all_active_revisions
 
 let drop_test_folder_prefix =
   let prefix = blockchain_tests_folder ^ "/" in
@@ -40,13 +148,25 @@ module Test_failure = struct
     | Expected_error err -> Format.sprintf "Expected error %s, got success" err
 end
 
-let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
+let process_block
+    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : Host.WorldState.t) (block : Block.t) =
   let module Execution = Execution.Make (struct
-    let chain_id = fixtures.config.chain_id
+    let chain_id = config.chain_id
+    let revision =
+      let rev =
+        match config.network with
+        | Single rev -> rev
+        | Transition {pre; post; timestamp} -> if U256.(block.header.timestamp < timestamp) then pre else post
+        | Invalid -> assert false
+      in
+      rev |> Chain.Monad.Revision.is_active |> Option.get
     let trace = false
   end) in
+  Execution.process_block ~verify state block
+
+let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.test_case)) =
   let check_block_fixture state Fixtures.BlockchainTest.{block; expect_exception} =
-    let result = Execution.process_block ~verify:true state block in
+    let result = process_block fixtures.config ~verify:true state block in
     match (result, expect_exception) with
     | Ok state, None -> Ok state
     | Error _, Some _ ->
@@ -65,16 +185,6 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   |> expect_ok
   |> check_postconditions fixtures.post
 
-let is_substring needle haystack =
-  (* Quadratic complexity, we don't really care. *)
-  let rec match_at i j =
-    if String.length needle <= j then true
-    else if String.length haystack <= i then false
-    else haystack.[i] = needle.[j] && match_at (i + 1) (j + 1)
-  in
-  let rec loop i = if i >= String.length haystack then false else match_at i 0 || loop (i + 1) in
-  loop 0
-
 let blockchain_tests =
   traverse_folder blockchain_tests_folder
   |> Seq.filter (fun (_path, filename) -> Filename.extension filename = ".json" && filename <> "index.json")
@@ -86,20 +196,29 @@ let blockchain_tests =
         Seq.cons (path, filename) tl
         |> List.of_seq
         |> List.sort (fun (_, f1) (_, f2) -> compare f1 f2)
-        |> List.map (fun (path, filename) ->
+        |> List.mapi (fun i (path, filename) ->
             let path = path $/ filename in
             Alcotest.test_case filename `Quick (fun subtest_filter ->
-                let fixtures =
-                  Result.get_ok'
-                    (Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path))
-                  |> List.filter (fun (_name, test) -> test.Fixtures.BlockchainTest.network = "MONAD_EIGHT")
-                in
-                let fixtures =
+                let matches_subtest_filter : string -> bool =
                   match subtest_filter with
-                  | None -> fixtures
-                  | Some filter -> List.filter (fun (name, _test) -> is_substring filter name) fixtures
+                  | None -> fun _ -> true
+                  | Some filter -> fun s -> Option.is_some (String.find_substring ~substring:filter s)
                 in
-                List.iter run_blockchain_test fixtures ) )
+                let matches_rev_filter : Fixtures.BlockchainTest.revision -> bool =
+                  let enabled_revisions =
+                    (enabled_revisions_for_test (group_name, i) :> Chain.Monad.Revision.t list)
+                  in
+                  function
+                  | Fixtures.BlockchainTest.Single rev -> List.mem rev enabled_revisions
+                  | Transition {pre; post; _} ->
+                      List.mem pre enabled_revisions && List.mem post enabled_revisions
+                  | Invalid -> false
+                in
+                Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path)
+                |> Result.get_ok'
+                |> List.filter (fun (name, (test : Fixtures.BlockchainTest.test_case)) ->
+                    matches_subtest_filter name && matches_rev_filter test.config.network )
+                |> List.iter run_blockchain_test ) )
       in
       (group_name, tests) )
   |> List.of_seq
@@ -109,125 +228,7 @@ let blockchain_tests =
 let subtest_filter_flag =
   Cmdliner.Arg.(value & opt (some string) None & info ["subtest_filter"] ~doc:"Select a specific subtest")
 
-module Test_entry = struct
-  type t = string * int
-  include Comparable.Make (struct
-    type nonrec t = t
-    let compare (name, index) (name', index') =
-      let d = compare name name' in
-      if d <> 0 then d else compare index index'
-  end)
-end
-
-(* Suppressed tests. *)
-let suppressed_tests =
-  Test_entry.Set.of_list
-    [
-    (* alt_bn128 precompiles. *)
-      ("mf_tests/byzantium/eip197_ec_pairing/gas", 0)
-    ; ("mf_tests/byzantium/eip196_ec_add_mul/gas", 0)
-    ; ("mf_tests/byzantium/eip196_ec_add_mul/ecadd", 0)
-    ; ("mf_tests/byzantium/eip196_ec_add_mul/ecadd", 1)
-
-    (* blake2 precompile. *)
-    ; ("mf_tests/istanbul/eip152_blake2/blake2", 0)
-    ; ("mf_tests/istanbul/eip152_blake2/blake2", 1)
-    ; ("mf_tests/istanbul/eip152_blake2/blake2", 2)
-    ; ("mf_tests/istanbul/eip152_blake2/blake2", 3)
-    ; ("mf_tests/istanbul/eip152_blake2/blake2_delegatecall", 0)
-
-    (* modexp precompile. *)
-    ; ("mf_tests/byzantium/eip198_modexp_precompile/modexp", 0)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 0)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 1)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 3)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 4)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 5)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 6)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 7)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 8)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 9)
-    ; ("mf_tests/osaka/eip7883_modexp_gas_increase/modexp_thresholds", 10)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1)
-    ; ("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15)
-
-    (* p256verify precompile. *)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 0)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 1)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 2)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 3)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 5)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 7)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 8)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 9)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 10)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/p256verify", 11)
-    ; ("mf_tests/osaka/eip7951_p256verify_precompiles/eip_mainnet", 1)
-
-    (* BLS precompiles. *)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1mul", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2msm", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2add", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1add", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp2_to_g2", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g1msm", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 4)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_pairing", 5)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_g2mul", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_map_fp_to_g1", 4)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 0)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 1)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 2)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 3)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 4)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 5)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 6)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 7)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 8)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 9)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 10)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 11)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 12)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 13)
-    ; ("mf_tests/prague/eip2537_bls_12_381_precompiles/bls12_variable_length_input_contracts", 14)
-
-    (* Other precompiles. *)
-    ; ("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10)
-    ; ("mf_tests/frontier/precompiles/precompiles", 0)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 0)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 1)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 2)
-    ; ("mf_tests/byzantium/eip214_staticcall/staticcall", 3)
-    ] [@ocamlformat "disable"]
-
 (* Filter failing tests. *)
-let filter ~name ~index = if Test_entry.Set.mem (name, index) suppressed_tests then `Skip else `Run
+let filter ~name ~index = if List.is_empty (enabled_revisions_for_test (name, index)) then `Skip else `Run
 
 let () = Alcotest.run_with_args "Blockchain tests" subtest_filter_flag blockchain_tests ~filter

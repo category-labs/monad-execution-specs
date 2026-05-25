@@ -2,218 +2,222 @@ open Numeric
 open Byte_string
 open Lens.Infix
 
-module Memory : sig
-  type t
-  val empty : t
-
-  val read_block_at : U256.t -> U256.t -> t -> Bytes.t
-  val read_word_at : U256.t -> t -> U256.t
-
-  val write_block_at : U256.t -> Bytes.t -> t -> t
-  val write_word_at : U256.t -> U256.t -> t -> t
-  val write_byte_at : U256.t -> char -> t -> t
-
-  val active_words : t -> Uint.t (* μ_i *)
-
-  val extend_to : start:U256.t -> size_bytes:U256.t -> t -> t
-
-  (* For debugging purposes *)
-  val dump : t -> unit
-end = struct
-  type t =
-    {contents : char U256.Map.t (* Corresponds to μ_m *); active_bytes : Uint.t (* Corresponds to μ_i * 32 *)}
-
-  (** Check that the index start + size - 1 does not overflow U256.t. *)
-  let u256_overflow_check start size_bytes =
-    assert (U256.in_range Z.(U256.to_z start + U256.to_z size_bytes - one))
-
-  (** Check that the index start + size - 1 does not exceed the active bytes. Memory must be extended
-     by a call to [extend_to] beforehand. *)
-  let active_bytes_overflow_check mem start size_bytes =
-    assert (Uint.(mem.active_bytes >= U256.(to_uint start) + U256.(to_uint size_bytes)))
-
-  let read_block_at start size (mem : t) =
-    if U256.(size = zero) then Bytes.empty
-    else (
-      u256_overflow_check start size ;
-      active_bytes_overflow_check mem start size ;
-      let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
-      Bytes.init size (fun byte_i ->
-          U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' ) )
-
-  let read_word_at pos (mem : t) = read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
-
-  let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
-    let size = U256.of_int (Bytes.length bytes) in
-    if U256.(size = zero) then mem
-    else (
-      u256_overflow_check pos size ;
-      active_bytes_overflow_check mem pos size ;
-      let contents =
-        Seq.take (Bytes.length bytes) (Seq.ints 0)
-        |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
-        |> fun entries -> U256.Map.add_seq entries mem.contents
-      in
-      {mem with contents} )
-
-  let write_word_at pos w = U256.to_repr w |> U256.Repr.to_bytes |> write_block_at pos
-
-  let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
-
-  let empty = {contents = U256.Map.empty; active_bytes = Uint.zero}
-
-  let active_words mem = Uint.bytes_to_whole_words mem.active_bytes
-
-  let extend_to ~start ~size_bytes mem =
-    if U256.(size_bytes = zero) then mem
-    else
-      (* Round up to whole words. *)
-      let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
-      let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
-      {mem with active_bytes}
-
-  let dump mem =
-    (* Write one word at a time *)
-    let rec loop pos =
-      if Uint.(pos < mem.active_bytes) then (
-        Format.printf "%s: %s\n" (Uint.to_hex_string pos)
-          (Bytes.to_hex_string (read_block_at (U256.of_uint_exn pos) U256.(~$32) mem)) ;
-        loop Uint.(pos + ~$32) )
-    in
-    loop Uint.zero
-end
-
-module MachineState = struct
-  (* YP 9.4.1 *)
-  type t =
-    { gas : Uint.t (* μ_g *)
-    ; pc : U256.t (* μ_pc *)
-    ; memory : Memory.t (* μ_m, μ_i *)
-    ; stack : U256.t list (* μ_s *)
-    ; output_buffer : Bytes.t (* μ_o *)
-    ; gas_refund : Integer.t
-          (* A_r *)
-          (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
-               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
-               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
-    }
-  [@@deriving lens {submodule = true; prefix = true}]
-  include TLens
-
-  let initial =
-    { gas = Uint.zero
-    ; pc = U256.zero
-    ; memory = Memory.empty
-    ; stack = []
-    ; output_buffer = Bytes.empty
-    ; gas_refund = Integer.zero }
-end
-
-module ExecutionEnvironment = struct
-  open Chain.Ethereum
-
-  module ExecutionBlockHeader = struct
-    (* The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
-         does not give us the full block header information, only those fields required for executing EVM
-         bytecode. Otherwise, this is as YP 4.4 with the addition of the chain ID β, which is an ambient
-         parameter in the Yellow Paper but is integrated as part of the block environment in the Ethereum
-         executable spec. *)
-    type t =
-      { coinbase : Address.t (* H_c *)
-      ; number : U256.t (* H_i *)
-      ; timestamp : U256.t (* H_s *)
-      ; gas_limit : U256.t (* H_l *)
-      ; prev_randao : U256.t (* H_a *)
-      ; base_fee : U256.t (* H_f *)
-      ; chain_id : U256.t (* β *) }
-    [@@deriving lens {submodule = true; prefix = true}]
-    include TLens
-
-    let of_tx_context (ctx : Evmc.TxContext.t) : t =
-      { coinbase = ctx.block_coinbase
-      ; number = U256.of_uint64 ctx.block_number
-      ; timestamp = U256.of_uint64 ctx.block_timestamp
-      ; gas_limit = U256.of_uint64 ctx.block_gas_limit
-      ; prev_randao = ctx.block_prev_randao
-      ; base_fee = ctx.block_base_fee
-      ; chain_id = ctx.chain_id }
-  end
-  include ExecutionBlockHeader
-
-  (* YP 9.3 *)
-  type t =
-    { address : Address.t (* I_a *)
-    ; origin : Address.t (* I_o *)
-    ; price : U256.t (* I_p *)
-    ; data : Bytes.t (* I_d *)
-    ; sender : Address.t (* I_s *)
-    ; value : U256.t (* I_v *)
-    ; bytecode : Bytes.t (* I_b *)
-    ; header : ExecutionBlockHeader.t (* I_H *)
-    ; depth : int (* I_e *)
-    ; write_permission : bool (* I_w *)
-    ; blob_versioned_hashes : B32.t list (* EIP-4844 *)
-    ; blob_base_fee : U256.t (* EIP-7516 *) }
-  [@@deriving lens {submodule = true; prefix = true}]
-  include TLens
-
-  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
-    { address = msg.recipient
-    ; origin = ctx.tx_origin
-    ; price = ctx.tx_gas_price
-    ; data = msg.input_data
-    ; sender = msg.sender
-    ; value = msg.value
-    ; bytecode = code
-    ; header = ExecutionBlockHeader.of_tx_context ctx
-    ; depth = Int32.to_int msg.depth
-    ; write_permission = not msg.static
-    ; blob_versioned_hashes = ctx.blob_hashes
-    ; blob_base_fee = ctx.blob_base_fee }
-end
-
-module Context = struct
-  type t =
-    { execution_environment : ExecutionEnvironment.t (* I *)
-    ; machine_state : MachineState.t (* μ *)
-    ; jump_destinations : U256.Set.t (* D(c) *)
-    ; initial_storage : U256.t U256.Map.t
-          (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *) }
-  [@@deriving lens {submodule = true; prefix = true}]
-  include TLens
-
-  let valid_jump_destinations code =
-    let rec loop i valid_destinations =
-      if i >= Bytes.length code then valid_destinations
-      else
-        match code.[i] with
-        | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
-        | '\x60' .. '\x7f' as opcode ->
-            let push_bytes = Char.code opcode - 0x60 + 1 in
-            loop (i + 1 + push_bytes) valid_destinations
-        | _ -> loop (i + 1) valid_destinations
-    in
-    loop 0 U256.Set.empty
-
-  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
-    { execution_environment = ExecutionEnvironment.make ctx msg code
-    ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
-    ; jump_destinations = valid_jump_destinations code
-    ; initial_storage = U256.Map.empty }
-end
-
-let max_stack_depth = 1024
-
-(* Monad §TODO: maximum contract code size is larger than Ethereum. *)
-let max_code_size = 128 * 1024
-let max_init_code_size = 2 * max_code_size
-
 module Make
     (Params : sig
+      include Chain.Monad.PARAMS
       val trace : bool
     end)
     (Host : Evmc.Host.SIG) =
 struct
+  module Memory : sig
+    type t
+    val empty : t
+
+    val read_block_at : U256.t -> U256.t -> t -> Bytes.t
+    val read_word_at : U256.t -> t -> U256.t
+
+    val write_block_at : U256.t -> Bytes.t -> t -> t
+    val write_word_at : U256.t -> U256.t -> t -> t
+    val write_byte_at : U256.t -> char -> t -> t
+
+    val active_words : t -> Uint.t (* μ_i *)
+
+    val extend_to : start:U256.t -> size_bytes:U256.t -> t -> t
+
+    (* For debugging purposes *)
+    val dump : t -> unit
+  end = struct
+    type t =
+      { contents : char U256.Map.t (* Corresponds to μ_m *)
+      ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *) }
+
+    (** Check that the index start + size - 1 does not overflow U256.t. *)
+    let u256_overflow_check start size_bytes =
+      assert (U256.in_range Z.(U256.to_z start + U256.to_z size_bytes - one))
+
+    (** Check that the index start + size - 1 does not exceed the active bytes. Memory must be extended
+     by a call to [extend_to] beforehand. *)
+    let active_bytes_overflow_check mem start size_bytes =
+      assert (Uint.(mem.active_bytes >= U256.(to_uint start) + U256.(to_uint size_bytes)))
+
+    let read_block_at start size (mem : t) =
+      if U256.(size = zero) then Bytes.empty
+      else (
+        u256_overflow_check start size ;
+        active_bytes_overflow_check mem start size ;
+        let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
+        Bytes.init size (fun byte_i ->
+            U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' ) )
+
+    let read_word_at pos (mem : t) =
+      read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
+
+    let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
+      let size = U256.of_int (Bytes.length bytes) in
+      if U256.(size = zero) then mem
+      else (
+        u256_overflow_check pos size ;
+        active_bytes_overflow_check mem pos size ;
+        let contents =
+          Seq.take (Bytes.length bytes) (Seq.ints 0)
+          |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
+          |> fun entries -> U256.Map.add_seq entries mem.contents
+        in
+        {mem with contents} )
+
+    let write_word_at pos w = U256.to_repr w |> U256.Repr.to_bytes |> write_block_at pos
+
+    let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
+
+    let empty = {contents = U256.Map.empty; active_bytes = Uint.zero}
+
+    let active_words mem = Uint.bytes_to_whole_words mem.active_bytes
+
+    let extend_to ~start ~size_bytes mem =
+      if U256.(size_bytes = zero) then mem
+      else
+        (* Round up to whole words. *)
+        let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
+        let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
+        {mem with active_bytes}
+
+    let dump mem =
+      (* Write one word at a time *)
+      let rec loop pos =
+        if Uint.(pos < mem.active_bytes) then (
+          Format.printf "%s: %s\n" (Uint.to_hex_string pos)
+            (Bytes.to_hex_string (read_block_at (U256.of_uint_exn pos) U256.(~$32) mem)) ;
+          loop Uint.(pos + ~$32) )
+      in
+      loop Uint.zero
+  end
+
+  module MachineState = struct
+    (* YP 9.4.1 *)
+    type t =
+      { gas : Uint.t (* μ_g *)
+      ; pc : U256.t (* μ_pc *)
+      ; memory : Memory.t (* μ_m, μ_i *)
+      ; stack : U256.t list (* μ_s *)
+      ; output_buffer : Bytes.t (* μ_o *)
+      ; gas_refund : Integer.t
+            (* A_r *)
+            (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
+               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
+               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
+      }
+    [@@deriving lens {submodule = true; prefix = true}]
+    include TLens
+
+    let initial =
+      { gas = Uint.zero
+      ; pc = U256.zero
+      ; memory = Memory.empty
+      ; stack = []
+      ; output_buffer = Bytes.empty
+      ; gas_refund = Integer.zero }
+  end
+
+  module ExecutionEnvironment = struct
+    open Chain.Ethereum
+
+    module ExecutionBlockHeader = struct
+      (* The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
+         does not give us the full block header information, only those fields required for executing EVM
+         bytecode. Otherwise, this is as YP 4.4 with the addition of the chain ID β, which is an ambient
+         parameter in the Yellow Paper but is integrated as part of the block environment in the Ethereum
+         executable spec. *)
+      type t =
+        { coinbase : Address.t (* H_c *)
+        ; number : U256.t (* H_i *)
+        ; timestamp : U256.t (* H_s *)
+        ; gas_limit : U256.t (* H_l *)
+        ; prev_randao : U256.t (* H_a *)
+        ; base_fee : U256.t (* H_f *)
+        ; chain_id : U256.t (* β *) }
+      [@@deriving lens {submodule = true; prefix = true}]
+      include TLens
+
+      let of_tx_context (ctx : Evmc.TxContext.t) : t =
+        { coinbase = ctx.block_coinbase
+        ; number = U256.of_uint64 ctx.block_number
+        ; timestamp = U256.of_uint64 ctx.block_timestamp
+        ; gas_limit = U256.of_uint64 ctx.block_gas_limit
+        ; prev_randao = ctx.block_prev_randao
+        ; base_fee = ctx.block_base_fee
+        ; chain_id = ctx.chain_id }
+    end
+    include ExecutionBlockHeader
+
+    (* YP 9.3 *)
+    type t =
+      { address : Address.t (* I_a *)
+      ; origin : Address.t (* I_o *)
+      ; price : U256.t (* I_p *)
+      ; data : Bytes.t (* I_d *)
+      ; sender : Address.t (* I_s *)
+      ; value : U256.t (* I_v *)
+      ; bytecode : Bytes.t (* I_b *)
+      ; header : ExecutionBlockHeader.t (* I_H *)
+      ; depth : int (* I_e *)
+      ; write_permission : bool (* I_w *)
+      ; blob_versioned_hashes : B32.t list (* EIP-4844 *)
+      ; blob_base_fee : U256.t (* EIP-7516 *) }
+    [@@deriving lens {submodule = true; prefix = true}]
+    include TLens
+
+    let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
+      { address = msg.recipient
+      ; origin = ctx.tx_origin
+      ; price = ctx.tx_gas_price
+      ; data = msg.input_data
+      ; sender = msg.sender
+      ; value = msg.value
+      ; bytecode = code
+      ; header = ExecutionBlockHeader.of_tx_context ctx
+      ; depth = Int32.to_int msg.depth
+      ; write_permission = not msg.static
+      ; blob_versioned_hashes = ctx.blob_hashes
+      ; blob_base_fee = ctx.blob_base_fee }
+  end
+
+  module Context = struct
+    type t =
+      { execution_environment : ExecutionEnvironment.t (* I *)
+      ; machine_state : MachineState.t (* μ *)
+      ; jump_destinations : U256.Set.t (* D(c) *)
+      ; initial_storage : U256.t U256.Map.t
+            (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *)
+      }
+    [@@deriving lens {submodule = true; prefix = true}]
+    include TLens
+
+    let valid_jump_destinations code =
+      let rec loop i valid_destinations =
+        if i >= Bytes.length code then valid_destinations
+        else
+          match code.[i] with
+          | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
+          | '\x60' .. '\x7f' as opcode ->
+              let push_bytes = Char.code opcode - 0x60 + 1 in
+              loop (i + 1 + push_bytes) valid_destinations
+          | _ -> loop (i + 1) valid_destinations
+      in
+      loop 0 U256.Set.empty
+
+    let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
+      { execution_environment = ExecutionEnvironment.make ctx msg code
+      ; machine_state = {MachineState.initial with gas = Uint.of_uint64 msg.gas}
+      ; jump_destinations = valid_jump_destinations code
+      ; initial_storage = U256.Map.empty }
+  end
+
+  let max_stack_depth = 1024
+
+  (* Monad §TODO: maximum contract code size is larger than Ethereum. *)
+  let max_code_size = 128 * 1024
+  let max_init_code_size = 2 * max_code_size
+
   open MachineState
   open ExecutionEnvironment
   open Context

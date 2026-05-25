@@ -14,7 +14,8 @@ let select_fixtures kind =
 let execution_mode = ref `Verify
 let set_execution_mode_update_fixture = Arg.String (fun filename -> execution_mode := `Update filename)
 
-let usage_str = "Usage: execrun (--blockchain_test FILE | --state_test FILE) [--update_fixture FILE]\n"
+let usage_str =
+  "Usage: execrun (--blockchain_test FILE | --state_test FILE) [--update_fixture FILE] [--trace]\n"
 
 let trace = ref false
 
@@ -40,9 +41,6 @@ let fixtures_file =
   match !fixtures_file with Some filename -> filename | None -> Format.printf "%s" usage_str ; exit (-1)
 
 let test_kind = match !test_kind with Some kind -> kind | None -> Format.printf "%s" usage_str ; exit (-1)
-
-(* TODO: don't hard-code this. *)
-let network = Chain.Monad.Revision.(to_string Eight)
 
 let check_account_state (address : Address.t) (actual : Account.t) (expected : Account.t) =
   if Account.(actual = expected) then (
@@ -120,13 +118,25 @@ module Test_failure = struct
     | Expected_error err -> Format.sprintf "Expected error %s, got success" err
 end
 
-let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
+let process_block
+    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : Host.WorldState.t) (block : Block.t) =
   let module Execution = Execution.Make (struct
-    let chain_id = fixtures.config.chain_id
+    let chain_id = config.chain_id
+    let revision =
+      let rev =
+        match config.network with
+        | Single rev -> rev
+        | Transition {pre; post; timestamp} -> if U256.(block.header.timestamp < timestamp) then pre else post
+        | Invalid -> assert false
+      in
+      rev |> Chain.Monad.Revision.is_active |> Option.get
     let trace = trace
   end) in
+  Execution.process_block ~verify state block
+
+let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   let check_block_fixture state Fixtures.BlockchainTest.{block; expect_exception} =
-    let result = Execution.process_block ~verify:(execution_mode = `Verify) state block in
+    let result = process_block fixtures.config ~verify:(execution_mode = `Verify) state block in
     match (result, expect_exception) with
     | Ok state, None -> Ok state
     | Error _, Some _ ->
@@ -159,11 +169,6 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
       (fun block -> Fixtures.BlockchainTest.{block; expect_exception = None})
       List.(tl (rev post_state.history))
   in
-  (* TODO: don't hard-code this *)
-  let config =
-    let blob_schedule = List.map (fun (_, sched) -> (network, sched)) fixtures.config.blob_schedule in
-    {fixtures.config with network; blob_schedule}
-  in
   let info =
     Fixtures.BlockchainTest.
       { fixtures.info with
@@ -172,7 +177,7 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
   in
   let genesis_rlp = Rlp.encode (Block.Header.to_rlp fixtures.genesis_block_header) in
   let last_blockhash = U256.of_repr (Block.hash (List.hd post_state.history)) in
-  {fixtures with post; blocks; config; info; genesis_rlp; last_blockhash}
+  {fixtures with post; blocks; info; genesis_rlp; last_blockhash}
 
 let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
   let open Yojson.Safe.Util in
@@ -199,7 +204,6 @@ let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
     |> (fun f -> f.$("blocks") <- `List blocks)
     |> fun f -> f.$("genesisBlockHeader") <- genesis_block_header
   in
-  let fixture_json = fixture_json.$("network") <- `String network in
   fixture_json
 
 let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) list) =
@@ -211,9 +215,7 @@ let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) l
   | `Update output_file ->
       let updated_fixtures_json =
         List.map
-          (fun (_, fixtures, post_state) ->
-            let test_name = Filename.(remove_extension (basename fixtures_file)) in
-            let name = Format.sprintf "%s::%s_%s" fixtures_file test_name network in
+          (fun (name, fixtures, post_state) ->
             let fixtures = update_fixtures fixtures post_state in
             (name, test_case_to_yojson fixtures) )
           test_results
@@ -229,9 +231,7 @@ let () =
         match Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file fixtures_file) with
         | Error place -> failwith (Format.sprintf "Error when decoding %s" place)
         | Ok tests ->
-            List.filter
-              (fun (_name, test_case) -> test_case.Fixtures.BlockchainTest.network = "MONAD_EIGHT")
-              tests
+            List.filter (fun (_name, test_case) -> Fixtures.BlockchainTest.is_active_revision test_case) tests
       in
       if List.is_empty blockchain_tests then Format.printf "No valid tests found in %s!\n" fixtures_file ;
       if not (run_blockchain_tests blockchain_tests) then (Format.printf "Some tests failed\n" ; exit (-1))
