@@ -1,0 +1,1 @@
+include Libmonadml_evm_template.Stubs (Libmonadml_evm_stubs_generated)

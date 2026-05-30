@@ -1,0 +1,47 @@
+(library
+ (name c_evmc_template)
+ (libraries monad_lib common ctypes ctypes-foreign)
+ (modules c_evmc_template))
+
+(executable
+ (name c_evmc_gen_gen)
+ (libraries monad_lib c_evmc_template common ctypes)
+ (modules c_evmc_gen_gen))
+
+(rule
+ (deps c_evmc_gen_gen.exe)
+ (targets c_evmc_gen.c)
+ (action
+  (run %{exe:c_evmc_gen_gen.exe} %{targets})))
+
+(rule
+ (deps
+  (:src c_evmc_gen.c)
+  (source_tree %{project_root}/third_party/evmc/include/))
+ (targets c_evmc_gen.exe)
+ (action
+  (run
+   %{cc}
+   -I
+   %{ocaml_where}
+   -I
+   %{lib:ctypes:./}
+   -I
+   %{project_root}/third_party/evmc/include
+   -o
+   %{targets}
+   %{src})))
+
+(rule
+ (deps
+  (:gen c_evmc_gen.exe))
+ (targets c_evmc_generated.ml)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run %{gen}))))
+
+(library
+ (name c_evmc)
+ (libraries monad_lib common c_evmc_template)
+ (modules c_evmc c_evmc_generated))

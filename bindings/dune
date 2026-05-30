@@ -1,0 +1,4 @@
+(library
+ (name common)
+ (libraries monad_lib ctypes ctypes.stubs ctypes-foreign)
+ (modules common))
