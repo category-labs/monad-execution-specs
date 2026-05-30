@@ -27,9 +27,11 @@ module Result = struct
       | Wasm_unreachable_instruction
       | Wasm_trap
       | Insufficient_balance
+      | Monad_reserve_balance_violation
       | Internal_error
       | Rejected
       | Out_of_memory
+      (* TODO *)
       | Create_from_delegated_eoa
 
     let to_string = function
@@ -51,6 +53,7 @@ module Result = struct
       | Wasm_unreachable_instruction -> "Wasm unreachable instruction"
       | Wasm_trap -> "Wasm trap"
       | Insufficient_balance -> "Insufficient balance"
+      | Monad_reserve_balance_violation -> "Monad reserve balance violation"
       | Internal_error -> "Internal error"
       | Rejected -> "Rejected"
       | Out_of_memory -> "Out of memory"

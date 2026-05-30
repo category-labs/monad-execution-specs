@@ -154,6 +154,11 @@ struct
 
   let ( .$() ) (bs : t) i = (bs :> string).[i]
 
+  let map (f : char -> char) (bs : t) = init (fun i -> f bs.$(i))
+  let mapi (f : int -> char -> char) (bs : t) = init (fun i -> f i bs.$(i))
+  let iter (f : char -> unit) (bs : t) = String.iter f (bs :> string)
+  let iteri (f : int -> char -> unit) (bs : t) = String.iteri f (bs :> string)
+
   let reverse (bs : t) =
     let byte_i i = bs.$(byte_width - i - 1) in
     init byte_i
