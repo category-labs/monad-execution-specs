@@ -1,0 +1,37 @@
+(library
+ (name libmonadml_evm_template)
+ (libraries monad_lib common c_evmc ctypes ctypes.stubs)
+ (modules libmonadml_evm_template))
+
+(executable
+ (name libmonadml_evm_gen)
+ (libraries libmonadml_evm_template)
+ (modules libmonadml_evm_gen))
+
+(rule
+ (deps libmonadml_evm_gen.exe)
+ (targets
+  libmonadml_evm_stubs_generated.ml
+  libmonadml_evm_stubs_generated.c
+  libmonadml_evm_stubs_generated.h)
+ (action
+  (run %{exe:libmonadml_evm_gen.exe} libmonadml_evm_stubs_generated)))
+
+(executable
+ (name libmonadml_evm)
+ (libraries libmonadml_evm_template)
+ (modules libmonadml_evm libmonadml_evm_stubs_generated)
+ (foreign_stubs
+  (language c)
+  (include_dirs %{project_root}/third_party/evmc/include)
+  ; Suppress unused variable errors in generated stubs (C)
+  (flags
+   (-g -Wno-unused-variable -Wno-visibility))
+  (names libmonadml_evm_stubs_generated))
+ ; Suppress unused variable errors in generated stubs (OCaml)
+ (flags
+  (:standard -g -linkall -w -27))
+ (preprocess
+  (pps lens.ppx_deriving ppx_deriving_yojson))
+ (modes
+  (native shared_object)))
