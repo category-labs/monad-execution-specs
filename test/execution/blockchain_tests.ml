@@ -21,32 +21,12 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
   (* Tests disabled at the folder level. None of the fixtures inside these folders will be executed. Note that
      only the test fixtures directly inside the folders will be disabled, fixtures in subfolders will be
      executed normally. *)
-  let disabled_tests =
-    String.Set.of_list
-      [ (* MIP-4. *)
-        "mf_tests/monad_nine/mip4_checkreservebalance/fork_transition"
-      ; "mf_tests/monad_nine/mip4_checkreservebalance/tx_revert"
-      ; "mf_tests/monad_nine/mip4_checkreservebalance/transfers"
-      ; "mf_tests/monad_nine/mip4_checkreservebalance/precompile_call"
-      ; "mf_tests/monad_nine/mip4_checkreservebalance/multi_block"
-      ] [@ocamlformat "disable"]
-  in
+  let disabled_tests = String.Set.empty in
   (* Tests disabled at the individual test fixture or revision level, specified as a mapping from the test
      folder plus fixture index to the list of revisions for which the tests are to be run (or an empty list
      to suppress the entire test fixture file). Alcotest's filter mechanism does not provide the actual
      filename, just the test family name and the test index. *)
-  let enabled_revisions_map =
-    Test_entry.Map.of_list
-      [ (* MIP-4 *)
-        (("mf_tests/frontier/precompiles/precompiles", 0), [`Eight])
-      ; (("mf_tests/shanghai/eip4895_withdrawals/withdrawals", 10), [`Eight])
-      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 1), [`Eight])
-      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs_2", 15), [`Eight])
-      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 40), [`Eight])
-      ; (("mf_tests/prague/eip7702_set_code_tx/set_code_txs", 41), [`Eight])
-      ; (("mf_tests/berlin/eip2929_gas_cost_increases/precompile_warming", 0), [`Eight])
-      ] [@ocamlformat "disable"]
-  in
+  let enabled_revisions_map = Test_entry.Map.empty in
   fun (name, idx) ->
     if String.Set.mem name disabled_tests then []
     else

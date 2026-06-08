@@ -3,7 +3,6 @@
 open Byte_string
 open Numeric
 open Chain.Ethereum
-
 open Utils
 
 let ecrecover_address = Address.of_hex_string "0x01"
@@ -109,27 +108,67 @@ let blake2f (msg : Evmc.Message.t) : Evmc.Result.t =
        (* YP (295) *)
        Iarray.to_list result |> List.map le_8 |> Bytes.(concat empty) |> return ) )
 
-(* π in YP (142) corresponds to the set of keys of this map. *)
-let precompiles (revision : Chain.Monad.Revision.active) : precompile Address.Map.t =
-  let module Modexp = Modexp.Make (struct
-    let revision = revision
-  end) in
-  Address.Map.of_list
-    [ (ecrecover_address, ecrecover)
-    ; (sha256_address, sha256)
-    ; (ripemd160_address, ripemd160)
-    ; (identity_address, identity)
-    ; Modexp.(address, precompile)
-    ; Alt_bn128.(add_address, add)
-    ; Alt_bn128.(mul_address, mul)
-    ; Alt_bn128.(pairing_check_address, pairing_check)
-    ; (blake2f_address, blake2f)
-    ; Point_evaluation.(address, precompile)
-    ; Bls12_381.(g1_add_address, g1_add)
-    ; Bls12_381.(g1_msm_address, g1_msm)
-    ; Bls12_381.(g2_add_address, g2_add)
-    ; Bls12_381.(g2_msm_address, g2_msm)
-    ; Bls12_381.(pairing_check_address, pairing_check)
-    ; Bls12_381.(map_fp_to_g1_address, map_fp_to_g1)
-    ; Bls12_381.(map_fp2_to_g2_address, map_fp2_to_g2)
-    ; Secp256r1.(address, verify) ]
+module Make (Revision : sig
+  val revision : Chain.Monad.Revision.active
+end) =
+struct
+  open Revision
+
+  let ethereum_precompiles : ethereum_precompile Address.Map.t =
+    let module Modexp = Modexp.Make (Revision) in
+    Address.Map.of_list
+      [ (ecrecover_address, ecrecover)
+      ; (sha256_address, sha256)
+      ; (ripemd160_address, ripemd160)
+      ; (identity_address, identity)
+      ; Modexp.(address, precompile)
+      ; Alt_bn128.(add_address, add)
+      ; Alt_bn128.(mul_address, mul)
+      ; Alt_bn128.(pairing_check_address, pairing_check)
+      ; (blake2f_address, blake2f)
+      ; Point_evaluation.(address, precompile)
+      ; Bls12_381.(g1_add_address, g1_add)
+      ; Bls12_381.(g1_msm_address, g1_msm)
+      ; Bls12_381.(g2_add_address, g2_add)
+      ; Bls12_381.(g2_msm_address, g2_msm)
+      ; Bls12_381.(pairing_check_address, pairing_check)
+      ; Bls12_381.(map_fp_to_g1_address, map_fp_to_g1)
+      ; Bls12_381.(map_fp2_to_g2_address, map_fp2_to_g2)
+      ; Secp256r1.(address, verify) ]
+
+  let monad_precompiles : monad_precompile Address.Map.t =
+    let module Reserve_balance_introspection = Reserve_balance_introspection.Make (Revision) in
+    match revision with
+    | `Eight -> Address.Map.empty
+    | `Nine -> Address.Map.of_list [Reserve_balance_introspection.(address, precompile)]
+
+  (* π in YP (142). *)
+  let precompile_addresses : Address.Set.t =
+    Address.Set.union (Address.Map.keys ethereum_precompiles) (Address.Map.keys monad_precompiles)
+
+  let try_precompile (msg : Evmc.Message.t) (address : Address.t) :
+      Evmc.Result.t State.TransactionState.M.t option =
+    let open State.TransactionState.M in
+    match Address.Map.find_opt address ethereum_precompiles with
+    | Some _precompile when msg.delegated ->
+        (* As per EIP-7702, Ethereum precompiles called through a delegation return as if they had executed
+           a single STOP instruction. *)
+        Some
+          (return
+             Evmc.Result.
+               { status_code = Success
+               ; gas_left = msg.gas
+               ; gas_refund = 0L
+               ; output_data = Bytes.empty
+               ; create_address = Address.zero } )
+    | Some precompile -> Some (return (precompile msg))
+    | None -> (
+      match Address.Map.find_opt address monad_precompiles with
+      | Some _precompile when msg.delegated || msg.static || msg.kind <> Call ->
+          (* Monad precompiles fail unless they're called via a non-delegated, non-static CALL operation.
+            STATICCALL, DELEGATECALL and CALLCODE, as well as regular CALLs that hit an EIP-7702 delegation
+            will cause the precompile to fail. *)
+          Some (return Evmc.Result.(failure Rejected))
+      | Some precompile -> Some (precompile msg)
+      | None -> None )
+end

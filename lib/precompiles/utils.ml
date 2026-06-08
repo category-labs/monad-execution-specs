@@ -4,7 +4,14 @@ open Byte_string
 open Numeric
 open Chain.Ethereum
 
-type precompile = Evmc.Message.t -> Evmc.Result.t
+module M = State.TransactionState.M
+
+(** The type of an Ethereum precompile implementation. *)
+type ethereum_precompile = Evmc.Message.t -> Evmc.Result.t
+
+(** The type of a Monad-specific precompile implementation. Unlike Ethereum precompiles, which are always pure
+    functions, Monad precompiles may inspect and modify the transaction state. *)
+type monad_precompile = Evmc.Message.t -> Evmc.Result.t M.t
 
 (** A state/result monad for executing Ethereum precompiles. This includes primitives for parsing the message's
     input data, validating gas and checking precompile-specific preconditions. *)
