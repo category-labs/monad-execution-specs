@@ -4,7 +4,7 @@ open Numeric
 open Byte_string
 open Chain.Ethereum
 open Chain.Monad
-open Host
+open State
 
 module ChainParams = struct
   let chain_id = Mainnet.chain_id

@@ -68,6 +68,7 @@ let read_source place =
 let bytecode = read_source bytecode_source
 let calldata = read_source calldata_source
 
+(* TODO: Add proper sender encoding. *)
 let sender = Address.zero
 
 let gas_limit = Uint.of_uint64 !gas_limit
@@ -95,10 +96,14 @@ module Execution = Execution.Make (Params)
 
 let () =
   let result, _state =
-    let world_state = Host.WorldState.empty in
-    let block_state = Host.BlockState.make world_state block in
-    let transaction_state = Host.TransactionState.make block_state Address.zero tx in
-    let msg = {(Execution.prepare_message sender gas_limit tx) with code = bytecode; input_data = calldata} in
+    let world_state = State.WorldState.empty in
+    let block_state = State.BlockState.make world_state block in
+    let transaction_state = State.TransactionState.make block_state sender tx in
+    let msg =
+      (* TODO: once the evmc update removes the `code` field, the invocation should go directly to Vm.execute
+       instead of Host.call_from_eoa to circumvent that. *)
+      {(Execution.prepare_message sender gas_limit tx world_state) with code = bytecode; input_data = calldata}
+    in
     Execution.Vm.execute msg bytecode transaction_state
   in
   if !gc_stats then Gc.print_stat Out_channel.stdout ;
