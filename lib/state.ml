@@ -202,6 +202,7 @@ module TransactionState = struct
     ; accounts_created_in_current_transaction : Address.Set.t
     ; tx_origin : Address.t
     ; tx_gas_price : Gas.t
+    ; tx_gas_limit : Gas.t
     ; self_destruct : Address.Set.t  (** A_s *)
     ; logs : Log.t list  (** A_l, in reverse order *)
     ; refund : U256.t  (** A_r *)
@@ -223,6 +224,7 @@ module TransactionState = struct
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; tx_origin = Address.zero
     ; tx_gas_price = Gas.zero
+    ; tx_gas_limit = Gas.zero
     ; self_destruct = Address.Set.empty
     ; logs = []
     ; refund = U256.zero
@@ -241,7 +243,8 @@ module TransactionState = struct
     ; transient_storage = Address.Map.empty
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; tx_origin = sender
-    ; tx_gas_price }
+    ; tx_gas_price
+    ; tx_gas_limit = Transaction.gas_limit tx }
 
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
 
