@@ -363,8 +363,10 @@ struct
         assert (U64.(nonce < max_t)) ;
         U64.(nonce + one) )
 
+  let precompiles = Precompiles.precompiles ChainParams.revision
+
   let try_precompile (address : Address.t) (msg : Evmc.Message.t) ~otherwise =
-    match Address.Map.find_opt address (Precompiles.precompiles ChainParams.revision) with
+    match Address.Map.find_opt address precompiles with
     | Some precompile when not msg.delegated -> return (precompile msg)
     | Some _ ->
         (* Delegated calls to precompiles are executed as if the corresponding contract was empty,

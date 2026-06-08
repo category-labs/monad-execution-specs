@@ -108,147 +108,164 @@ let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Resu
 let expect_ok (result : ('a, string) result) : 'a =
   match result with Ok value -> value | Error err -> Alcotest.fail err
 
-module Params = struct
+module type PARAMS = sig
+  val chain_id : Uint.t
+  val revision : Chain.Monad.Revision.active
+  val trace : bool
+  val debug_tstore : bool
+end
+
+module Monad_eight : PARAMS = struct
+  let chain_id = Chain.Monad.Testnet.chain_id
+  let revision = `Eight
+  let trace = false
+  let debug_tstore = false
+end
+
+module Monad_nine : PARAMS = struct
   let chain_id = Chain.Monad.Testnet.chain_id
   let revision = `Nine
   let trace = false
   let debug_tstore = false
 end
 
-module Evm = struct
-  module Evm0 = Host.Instantiate (Params) (Vm.Make (Params))
+module Make (P : PARAMS) = struct
+  module Evm = struct
+    module Evm0 = Host.Instantiate (P) (Vm.Make (P))
 
-  (* Unfold one level of recursion to get access to the full signature of Vm *)
-  module Vm = Vm.Make (Params) (Evm0.Host)
-  module Host = Host.Make (Params) (Vm)
-end
+    (* Unfold one level of recursion to get access to the full signature of Vm *)
+    module Vm = Vm.Make (P) (Evm0.Host)
+    module Host = Host.Make (P) (Vm)
+  end
+  module Vm = Evm.Vm
 
-let test_message
-    ?(prepare_env : Host.TransactionState.t -> Host.TransactionState.t = Fun.id)
-    ?(prepare_vm : unit Evm.Vm.M.t = Evm.Vm.M.return ())
-    ?(check_vm_state : unit Evm.Vm.M.t option)
-    ?(check_env_state : Host.TransactionState.t -> unit = fun _ -> ())
-    ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
-    (msg : Evmc.Message.t) =
-  (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
+  let test_message
+      ?(prepare_env : Host.TransactionState.t -> Host.TransactionState.t = Fun.id)
+      ?(prepare_vm : unit Evm.Vm.M.t = Evm.Vm.M.return ())
+      ?(check_vm_state : unit Evm.Vm.M.t option)
+      ?(check_env_state : Host.TransactionState.t -> unit = fun _ -> ())
+      ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
+      (msg : Evmc.Message.t) =
+    (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
      With better VM instrumentation we can remove the duplication *)
-  let action =
-    let open Evm.Host in
-    let open Monad.State (Host.TransactionState) in
-    let$ tx_context = get_tx_context in
-    let$ host = get in
-    let module Exe = Evm.Vm.Executor (struct
-      let execution_environment = Evm.Vm.ExecutionEnvironment.make tx_context msg msg.code
-    end) in
-    let gas = Gas.of_uint64 msg.gas in
-    let memory_capacity = Uint.of_uint32 msg.memory_capacity in
-    let state = Evm.Vm.MachineState.initial ~host ~gas ~memory_capacity in
-    let res, state =
-      Evm.Vm.M.(
-        let$ () = prepare_vm in
-        let$ () = Exe.run in
-        match check_vm_state with None -> return () | Some check -> check )
-        state
-    in
-    check_env_state state.host ;
-    let$ () = put state.host in
-    return
-      ( match res with
-      | Ok () ->
-          Evmc.Result.
-            { status_code = Success
-            ; gas_left = Uint.to_uint64 state.gas
-            ; gas_refund = Integer.to_int64 state.gas_refund
-            ; output_data = state.output_buffer
-            ; create_address = Address.zero }
-      | Error err -> (
-        match err with
-        | Success -> assert false
-        | Revert ->
-            (* If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
-               buffer is returned, see YP (152) *)
+    let action =
+      let open Evm.Host in
+      let open Monad.State (Host.TransactionState) in
+      let$ tx_context = get_tx_context in
+      let$ host = get in
+      let module Exe = Evm.Vm.Executor (struct
+        let execution_environment = Evm.Vm.ExecutionEnvironment.make tx_context msg msg.code
+      end) in
+      let gas = Gas.of_uint64 msg.gas in
+      let memory_capacity = Uint.of_uint32 msg.memory_capacity in
+      let state = Evm.Vm.MachineState.initial ~host ~gas ~memory_capacity in
+      let res, state =
+        Evm.Vm.M.(
+          let$ () = prepare_vm in
+          let$ () = Exe.run in
+          match check_vm_state with None -> return () | Some check -> check )
+          state
+      in
+      check_env_state state.host ;
+      let$ () = put state.host in
+      return
+        ( match res with
+        | Ok () ->
             Evmc.Result.
-              { status_code = err
+              { status_code = Success
               ; gas_left = Uint.to_uint64 state.gas
-              ; gas_refund = 0L
+              ; gas_refund = Integer.to_int64 state.gas_refund
               ; output_data = state.output_buffer
               ; create_address = Address.zero }
-        | _ -> Evmc.Result.failure err ) )
-  in
-  let result, state = action (prepare_env Host.TransactionState.empty) in
-  (* If the caller specified a VM postcondition but execution finished with an early abort,
+        | Error err -> (
+          match err with
+          | Success -> assert false
+          | Revert ->
+              (* If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
+                 buffer is returned, see YP (152) *)
+              Evmc.Result.
+                { status_code = err
+                ; gas_left = Uint.to_uint64 state.gas
+                ; gas_refund = 0L
+                ; output_data = state.output_buffer
+                ; create_address = Address.zero }
+          | _ -> Evmc.Result.failure err ) )
+    in
+    let result, state = action (prepare_env Host.TransactionState.empty) in
+    (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
-  if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
-  check_result result ;
-  (result, state)
+    if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
+    check_result result ;
+    (result, state)
 
-let bytecode_to_call_message code =
-  Evmc.(
-    Message.
-      { kind = CallKind.Call
-      ; delegated = false
-      ; static = false
-      ; depth = 0l
-      ; gas = 100_000_000L
-      ; recipient = Address.zero
-      ; sender = Address.zero
-      ; input_data = Bytes.empty
-      ; value = U256.of_int 1000
-      ; create2_salt = B32.zeros
-      ; code_address = Address.zero
-      ; code
-      ; memory_capacity = Uint.to_uint32 Evm.Vm.Memory.max_memory_usage } )
+  let bytecode_to_call_message code =
+    Evmc.(
+      Message.
+        { kind = CallKind.Call
+        ; delegated = false
+        ; static = false
+        ; depth = 0l
+        ; gas = 100_000_000L
+        ; recipient = Address.zero
+        ; sender = Address.zero
+        ; input_data = Bytes.empty
+        ; value = U256.of_int 1000
+        ; create2_salt = B32.zeros
+        ; code_address = Address.zero
+        ; code
+        ; memory_capacity = Uint.to_uint32 Evm.Vm.Memory.max_memory_usage } )
 
-let expect_stack expected_stack =
-  let open Evm.Vm.M in
-  let$ stack = !Evm.Vm.MachineState.stack in
-  Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
-    ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
-  return
-    (List.iteri
-       (fun i (expected, actual) ->
-         Alcotest.check' u256 ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
-       (List.combine expected_stack stack) )
+  let expect_stack expected_stack =
+    let open Evm.Vm.M in
+    let$ stack = !Evm.Vm.MachineState.stack in
+    Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
+      ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
+    return
+      (List.iteri
+         (fun i (expected, actual) ->
+           Alcotest.check' u256 ~msg:(Format.sprintf "Output %d is correct" i) ~expected ~actual )
+         (List.combine expected_stack stack) )
 
-let test_bytecode_pure bc ~input_stack ~output_stack =
-  let input_stack_depth = List.length input_stack in
-  let open Evm.Vm.M in
-  let msg = bytecode_to_call_message bc in
-  ignore
-    (test_message
-       ~prepare_vm:
-         (let$ () = Evm.Vm.MachineState.stack := input_stack in
-          Evm.Vm.MachineState.stack_depth := input_stack_depth )
-       ~check_vm_state:(expect_stack output_stack) msg )
+  let test_bytecode_pure bc ~input_stack ~output_stack =
+    let input_stack_depth = List.length input_stack in
+    let open Evm.Vm.M in
+    let msg = bytecode_to_call_message bc in
+    ignore
+      (test_message
+         ~prepare_vm:
+           (let$ () = Evm.Vm.MachineState.stack := input_stack in
+            Evm.Vm.MachineState.stack_depth := input_stack_depth )
+         ~check_vm_state:(expect_stack output_stack) msg )
 
-let opcode_test_name opcode inputs output =
-  let inputs = List.map U256.to_hex_string inputs |> String.concat ", " in
-  Format.sprintf "%s(%s) -> %s" (Opcode.to_string opcode) inputs (U256.to_hex_string output)
+  let opcode_test_name opcode inputs output =
+    let inputs = List.map U256.to_hex_string inputs |> String.concat ", " in
+    Format.sprintf "%s(%s) -> %s" (Opcode.to_string opcode) inputs (U256.to_hex_string output)
 
-let test_case_opcode_1 opcode x_0 y =
-  let test_name = opcode_test_name opcode [x_0] y in
-  let bc = Bytes.make 1 (Opcode.to_byte opcode) in
-  Alcotest.test_case test_name `Quick (fun () -> test_bytecode_pure bc ~input_stack:[x_0] ~output_stack:[y])
+  let test_case_opcode_1 opcode x_0 y =
+    let test_name = opcode_test_name opcode [x_0] y in
+    let bc = Bytes.make 1 (Opcode.to_byte opcode) in
+    Alcotest.test_case test_name `Quick (fun () -> test_bytecode_pure bc ~input_stack:[x_0] ~output_stack:[y])
 
-let test_case_opcode_2 opcode x_0 x_1 y =
-  let test_name = opcode_test_name opcode [x_0; x_1] y in
-  let bc = Bytes.make 1 (Opcode.to_byte opcode) in
-  Alcotest.test_case test_name `Quick (fun () ->
-      test_bytecode_pure bc ~input_stack:[x_0; x_1] ~output_stack:[y] )
+  let test_case_opcode_2 opcode x_0 x_1 y =
+    let test_name = opcode_test_name opcode [x_0; x_1] y in
+    let bc = Bytes.make 1 (Opcode.to_byte opcode) in
+    Alcotest.test_case test_name `Quick (fun () ->
+        test_bytecode_pure bc ~input_stack:[x_0; x_1] ~output_stack:[y] )
 
-let test_case_opcode_3 opcode x_0 x_1 x_2 y =
-  let test_name = opcode_test_name opcode [x_0; x_1; x_2] y in
-  let bc = Bytes.make 1 (Opcode.to_byte opcode) in
-  Alcotest.test_case test_name `Quick (fun () ->
-      test_bytecode_pure bc ~input_stack:[x_0; x_1; x_2] ~output_stack:[y] )
+  let test_case_opcode_3 opcode x_0 x_1 x_2 y =
+    let test_name = opcode_test_name opcode [x_0; x_1; x_2] y in
+    let bc = Bytes.make 1 (Opcode.to_byte opcode) in
+    Alcotest.test_case test_name `Quick (fun () ->
+        test_bytecode_pure bc ~input_stack:[x_0; x_1; x_2] ~output_stack:[y] )
 
-let test_cases_opcode_1 opcode cases =
-  (Opcode.to_string opcode, List.map (fun (x_0, y) -> test_case_opcode_1 opcode x_0 y) cases)
-let test_cases_opcode_2 opcode cases =
-  (Opcode.to_string opcode, List.map (fun ((x_0, x_1), y) -> test_case_opcode_2 opcode x_0 x_1 y) cases)
-let test_cases_opcode_3 opcode cases =
-  ( Opcode.to_string opcode
-  , List.map (fun ((x_0, x_1, x_2), y) -> test_case_opcode_3 opcode x_0 x_1 x_2 y) cases )
+  let test_cases_opcode_1 opcode cases =
+    (Opcode.to_string opcode, List.map (fun (x_0, y) -> test_case_opcode_1 opcode x_0 y) cases)
+  let test_cases_opcode_2 opcode cases =
+    (Opcode.to_string opcode, List.map (fun ((x_0, x_1), y) -> test_case_opcode_2 opcode x_0 x_1 y) cases)
+  let test_cases_opcode_3 opcode cases =
+    ( Opcode.to_string opcode
+    , List.map (fun ((x_0, x_1, x_2), y) -> test_case_opcode_3 opcode x_0 x_1 x_2 y) cases )
+end
 
 let ( $/ ) path file = Filename.concat path file
 
