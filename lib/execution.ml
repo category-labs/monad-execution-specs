@@ -66,24 +66,26 @@ struct
   module Instantiation = Host.Instantiate (Params) (Vm.Make (VmParams))
   module Host = Instantiation.Host
   module Vm = Vm.Make (VmParams) (Host)
+  module Precompiles = Precompiles.Make (Params)
 
-  (** [prepare_message s g tx] creates an {!Evmc.Message.t} object corresponding to the transaction [tx]. *)
-  let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
-    let kind, current_target, data, code, code_address =
+  (** [prepare_message s g tx w] creates an {!Evmc.Message.t} object corresponding to the transaction [tx]. *)
+  let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) (world_state : WorldState.t) =
+    let kind, current_target, data, code_address =
       match Transaction.call_or_create tx with
-      | Call {to_; data} -> (Evmc.Message.CallKind.Call, to_, data, Bytes.empty, to_)
-      | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, initcode, Bytes.empty, Address.zero)
+      | Call {to_; data} -> (Evmc.Message.CallKind.Call, to_, data, to_)
+      | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, initcode, Address.zero)
     in
+    let delegated = Delegation.is_valid_delegation world_state.^(WorldState.account code_address).code in
     Evmc.Message.
       { kind
       ; sender
       ; recipient = current_target
       ; value = Transaction.value tx
       ; gas = Gas.to_int64 gas
-      ; code
+      ; code = Bytes.empty (* Pending removal once evmc.ml matches Monad's EVMC. *)
       ; code_address
       ; static = false
-      ; delegated = Delegation.is_valid_delegation code
+      ; delegated
       ; input_data = data
       ; depth = 0l
       ; create2_salt = B32.zeros
@@ -296,13 +298,12 @@ struct
          recipient changes delegation, it is the new delegation that is warmed up. *)
       (* YP (77) *)
       let transaction_state =
-        let precompile_addresses = Address.Map.keys (Precompiles.precompiles Params.revision) in
-        TransactionState.initialize_access_sets tx transaction_state precompile_addresses
+        TransactionState.initialize_access_sets tx transaction_state Precompiles.precompile_addresses
       in
 
       (* YP (81) *)
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
-      let message = prepare_message sender available_gas tx in
+      let message = prepare_message sender available_gas tx transaction_state.world_state in
       (* YP (76) *)
       let result, transaction_state = Host.call_from_eoa tx message transaction_state in
 
@@ -455,6 +456,7 @@ struct
           ; accounts_created_in_current_transaction = Address.Set.empty
           ; tx_origin = system_sender_address
           ; tx_gas_price = Uint.zero
+          ; tx_gas_limit = Uint.zero
           ; self_destruct = Address.Set.empty
           ; logs = []
           ; refund = U256.zero
