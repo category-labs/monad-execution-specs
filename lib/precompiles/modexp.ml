@@ -117,8 +117,8 @@ struct
          let$ () =
            let gas_cost =
              (* EIP-2565 and EIP-7883 use a formula that would compute the least significant 256 bits, which is
-              known to be an editorial mistake. We follow the Ethereum execution spec, which instead uses the
-              most significant 256 bits. *)
+                known to be an editorial mistake. We follow the Ethereum execution spec, which instead uses the
+                most significant 256 bits. *)
              let exponent_upper_256_bits =
                let exponent_start = Uint.(~$base_start + base_length) in
                U256.to_uint

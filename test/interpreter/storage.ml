@@ -1,5 +1,6 @@
 open Test_utils
 open Test_utils.Utils
+open Make (Monad_nine)
 open Alcotest
 
 open Monad_lib.Numeric

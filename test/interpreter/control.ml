@@ -2,6 +2,7 @@ open Monad_lib.Numeric
 open Monad_lib.Byte_string
 
 open Test_utils.Utils
+open Make (Monad_nine)
 open Alcotest
 
 let test_bytecode_output (name, bytecode, output_stack) =

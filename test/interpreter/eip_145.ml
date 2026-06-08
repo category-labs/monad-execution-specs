@@ -1,4 +1,5 @@
 open Test_utils.Utils
+open Make (Monad_nine)
 open Monad_lib
 open Monad_lib.Numeric
 open Opcode

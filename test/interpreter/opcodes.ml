@@ -5,6 +5,7 @@ open Monad_lib.Byte_string
 
 open Test_utils
 open Test_utils.Utils
+open Make (Monad_nine)
 open Alcotest
 
 module Address = Monad_lib.Chain.Ethereum.Address
