@@ -18,6 +18,7 @@ module type FIELD = sig
   val ( - ) : t -> t -> t
   val ( * ) : t -> t -> t
   val ( / ) : t -> t -> t
+  val inv : t -> t
 end
 
 module type EUCLIDEAN_DOMAIN = sig
@@ -90,6 +91,12 @@ end = struct
     in
     loop u (one, zero) v (zero, one)
 
+  let inv (u : t) : t =
+    let inv_u, _inv_mod, gcd = bezout_coeffs (u :> D.t) Mod.modulus in
+    let inv_u, rem = D.(div_rem inv_u gcd) in
+    assert (D.(rem = zero)) ;
+    reduce inv_u
+
   let ( / ) (u : t) (v : t) =
     let inv_v, _inv_mod, gcd = bezout_coeffs (v :> D.t) Mod.modulus in
     let inv_v, rem = D.(div_rem inv_v gcd) in
@@ -105,6 +112,13 @@ end) =
 struct
   include Mod
   include Quotient_field (Integer) (Mod)
+
+  (* Faster inversion via Zarith. *)
+  let inv (u : t) = reduce (Integer.of_z_exn (Z.invert Integer.(to_z (u :> t)) Integer.(to_z modulus)))
+
+  let ( / ) (u : t) (v : t) =
+    let inv_v = Integer.of_z_exn (Z.invert Integer.(to_z (v :> t)) Integer.(to_z modulus)) in
+    reduce Integer.((u :> t) * inv_v)
 
   (* Returns None if the input is not already reduced. Useful for precompile input validation. *)
   let of_uint_opt (i : Uint.t) =
