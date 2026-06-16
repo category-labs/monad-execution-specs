@@ -226,7 +226,8 @@ module Polynomial (F : FIELD) = struct
   end
 end
 
-(* Polynomial field extensions over a field. *)
+(* Polynomial field extensions over a field. This could be specialized to perform reduction via multiplication
+   and addition, but in practice there is no improvement. *)
 module Polynomial_extension
     (F : FIELD)
     (Mod : sig
@@ -242,4 +243,58 @@ struct
   let const (p : F.t) = reduce (Underlying_ring.const p)
 
   let ( .$() ) (p : t) (i : int) : F.t = Underlying_ring.((p :> t).$(i))
+end
+
+(* Complex field extensions over a field. Equivalent to a polynomial extension, but more efficient. *)
+module Complex_extension (F : FIELD) = struct
+  type t = {re : F.t; im : F.t}
+
+  let ( = ) (x : t) (y : t) = F.(x.re = y.re) && F.(x.im = y.im)
+  let ( <> ) (x : t) (y : t) = F.(x.re <> y.re) || F.(x.im <> y.im)
+
+  let zero = {re = F.zero; im = F.zero}
+  let one = {re = F.one; im = F.zero}
+  let i = {re = F.zero; im = F.one}
+
+  let ( ~@ ) str = {re = F.(~@str); im = F.zero}
+  let ( ~$ ) x = {re = F.(~$x); im = F.zero}
+
+  let real x = {re = x; im = F.zero}
+  let imaginary x = {re = F.zero; im = x}
+
+  let conjugate {re; im} = {re; im = F.(zero - im)}
+  let norm {re; im} = F.((re * re) + (im * im))
+
+  let ( + ) x y = {re = F.(x.re + y.re); im = F.(x.im + y.im)}
+  let ( - ) x y = {re = F.(x.re - y.re); im = F.(x.im - y.im)}
+  let ( * ) x y = {re = F.((x.re * y.re) - (x.im * y.im)); im = F.((x.re * y.im) + (x.im * y.re))}
+
+  let inv x =
+    let x' = conjugate x in
+    let nx_inv = F.inv (norm x) in
+    {re = F.(x'.re * nx_inv); im = F.(x'.im * nx_inv)}
+
+  let ( / ) x y = x * inv y
+
+  (* When the underlying field supports efficient square roots, then so does its complex extension. *)
+  let sqrt_opt (sqrt_opt : F.t -> F.t option) =
+    let two = F.(one + one) in
+    fun (v : t) : t option ->
+      Option.(
+        let {re = a; im = b} = v in
+        if F.(b = zero) then
+          (* b = 0, return sqrt(a) (which may be imaginary). *)
+          match sqrt_opt a with
+          | Some y -> return (real y)
+          | None ->
+              (* Root must be imaginary. *)
+              let$ w = sqrt_opt F.(zero - a) in
+              return (imaginary w)
+        else
+          let$ r = sqrt_opt F.((a * a) + (b * b)) in
+          let$ c =
+            match sqrt_opt F.((a + r) / two) with Some c -> return c | None -> sqrt_opt F.((a - r) / two)
+          in
+          let d = F.(b / (two * c)) in
+          return {re = c; im = d} )
 end

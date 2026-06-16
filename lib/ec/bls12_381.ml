@@ -14,7 +14,6 @@ module F_p = struct
   include Prime_field (struct
     let modulus = Uint.as_signed p
   end)
-
   let sqrt_opt = Option.get sqrt_opt
 end
 
@@ -39,45 +38,8 @@ end)
 
 (* Fₚ₂ = Fₚ[i]/(i² + 1) *)
 module F_p2 = struct
-  include
-    Polynomial_extension
-      (F_p)
-      (struct
-        let modulus =
-          let open Polynomial_ring (F_p) in
-          (monomial_x * monomial_x) + one
-      end)
-
-  let i = monomial_x
-
-  let components (u : t) = (u.$(0), u.$(1))
-
-  (* Square root in F_p2 = Fₚ[i]/(i²+1).
-     Let v = a + bi.
-       - If b = 0, we take the square root of a or -a in Fₚ
-       - If b ≠ 0, then sqrt(a + bi) = sqrt((a±r)/2) + (b/(2c))i *)
-  let sqrt_opt =
-    let two = F_p.(one + one) in
-    fun (v : t) : t option ->
-      Option.(
-        let a, b = components v in
-        if F_p.(b = zero) then
-          (* b = 0, return sqrt(a) (which may be imaginary). *)
-          match F_p.sqrt_opt a with
-          | Some y -> return (const y)
-          | None ->
-              (* Root must be imaginary. *)
-              let$ w = F_p.(sqrt_opt (zero - a)) in
-              return (i * const w)
-        else
-          let$ r = F_p.(sqrt_opt ((a * a) + (b * b))) in
-          let$ c =
-            match F_p.(sqrt_opt ((a + r) / two)) with
-            | Some c -> return c
-            | None -> F_p.(sqrt_opt ((a - r) / two))
-          in
-          let d = F_p.(b / (two * c)) in
-          return (const c + (i * const d)) )
+  include Complex_extension (F_p)
+  let sqrt_opt = sqrt_opt F_p.sqrt_opt
 end
 
 (* G2 twisted curve: y² = x³ + (4 + 4u) over Fₚ₂ *)
@@ -152,10 +114,8 @@ let twist (pt : G_2.t) : BLS12_Pairing.C_12.t =
   match (pt :> C_2.t) with
   | Infinity -> BLS12_Pairing.C_12.Infinity
   | Point (xq, yq) ->
-      let x0, x1 = F_p2.components xq in
-      let y0, y1 = F_p2.components yq in
-      let tx = F_p12.((const F_p.(x0 - x1) * winv2) + (const x1 * w4)) in
-      let ty = F_p12.((const F_p.(y0 - y1) * winv3) + (const y1 * w3)) in
+      let tx = F_p12.((const F_p.(xq.re - xq.im) * winv2) + (const xq.im * w4)) in
+      let ty = F_p12.((const F_p.(yq.re - yq.im) * winv3) + (const yq.im * w3)) in
       BLS12_Pairing.C_12.Point (tx, ty)
 
 (* Embed a G1 point (over Fₚ) into BLS12_Pairing.C_12 as a constant. *)
@@ -360,10 +320,9 @@ module F_p2_SWU =
 
       (* As sgn0_m_eq_2 in RFC-9380 §4.1. *)
       let sgn0 (x : t) =
-        let x_0, x_1 = (x.$(0), x.$(1)) in
-        let sign_0 = Integer.(modulo (x_0 :> t) ~$2 = one) in
-        let zero_0 = F_p.(x_0 = zero) in
-        let sign_1 = Integer.(modulo (x_1 :> t) ~$2 = one) in
+        let sign_0 = Integer.(modulo (x.re :> t) ~$2 = one) in
+        let zero_0 = F_p.(x.re = zero) in
+        let sign_1 = Integer.(modulo (x.im :> t) ~$2 = one) in
         sign_0 || (zero_0 && sign_1)
     end)
 

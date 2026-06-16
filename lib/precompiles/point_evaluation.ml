@@ -88,12 +88,11 @@ let decompress_G2 (bs : B96.t) : G_2.t option =
          to a canonical representation. Therefore we reject inputs that are not reduced modulo p. *)
       let$ x_c1 : F_p.t = F_p.of_uint_opt Uint.(modulo (of_bytes_be (Bytes.sub bs 0 48)) (~$2 ** 381)) in
       let$ x_c0 : F_p.t = F_p.of_uint_opt Uint.(of_bytes_be (Bytes.sub bs 48 48)) in
-      let x : F_p2.t = F_p2.(const x_c0 + (i * const x_c1)) in
+      let x : F_p2.t = F_p2.{re = x_c0; im = x_c1} in
       (* Solve y^2 = x^3 + (4 + 4i) for y. *)
       let$ y : F_p2.t =
         let$ y_abs = F_p2.(sqrt_opt ((x * x * x) + (~$4 + (i * ~$4)))) in
-        let y_im = F_p2.(y_abs.$(1)) in
-        let y_re = F_p2.(y_abs.$(0)) in
+        let F_p2.{im = y_im; re = y_re} = y_abs in
         let dominant = if F_p.(y_im <> zero) then y_im else y_re in
         let sign_y = Integer.((dominant :> Integer.t) * ~$2 >= Uint.as_signed p) in
         return (if sign_y <> negative then F_p2.(zero - y_abs) else y_abs)

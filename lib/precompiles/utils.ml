@@ -131,10 +131,7 @@ module Ec_precompile_utils (M : sig
   end
 
   module F_p2 : sig
-    include Ec.Algebra.FIELD
-    val i : t
-    val const : F_p.t -> t
-    val ( .$() ) : t -> int -> F_p.t
+    type t = {re : F_p.t; im : F_p.t}
   end
   module C_2 : Ec.Curve.SIG with type Underlying.t = F_p2.t
   module G_2 : sig
@@ -177,7 +174,7 @@ struct
         let$ y = Uint.of_bytes_be <$> (M.C1_coord_repr.to_bytes <$> byte_reader (module M.C1_coord_repr)) in
         Option.or_fail (F_p.of_uint_opt y)
       in
-      return F_p2.(const x + (i * const y)) )
+      return F_p2.{re = x; im = y} )
 
   let point_c2 =
     Precompile.(
@@ -211,7 +208,5 @@ struct
   (* Inverse of YP (262) *)
   let delta_2_inv (p : C_2.t) =
     let x, y = C_2.(coords p) in
-    let x_re, x_im = F_p2.(x.$(0), x.$(1)) in
-    let y_re, y_im = F_p2.(y.$(0), y.$(1)) in
-    [x_re; x_im; y_re; y_im] |> List.map c1_coord_to_repr |> Bytes.(concat empty)
+    [x.re; x.im; y.re; y.im] |> List.map c1_coord_to_repr |> Bytes.(concat empty)
 end

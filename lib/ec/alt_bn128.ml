@@ -29,20 +29,7 @@ module G_1 = C_1.Subgroup (struct
 end)
 
 (* Fₚ₂ = Fₚ[i]/(i²+1) *)
-module F_p2 = struct
-  include
-    Polynomial_extension
-      (F_p)
-      (struct
-        let modulus =
-          let open Polynomial_ring (F_p) in
-          (monomial_x * monomial_x) + one
-      end)
-
-  let i = monomial_x
-
-  let components (u : t) = (u.$(0), u.$(1))
-end
+module F_p2 = Complex_extension (F_p)
 
 (* YP (253) *)
 module C_2 =
@@ -121,12 +108,10 @@ let twist =
     match (pt :> C_2.t) with
     | Infinity -> BN128_Pairing.C_12.Infinity
     | Point (xq, yq) ->
-        let x0, x1 = F_p2.components xq in
-        let y0, y1 = F_p2.components yq in
-        let nx_c0 = F_p.(x0 - (~$9 * x1)) in
-        let ny_c0 = F_p.(y0 - (~$9 * y1)) in
-        let nx = F_p12.(const nx_c0 + (const x1 * w6)) in
-        let ny = F_p12.(const ny_c0 + (const y1 * w6)) in
+        let nx_c0 = F_p.(xq.re - (~$9 * xq.im)) in
+        let ny_c0 = F_p.(yq.re - (~$9 * yq.im)) in
+        let nx = F_p12.(const nx_c0 + (const xq.im * w6)) in
+        let ny = F_p12.(const ny_c0 + (const yq.im * w6)) in
         let tx = F_p12.(nx * w2) in
         let ty = F_p12.(ny * w3) in
         BN128_Pairing.C_12.Point (tx, ty)
