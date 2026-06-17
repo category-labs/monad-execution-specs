@@ -215,11 +215,14 @@ module F_p_SWU_curve = struct
   let h_eff = Uint.(~@"0xD201000000010001")
   let isogeny (pt : t) : G_1.t =
     let x, y = coords pt in
-    let x_g1 = F_p.(F_px.eval x_num x / F_px.eval x_den x) in
-    let y_g1 = F_p.(F_px.eval y_num x / F_px.eval y_den x * y) in
-
-    let p = Option.get (C_1.of_coords x_g1 y_g1) in
-    Option.get (G_1.in_subgroup C_1.(h_eff * p))
+    let xd = F_px.eval x_den x in
+    (* Kernel points of the isogeny (roots of x_den) map to the identity. *)
+    if F_p.(xd = zero) then G_1.zero
+    else
+      let x_g1 = F_p.(F_px.eval x_num x / xd) in
+      let y_g1 = F_p.(F_px.eval y_num x / F_px.eval y_den x * y) in
+      let p = Option.get (C_1.of_coords x_g1 y_g1) in
+      Option.get (G_1.in_subgroup C_1.(h_eff * p))
 end
 module F_p_SWU =
   Curve.SWU_method
@@ -304,11 +307,14 @@ module F_p2_SWU_curve = struct
       ~@"0xbc69f08f2ee75b3584c6a0ea91b352888e2a8e9145ad7689986ff031508ffe1329c2f178731db956d82bf015d1212b02ec0ec69d7477c1ae954cbc06689f6a359894c0adebbf6b4e8020005aaa95551" )
   let isogeny (pt : t) : G_2.t =
     let x, y = coords pt in
-    let x_g2 = F_p2.(F_p2x.eval x_num x / F_p2x.eval x_den x) in
-    let y_g2 = F_p2.(F_p2x.eval y_num x / F_p2x.eval y_den x * y) in
-
-    let p = Option.get (C_2.of_coords x_g2 y_g2) in
-    Option.get (G_2.in_subgroup C_2.(h_eff * p))
+    let xd = F_p2x.eval x_den x in
+    (* Kernel points of the isogeny (roots of x_den) map to the identity. *)
+    if F_p2.(xd = zero) then G_2.zero
+    else
+      let x_g2 = F_p2.(F_p2x.eval x_num x / xd) in
+      let y_g2 = F_p2.(F_p2x.eval y_num x / F_p2x.eval y_den x * y) in
+      let p = Option.get (C_2.of_coords x_g2 y_g2) in
+      Option.get (G_2.in_subgroup C_2.(h_eff * p))
 end
 module F_p2_SWU =
   Curve.SWU_method
