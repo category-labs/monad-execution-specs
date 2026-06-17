@@ -111,7 +111,35 @@ module Prime_field (Mod : sig
 end) =
 struct
   include Mod
-  include Quotient_field (Integer) (Mod)
+  module Impl : sig
+    type impl = Integer.t
+    type t = private impl
+    val reduce : impl -> t
+    val ( + ) : t -> t -> t
+    val ( - ) : t -> t -> t
+  end = struct
+    type impl = Integer.t
+    type t = impl
+    let reduce (x : impl) = Integer.remainder x Mod.modulus
+
+    let ( + ) (u : t) (v : t) : t =
+      let s = Integer.(u + v) in
+      if Integer.(s >= Mod.modulus) then Integer.(s - Mod.modulus) else s
+    let ( - ) (u : t) (v : t) : t =
+      let s = Integer.(u - v) in
+      if Integer.(s < zero) then Integer.(s + Mod.modulus) else s
+  end
+  include Impl
+
+  let ( = ) (u : t) (v : t) = Integer.((u :> t) = (v :> t))
+  let ( <> ) (u : t) (v : t) = Integer.((u :> t) <> (v :> t))
+
+  let zero = reduce Integer.zero
+  let one = reduce Integer.one
+  let ( ~@ ) str = reduce Integer.(~@str)
+  let ( ~$ ) x = reduce Integer.(~$x)
+
+  let ( * ) (u : t) (v : t) = reduce Integer.((u :> t) * (v :> t))
 
   (* Faster inversion via Zarith. *)
   let inv (u : t) = reduce (Integer.of_z_exn (Z.invert Integer.(to_z (u :> t)) Integer.(to_z modulus)))
@@ -219,13 +247,6 @@ module Polynomial_ring (F : FIELD) = struct
     Iarray.fold_right (fun coeff acc -> F.(coeff + (x * acc))) (p :> F.t Iarray.t) F.zero
 end
 
-module Polynomial (F : FIELD) = struct
-  module Poly = Polynomial_ring (F)
-  module type SIG = sig
-    val modulus : Poly.t
-  end
-end
-
 (* Polynomial field extensions over a field. This could be specialized to perform reduction via multiplication
    and addition, but in practice there is no improvement. *)
 module Polynomial_extension
@@ -267,7 +288,9 @@ module Complex_extension (F : FIELD) = struct
 
   let ( + ) x y = {re = F.(x.re + y.re); im = F.(x.im + y.im)}
   let ( - ) x y = {re = F.(x.re - y.re); im = F.(x.im - y.im)}
-  let ( * ) x y = {re = F.((x.re * y.re) - (x.im * y.im)); im = F.((x.re * y.im) + (x.im * y.re))}
+  let ( * ) x y =
+    (* This could use Karatsuba multiplication, but in practice it has no impact. TODO: double-check. *)
+    {re = F.((x.re * y.re) - (x.im * y.im)); im = F.((x.re * y.im) + (x.im * y.re))}
 
   let inv x =
     let x' = conjugate x in
