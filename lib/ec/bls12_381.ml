@@ -91,6 +91,34 @@ let w6 = F_p12.(w3 * w3)
 let winv2 = F_p12.(one / w2)
 let winv3 = F_p12.(one / w3)
 
+let f12_pow (f : F_p12.t) (n : Uint.t) : F_p12.t =
+  let rec loop n f acc =
+    if Uint.(n = zero) then acc
+    else
+      let n, r = Uint.div_rem n Uint.(~$2) in
+      let acc = if Uint.(r = one) then F_p12.(acc * f) else acc in
+      loop n F_p12.(f * f) acc
+  in
+  loop n f F_p12.one
+
+(* Bootstrap fast Frobenius maps from a single slow w^p computation.
+   Each subsequent frob_p application costs 12 scalar×F_p12 mults instead of ~381 F_p12 squarings. *)
+let w_p = f12_pow F_p12.w p
+let gamma_1 = F_p12.make_frob_powers w_p
+let frob_p (x : F_p12.t) = F_p12.frobenius gamma_1 x
+
+let w_p2 = frob_p w_p
+let gamma_2 = F_p12.make_frob_powers w_p2
+let frob_p2 (x : F_p12.t) = F_p12.frobenius gamma_2 x
+
+let w_p6 =
+  let w_p3 = frob_p w_p2 in
+  let w_p4 = frob_p w_p3 in
+  let w_p5 = frob_p w_p4 in
+  frob_p w_p5
+let gamma_6 = F_p12.make_frob_powers w_p6
+let frob_p6 (x : F_p12.t) = F_p12.frobenius gamma_6 x
+
 (* BLS12-381 pairing using the optimal Ate algorithm.
    apply_post_loop = false: BLS12-381 uses an M-type twist so no Frobenius
    correction is needed after the Miller loop (unlike BN128's D-type twist). *)
@@ -106,6 +134,10 @@ module BLS12_Pairing =
 
       let ate_loop_count = Uint.(~@"15132376222941642752")
       let curve_family = Pairing.BLS12
+
+      let frob_p = frob_p
+      let frob_p2 = frob_p2
+      let frob_p6 = frob_p6
     end)
 
 (* "Twist" a point in G_2 (over Fₚ₂) into a point in BLS12_Pairing.C_12 (over Fₚ₁₂).

@@ -79,8 +79,25 @@ let f12_pow (f : F_p12.t) (n : Uint.t) : F_p12.t =
 
 let frob12 (x : F_p12.t) : F_p12.t = f12_pow x p
 
-(* BN128 pairing using the optimal Ate algorithm.
-   final_exp_exp = (p^12 - 1) / r, computed once at module initialization. *)
+(* Bootstrap fast Frobenius maps from a single slow w^p computation.
+   Each subsequent frob_p application costs 12 scalar×F_p12 mults instead of ~254 F_p12 squarings. *)
+let w_p = f12_pow F_p12.w p
+let gamma_1 = F_p12.make_frob_powers w_p
+let frob_p (x : F_p12.t) = F_p12.frobenius gamma_1 x
+
+let w_p2 = frob_p w_p
+let gamma_2 = F_p12.make_frob_powers w_p2
+let frob_p2 (x : F_p12.t) = F_p12.frobenius gamma_2 x
+
+let w_p6 =
+  let w_p3 = frob_p w_p2 in
+  let w_p4 = frob_p w_p3 in
+  let w_p5 = frob_p w_p4 in
+  frob_p w_p5
+let gamma_6 = F_p12.make_frob_powers w_p6
+let frob_p6 (x : F_p12.t) = F_p12.frobenius gamma_6 x
+
+(* BN128 pairing using the optimal Ate algorithm. *)
 module BN128_Pairing =
   Pairing.Make
     (F_p12)
@@ -94,6 +111,10 @@ module BN128_Pairing =
       let ate_loop_count = Uint.(~@"29793968203157093288")
 
       let curve_family = Pairing.BN
+
+      let frob_p = frob_p
+      let frob_p2 = frob_p2
+      let frob_p6 = frob_p6
     end)
 
 (* "Twist" a point in G_2 (over Fₚ₂) into a point in BN128_Pairing.C_12 (over Fₚ₁₂).

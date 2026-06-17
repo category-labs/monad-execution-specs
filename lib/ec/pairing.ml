@@ -19,6 +19,12 @@ module Make
       (* Some curves (bn128) need an extra adjustment step after the Miller loop. See Vercauteren 2009 for the
          algebra or py_ecc for a concrete implementation. *)
       val curve_family : curve_family
+
+      (* Curve-specific efficient Frobenius maps x ↦ x^(p^k). Used in post_loop_adjustment (frob_p) and the
+         final exponentiation easy part (frob_p2, frob_p6). *)
+      val frob_p : F12.t -> F12.t
+      val frob_p2 : F12.t -> F12.t
+      val frob_p6 : F12.t -> F12.t
     end) =
 struct
   module C_12 = Curve.Make (F12) (Params)
@@ -49,8 +55,7 @@ struct
     | C_12.Infinity -> failwith "Pairing.c12_add: unexpected infinity"
     | C_12.Point (x, y) -> (x, y)
 
-  (* Frobenius map. frob x = xᵖ where p is the field characteristic. *)
-  let frob x = x ** Params.field_characteristic
+  let frob = Params.frob_p
 
   let post_loop_adjustment =
     match Params.curve_family with
@@ -69,7 +74,22 @@ struct
              Security Level" §4. *)
           f
 
-  let post_loop_exponent = Uint.(((Params.field_characteristic ** 12) - ~$1) / Params.curve_order)
+  (* Miller loop final exponentiation step via easy-hard decomposition of (p¹²−1)/r.
+       (p¹²−1)/r = (p⁶−1)(p²+1) × (p⁴−p²+1)/r
+     The easy part is computed analytically using Frobenius maps, so exponentiation is only needed for the
+     hard part. *)
+  let hard_part_exponent =
+    let p = Params.field_characteristic in
+    let p2 = Uint.(p * p) in
+    let p4 = Uint.(p2 * p2) in
+    Uint.((p4 - p2 + ~$1) / Params.curve_order)
+
+  let final_exponentiation loop_result =
+    let f_easy =
+      let a = F12.(Params.frob_p6 loop_result * inv loop_result) in
+      F12.(Params.frob_p2 a * a)
+    in
+    f_easy ** hard_part_exponent
 
   (* Miller loop implementation, modelled after py_ecc. *)
   let miller_loop (q : C_12.t) (p : C_12.t) : F12.t =
@@ -92,7 +112,7 @@ struct
         let log_ate_loop_count = Uint.significant_bits Params.ate_loop_count - 2 in
         let r, f = loop log_ate_loop_count qp F12.one in
         let f = post_loop_adjustment ~q:qp ~p:pp ~r f in
-        f ** post_loop_exponent
+        final_exponentiation f
 
   let pairing_check (pairs : (C_12.t * C_12.t) list) : bool =
     let result = List.fold_left (fun acc (q, p) -> F12.(acc * miller_loop q p)) F12.one pairs in

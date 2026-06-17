@@ -264,6 +264,25 @@ struct
   let const (p : F.t) = reduce (Underlying_ring.const p)
 
   let ( .$() ) (p : t) (i : int) : F.t = Underlying_ring.((p :> t).$(i))
+
+  (* Degree of this extension over F. Elements have exactly this many coefficients. *)
+  let extension_degree = Underlying_ring.degree Mod.modulus
+
+  (* Precompute [1, base, base², ..., base^(extension_degree-1)] for use with frobenius. *)
+  let make_frob_powers (base : t) : t array =
+    let arr = Array.make extension_degree one in
+    for i = 1 to Stdlib.(extension_degree - 1) do
+      arr.(i) <- arr.(Stdlib.(i - 1)) * base
+    done ;
+    arr
+
+  (* Compute f^q given w_q_powers.(i) = (w^q)^i, where w is the generator.
+     Correct when f's coefficients lie in the base field F, which holds for
+     Polynomial_extension(F_p) since all elements are F_p[w]/(poly). *)
+  let frobenius (w_q_powers : t array) (f : t) : t =
+    let acc = ref zero in
+    Array.iteri (fun i wq_i -> acc := !acc + (const (f.$(i)) * wq_i)) w_q_powers ;
+    !acc
 end
 
 (* Complex field extensions over a field. Equivalent to a polynomial extension, but more efficient. *)
