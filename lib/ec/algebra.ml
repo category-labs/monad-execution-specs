@@ -82,25 +82,24 @@ end = struct
    *)
   let bezout_coeffs (u : D.t) (v : D.t) =
     let open D in
-    let rec loop (r : D.t) (a, b) (r' : D.t) (a', b') =
-      if r' = zero then (a, b, r)
+    let rec loop (r : D.t) a (r' : D.t) a' =
+      if r' = zero then (a, r)
       else
         let quotient, remainder = div_rem r r' in
         let r, r' = (r', remainder) in
         let a, a' = (a', a - (quotient * a')) in
-        let b, b' = (b', b - (quotient * b')) in
-        loop r (a, b) r' (a', b')
+        loop r a r' a'
     in
-    loop u (one, zero) v (zero, one)
+    loop u one v zero
 
   let inv (u : t) : t =
-    let inv_u, _inv_mod, gcd = bezout_coeffs (u :> D.t) Mod.modulus in
+    let inv_u,  gcd = bezout_coeffs (u :> D.t) Mod.modulus in
     let inv_u, rem = D.(div_rem inv_u gcd) in
     assert (D.(rem = zero)) ;
     reduce inv_u
 
   let ( / ) (u : t) (v : t) =
-    let inv_v, _inv_mod, gcd = bezout_coeffs (v :> D.t) Mod.modulus in
+    let inv_v,  gcd = bezout_coeffs (v :> D.t) Mod.modulus in
     let inv_v, rem = D.(div_rem inv_v gcd) in
     assert (D.(rem = zero)) ;
     reduce D.((u :> t) * inv_v)
