@@ -74,14 +74,14 @@ struct
 
   (* YP (252) *)
   let ( * ) (n : Uint.t) (p : t) =
-    let rec loop n p acc =
-      if Uint.(n = zero) then acc
+    let n_bits = Uint.significant_bits n in
+    let rec loop i p acc =
+      if Stdlib.(i >= n_bits) then acc
       else
-        let n, remainder = Uint.(div_rem n ~$2) in
-        let acc = if Uint.(remainder = one) then acc + p else acc in
-        loop n (p + p) acc
+        let acc = if Uint.(testbit n i) then acc + p else acc in
+        loop Stdlib.(i + 1) (p + p) acc
     in
-    loop n p Infinity
+    loop 0 p Infinity
 
   let of_coords (x : F.t) (y : F.t) =
     if F.(x = zero && y = zero) then Some Infinity else if in_curve x y then Some (Point (x, y)) else None

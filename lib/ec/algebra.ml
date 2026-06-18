@@ -80,6 +80,7 @@ end = struct
      algorithm.
      This does more work than necessary as we are only interested in one coefficient.
    *)
+  (* TODO: rename to invert or something. *)
   let bezout_coeffs (u : D.t) (v : D.t) =
     let open D in
     let rec loop (r : D.t) a (r' : D.t) a' =
@@ -289,14 +290,14 @@ struct
 
   (* Power function, used for computing Frobenius automorphisms. *)
   let ( ** ) (p : t) (n : Uint.t) =
-    let rec loop n p acc =
-      if Uint.(n = zero) then acc
+    let n_bits = Uint.significant_bits n in
+    let rec loop i p acc =
+      if Stdlib.(i >= n_bits) then acc
       else
-        let n, r = Uint.div_rem n Uint.(~$2) in
-        let acc = if Uint.(r = one) then acc * p else acc in
-        loop n (p * p) acc
+        let acc = if Uint.(testbit n i) then acc * p else acc in
+        loop Stdlib.(i + 1) (p * p) acc
     in
-    loop n p one
+    loop 0 p one
 end
 
 (* Polynomial field extensions over a field, but fast. *)
@@ -453,14 +454,14 @@ struct
 
   (* Power function, used for computing Frobenius automorphisms. *)
   let ( ** ) (p : t) (n : Uint.t) =
-    let rec loop n p acc =
-      if Uint.(n = zero) then acc
+    let n_bits = Uint.significant_bits n in
+    let rec loop i p acc =
+      if Stdlib.(i >= n_bits) then acc
       else
-        let n, r = Uint.div_rem n Uint.(~$2) in
-        let acc = if Uint.(r = one) then acc * p else acc in
-        loop n (p * p) acc
+        let acc = if Uint.(testbit n i) then acc * p else acc in
+        loop Stdlib.(i + 1) (p * p) acc
     in
-    loop n p one
+    loop 0 p one
 end
 
 module Polynomial_extension

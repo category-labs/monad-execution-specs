@@ -29,15 +29,16 @@ module Make
 struct
   module C_12 = Curve.Make (F12) (Params)
 
+  (* TODO: abstract over this. *)
   let ( ** ) (f : F12.t) (n : Uint.t) : F12.t =
-    let rec loop n f acc =
-      if Uint.(n = zero) then acc
+    let n_bits = Uint.significant_bits n in
+    let rec loop i f acc =
+      if Stdlib.(i >= n_bits) then acc
       else
-        let n, r = Uint.div_rem n Uint.(~$2) in
-        let acc = if Uint.(r = one) then F12.(acc * f) else acc in
-        loop n F12.(f * f) acc
+        let acc = if Uint.(testbit n i) then F12.(acc * f) else acc in
+        loop Stdlib.(i + 1) F12.(f * f) acc
     in
-    loop n f F12.one
+    loop 0 f F12.one
 
   (* Evaluate the line through P1 and P2 at point T (all non-infinity). *)
   let linefunc ((x1, y1) : F12.t * F12.t) ((x2, y2) : F12.t * F12.t) ((xt, yt) : F12.t * F12.t) : F12.t =

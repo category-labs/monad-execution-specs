@@ -199,15 +199,15 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
     match to_int_opt y with
     | Some y -> x ** y
     | None ->
-        let rec loop acc mul y =
-          if y = zero then acc
+       let y_bits = significant_bits y in
+        let rec loop acc mul i =
+          if Stdlib.(i >= y_bits) then acc
           else
-            let acc = if modulo y ~$2 = ~$1 then acc * mul else acc in
+            let acc = if testbit y i then acc * mul else acc in
             let mul = mul * mul in
-            let y = y / ~$2 in
-            loop acc mul y
+            loop acc mul Stdlib.(i + 1)
         in
-        loop ~$1 x y
+        loop ~$1 x 0
 
   (* Not constant-time. *)
   let exp_mod ~(modulo : t) (x : t) (y : t) = of_z_after_op (Z.powm (to_z x) (to_z y) (to_z modulo))
