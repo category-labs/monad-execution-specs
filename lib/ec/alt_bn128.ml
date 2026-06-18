@@ -66,37 +66,6 @@ module F_p12 = struct
   let w : t = reduce Underlying_ring.monomial_x
 end
 
-(* Frobenius endomorphism on F_p12: x ↦ x^p *)
-let f12_pow (f : F_p12.t) (n : Uint.t) : F_p12.t =
-  let rec loop n f acc =
-    if Uint.(n = zero) then acc
-    else
-      let n, remainder = Uint.div_rem n Uint.(~$2) in
-      let acc = if Uint.(remainder = one) then F_p12.(acc * f) else acc in
-      loop n F_p12.(f * f) acc
-  in
-  loop n f F_p12.one
-
-let frob12 (x : F_p12.t) : F_p12.t = f12_pow x p
-
-(* Bootstrap fast Frobenius maps from a single slow w^p computation.
-   Each subsequent frob_p application costs 12 scalar×F_p12 mults instead of ~254 F_p12 squarings. *)
-let w_p = f12_pow F_p12.w p
-let gamma_1 = F_p12.make_frob_powers w_p
-let frob_p (x : F_p12.t) = F_p12.frobenius gamma_1 x
-
-let w_p2 = frob_p w_p
-let gamma_2 = F_p12.make_frob_powers w_p2
-let frob_p2 (x : F_p12.t) = F_p12.frobenius gamma_2 x
-
-let w_p6 =
-  let w_p3 = frob_p w_p2 in
-  let w_p4 = frob_p w_p3 in
-  let w_p5 = frob_p w_p4 in
-  frob_p w_p5
-let gamma_6 = F_p12.make_frob_powers w_p6
-let frob_p6 (x : F_p12.t) = F_p12.frobenius gamma_6 x
-
 (* BN128 pairing using the optimal Ate algorithm. *)
 module BN128_Pairing =
   Pairing.Make
@@ -112,9 +81,10 @@ module BN128_Pairing =
 
       let curve_family = Pairing.BN
 
-      let frob_p = frob_p
-      let frob_p2 = frob_p2
-      let frob_p6 = frob_p6
+      (* Iterated frobenius maps. *)
+      let frob_p = F_p12.automorphism (fun px -> F_p12.(px ** p))
+      let frob_p2 = F_p12.automorphism (fun px -> frob_p (frob_p px))
+      let frob_p6 = F_p12.automorphism (fun px -> frob_p2 (frob_p2 (frob_p2 px)))
     end)
 
 (* "Twist" a point in G_2 (over Fₚ₂) into a point in BN128_Pairing.C_12 (over Fₚ₁₂).

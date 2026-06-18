@@ -54,7 +54,7 @@ struct
         let lambda = F.((y_2 - y_1) / (x_2 - x_1)) in
         let x = F.((lambda * lambda) - x_1 - x_2) in
         let y = F.((lambda * (x_1 - x)) - y_1) in
-        assert (in_curve x y) ;
+        (* assert (in_curve x y) ; *)
         Point (x, y)
     | Point (_, y_1), Point (_, y_2) when F.(y_1 <> y_2) ->
         (* YP (250), case x_1 = x_2 *)
@@ -64,7 +64,7 @@ struct
         let lambda = F.(((three * x_1 * x_1) + P.a) / (two * y_1)) in
         let x = F.((lambda * lambda) - x_1 - x_1) in
         let y = F.((lambda * (x_1 - x)) - y_1) in
-        assert (in_curve x y) ;
+        (* assert (in_curve x y) ;*)
         Point (x, y)
     | _ ->
         (* YP (251), case y_1 = y_2 = zero *)

@@ -1,5 +1,7 @@
 open Numeric
 
+(* TODO: all our fields are finite. We could consider adding the field order and characteristic here so we can
+   e.g. include the Frobenius automorphisms for polynomial extensions. *)
 module type FIELD = sig
   type t
 
@@ -231,13 +233,13 @@ module Polynomial_ring (F : FIELD) = struct
 
   let div_rem u v =
     let n = degree v in
+    let v_n_inv = F.(inv v.$(degree v)) in
     let rec loop u quot_acc =
       let m = degree u in
       if m < n then (quot_acc, u)
       else
         let u_m = u.$(degree u) in
-        let v_n = v.$(degree v) in
-        let q = monomial F.(u_m / v_n) Stdlib.(m - n) in
+        let q = monomial F.(u_m * v_n_inv) Stdlib.(m - n) in
         loop (u - (q * v)) (quot_acc + q)
     in
     loop u zero
@@ -247,16 +249,17 @@ module Polynomial_ring (F : FIELD) = struct
     Iarray.fold_right (fun coeff acc -> F.(coeff + (x * acc))) (p :> F.t Iarray.t) F.zero
 end
 
-(* Polynomial field extensions over a field. This could be specialized to perform reduction via multiplication
-   and addition, but in practice there is no improvement. *)
-module Polynomial_extension
+(* Polynomial field extensions over a field of scalars. This could be specialized to perform reduction via
+   multiplication and addition, but performance improvements are limited to the pairing check
+   precompiles. TODO: double-check that this is true. *)
+module Polynomial_extension_slow
     (F : FIELD)
     (Mod : sig
       val modulus : Polynomial_ring(F).t
     end) =
 struct
+  include Mod
   module Underlying_ring = Polynomial_ring (F)
-
   include Quotient_field (Underlying_ring) (Mod)
 
   let monomial_x : t = reduce Underlying_ring.monomial_x
@@ -268,22 +271,205 @@ struct
   (* Degree of this extension over F. Elements have exactly this many coefficients. *)
   let extension_degree = Underlying_ring.degree Mod.modulus
 
-  (* Precompute [1, base, base², ..., base^(extension_degree-1)] for use with frobenius. *)
-  let make_frob_powers (base : t) : t array =
-    let arr = Array.make extension_degree one in
-    for i = 1 to Stdlib.(extension_degree - 1) do
-      arr.(i) <- arr.(Stdlib.(i - 1)) * base
-    done ;
-    arr
+  (* Apply an automorphism f given its action on the basis element x. This is made more efficient by
+     precomputing the table f(1), f(x), f(x²), ... ahead of time. *)
+  let automorphism (f : t -> t) : t -> t =
+    let f_x = f monomial_x in
+    let powers = Seq.iterate (fun f_x_i -> f_x * f_x_i) one |> Seq.take extension_degree |> Iarray.of_seq in
+    fun p ->
+      (* Do the entire computation in the underlying ring, then reduce. *)
+      Underlying_ring.(
+        let p = (p :> t) in
+        let powers = (powers :> t iarray) in
+        let rec loop (i : int) (acc : t) =
+          if Stdlib.(i > degree p) then acc
+          else loop Stdlib.(i + 1) (acc + (Iarray.get powers i * const p.$(i)))
+        in
+        loop 0 zero )
+      |> reduce
 
-  (* Compute f^q given w_q_powers.(i) = (w^q)^i, where w is the generator.
-     Correct when f's coefficients lie in the base field F, which holds for
-     Polynomial_extension(F_p) since all elements are F_p[w]/(poly). *)
-  let frobenius (w_q_powers : t array) (f : t) : t =
-    let acc = ref zero in
-    Array.iteri (fun i wq_i -> acc := !acc + (const (f.$(i)) * wq_i)) w_q_powers ;
-    !acc
+  (* Power function, used for computing Frobenius automorphisms. *)
+  let ( ** ) (p : t) (n : Uint.t) =
+    let rec loop n p acc =
+      if Uint.(n = zero) then acc
+      else
+        let n, r = Uint.div_rem n Uint.(~$2) in
+        let acc = if Uint.(r = one) then acc * p else acc in
+        loop n (p * p) acc
+    in
+    loop n p one
 end
+
+(* Polynomial field extensions over a field, but fast. *)
+module Polynomial_extension_fast
+    (F : FIELD)
+    (Mod : sig
+      val modulus : Polynomial_ring(F).t
+    end) =
+struct
+  include Mod
+  module Underlying_ring = Polynomial_ring (F)
+  module Impl : sig
+    type impl = Underlying_ring.t
+    type t = private impl
+    val reduce : impl -> t
+    val ( + ) : t -> t -> t
+    val ( - ) : t -> t -> t
+  end = struct
+    type impl = Underlying_ring.t
+    type t = impl
+    let reduce (x : impl) = snd (Underlying_ring.div_rem x Mod.modulus)
+
+    let ( + ) (u : t) (v : t) : t = Underlying_ring.(u + v)
+    let ( - ) (u : t) (v : t) : t = Underlying_ring.(u - v)
+  end
+  include Impl
+
+  let ( = ) (u : t) (v : t) = Underlying_ring.((u :> t) = (v :> t))
+  let ( <> ) (u : t) (v : t) = Underlying_ring.((u :> t) <> (v :> t))
+
+  let zero = reduce Underlying_ring.zero
+  let one = reduce Underlying_ring.one
+  let ( ~@ ) str = reduce Underlying_ring.(~@str)
+  let ( ~$ ) x = reduce Underlying_ring.(~$x)
+
+  let extension_degree = Underlying_ring.degree modulus
+
+  let modulus_coefficients =
+    let open Underlying_ring in
+    let beta = modulus.$(extension_degree) in
+    Iarray.to_seqi (modulus :> F.t iarray)
+    |> Seq.take extension_degree
+    |> Seq.filter_map (fun (i, alpha_i) ->
+        if F.(alpha_i = zero) then None
+        else
+          let w = F.(alpha_i / beta) in
+          Some (i, w) )
+    |> List.of_seq
+
+  let ( * ) (u : t) (v : t) =
+    let u = (u :> F.t Iarray.t) in
+    let v = (v :> F.t Iarray.t) in
+    (* Try to avoid as many multiplications as possible. *)
+    let u, v =
+      let lu, lv = (Iarray.length u, Iarray.length v) in
+      let count_muls (arr : F.t iarray) (n : int) =
+        let rec loop (i : int) (acc : int) =
+          if i >= Iarray.length arr then acc
+          else loop Stdlib.(i + 1) (if F.(Iarray.get arr i = zero) then acc else Stdlib.(acc + n))
+        in
+        loop 0 0
+      in
+      let u_muls = count_muls u lv in
+      let v_muls = count_muls v lu in
+      if u_muls > v_muls then (v, u) else (u, v)
+    in
+
+    let l = Stdlib.(Iarray.length (u :> F.t iarray) + Iarray.length (v :> F.t iarray) - 1) in
+    let arr = Array.make l F.zero in
+
+    for i = 0 to Stdlib.(Iarray.length u - 1) do
+      let u_i = Iarray.get u i in
+      if F.(u_i <> zero) then
+        for j = 0 to Stdlib.(Iarray.length v - 1) do
+          let v_j = Iarray.get v j in
+          let k = Stdlib.(i + j) in
+          arr.(k) <- F.(arr.(k) + (u_i * v_j))
+        done
+    done ;
+
+    for i = Stdlib.(l - 1) downto extension_degree do
+      (* Sparse reduction. *)
+      List.iter
+        (fun (j, w_j) ->
+          let k = Stdlib.(i - extension_degree + j) in
+          arr.(k) <- F.(arr.(k) - (arr.(i) * w_j)) )
+        modulus_coefficients
+    done ;
+
+    (* hehe *)
+    let prod_len =
+      let rec loop i =
+        if Stdlib.(i < 0) then 0 else if F.(arr.(i) <> zero) then Stdlib.(i + 1) else loop Stdlib.(i - 1)
+      in
+      loop Stdlib.(min l extension_degree - 1)
+    in
+    Obj.magic (Iarray.init prod_len (fun i -> arr.(i)))
+  (*
+    reduce Underlying_ring.(trim (Iarray.of_array arr))
+     *)
+
+  (* Compute the Bezout coefficients of two elements in the underlying domain, using the extended Euclidean
+     algorithm.
+     This does more work than necessary as we are only interested in one coefficient.
+   *)
+  let bezout_coeffs (u : Underlying_ring.t) (v : Underlying_ring.t) =
+    let open Underlying_ring in
+    let rec loop (r : t) (a, b) (r' : t) (a', b') =
+      if r' = zero then (a, b, r)
+      else
+        let quotient, remainder = div_rem r r' in
+        let r, r' = (r', remainder) in
+        let a, a' = (a', a - (quotient * a')) in
+        let b, b' = (b', b - (quotient * b')) in
+        loop r (a, b) r' (a', b')
+    in
+    loop u (one, zero) v (zero, one)
+
+  let inv (u : t) : t =
+    let inv_u, _inv_mod, gcd = bezout_coeffs (u :> Underlying_ring.t) Mod.modulus in
+    let inv_u, rem = Underlying_ring.(div_rem inv_u gcd) in
+    assert (Underlying_ring.(rem = zero)) ;
+    reduce inv_u
+
+  let ( / ) (u : t) (v : t) =
+    let inv_v, _inv_mod, gcd = bezout_coeffs (v :> Underlying_ring.t) Mod.modulus in
+    let inv_v, rem = Underlying_ring.(div_rem inv_v gcd) in
+    assert (Underlying_ring.(rem = zero)) ;
+    reduce Underlying_ring.((u :> t) * inv_v)
+
+  let monomial_x : t = reduce Underlying_ring.monomial_x
+
+  let const (p : F.t) = reduce (Underlying_ring.const p)
+
+  let ( .$() ) (p : t) (i : int) : F.t = Underlying_ring.((p :> t).$(i))
+
+  (* Degree of this extension over F. Elements have exactly this many coefficients. *)
+  let extension_degree = Underlying_ring.degree Mod.modulus
+
+  let automorphism (f : t -> t) : t -> t =
+    let f_x = f monomial_x in
+    let powers = Seq.iterate (fun f_x_i -> f_x * f_x_i) one |> Seq.take extension_degree |> Iarray.of_seq in
+    fun p ->
+      (* Do the entire computation in the underlying ring, then reduce. *)
+      Underlying_ring.(
+        let p = (p :> t) in
+        let powers = (powers :> t iarray) in
+        let rec loop (i : int) (acc : t) =
+          if Stdlib.(i > degree p) then acc
+          else loop Stdlib.(i + 1) (acc + (Iarray.get powers i * const p.$(i)))
+        in
+        loop 0 zero )
+      |> reduce
+
+  (* Power function, used for computing Frobenius automorphisms. *)
+  let ( ** ) (p : t) (n : Uint.t) =
+    let rec loop n p acc =
+      if Uint.(n = zero) then acc
+      else
+        let n, r = Uint.div_rem n Uint.(~$2) in
+        let acc = if Uint.(r = one) then acc * p else acc in
+        loop n (p * p) acc
+    in
+    loop n p one
+end
+
+module Polynomial_extension
+    (F : FIELD)
+    (Mod : sig
+      val modulus : Polynomial_ring(F).t
+    end) =
+  Polynomial_extension_fast (F) (Mod)
 
 (* Complex field extensions over a field. Equivalent to a polynomial extension, but more efficient. *)
 module Complex_extension (F : FIELD) = struct

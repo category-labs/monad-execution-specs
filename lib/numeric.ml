@@ -267,6 +267,10 @@ module Integer = struct
     let quot, rem = Z.ediv_rem (to_z x) (to_z y) in
     (of_z_exn quot, of_z_exn rem)
 
+  let remainder = lift_2 Z.erem
+
+  let invert = lift_2 Z.invert
+
   (* Legendre symbol, used in elliptic curve code to check whether a number is a quadratic residue. *)
   let legendre a modulus = Z.legendre (to_z a) (to_z modulus)
 
