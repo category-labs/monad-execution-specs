@@ -541,6 +541,9 @@
         --disable-warn-error)
        (run %{make} -j%{jobs}))))))))
 
+(depends
+ (all_platforms (ocaml-option-flambda)))
+
 (source
  (fetch
   (url
