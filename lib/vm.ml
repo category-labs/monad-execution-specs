@@ -31,8 +31,13 @@ struct
     (* For debugging purposes *)
     val dump : t -> unit
   end = struct
+    (* Memory is represented as an int-indexed map of 32-byte words. In principle, Ethereum memory should
+       support up to 256-bit byte indexing, but in practice memory expansion costs and gas limits make
+       it impossible to go beyond an int.
+       MIP-3 further adds a hard 8MB limit on memory size. *)
+    module M = Map.Make (Int)
     type t =
-      { contents : char U256.Map.t (* Corresponds to μ_m *)
+      { contents : B32.t M.t (* Corresponds to μ_m *)
       ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *)
       ; memory_capacity : Uint.t (* Total memory capacity in bytes. *) }
 
@@ -44,45 +49,89 @@ struct
           Uint.of_int (8 * 1024 * 1024)
 
     (** Check that the index start + size - 1 does not overflow U256.t. *)
-    let u256_overflow_check start size_bytes =
-      assert (U256.in_range Z.(U256.to_z start + U256.to_z size_bytes - one))
+    let overflow_check start size_bytes = assert (start + size_bytes > start)
 
     (** Check that the index start + size - 1 does not exceed the active bytes. Memory must be extended
         by a call to [extend_to] beforehand. *)
     let active_bytes_overflow_check mem start size_bytes =
-      assert (Uint.(mem.active_bytes >= U256.(to_uint start) + U256.(to_uint size_bytes)))
+      assert (Uint.(mem.active_bytes >= ~$start + ~$size_bytes))
+
+    let alignment_mask = 32 - 1
+
+    let is_aligned (addr : int) = addr land alignment_mask = 0
+
+    let align (addr : int) = (addr land lnot alignment_mask, addr land alignment_mask)
+
+    let read_aligned (addr : int) (mem : t) : B32.t =
+      assert (is_aligned addr) ;
+      Option.value ~default:B32.zeros (M.find_opt addr mem.contents)
+
+    let write_aligned (addr : int) (v : B32.t) (mem : t) : t =
+      assert (is_aligned addr) ;
+      {mem with contents = M.add addr v mem.contents}
 
     let read_block_at start size (mem : t) =
       if U256.(size = zero) then Bytes.empty
-      else (
-        u256_overflow_check start size ;
+      else
+        let start = U256.to_int start in
+        let size = U256.to_int size in
+        overflow_check start size ;
         active_bytes_overflow_check mem start size ;
-        let size = match U256.to_int_opt size with None -> assert false | Some sz -> sz in
-        Bytes.init size (fun byte_i ->
-            U256.Map.find_opt U256.(start + ~$byte_i) mem.contents |> Option.value ~default:'\x00' ) )
-
-    let read_word_at pos (mem : t) =
-      read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
-
-    let write_block_at (pos : U256.t) (bytes : Bytes.t) (mem : t) =
-      let size = U256.of_int (Bytes.length bytes) in
-      if U256.(size = zero) then mem
-      else (
-        u256_overflow_check pos size ;
-        active_bytes_overflow_check mem pos size ;
-        let contents =
-          Seq.take (Bytes.length bytes) (Seq.ints 0)
-          |> Seq.map (fun i -> (U256.(pos + ~$i), bytes.[i]))
-          |> fun entries -> U256.Map.add_seq entries mem.contents
+        let start, offset = align start in
+        let n_words = ((size + 31) / 32) + if offset = 0 then 0 else 1 in
+        let words =
+          List.init n_words (fun w_index -> B32.to_bytes (read_aligned (start + (w_index * 32)) mem))
         in
-        {mem with contents} )
+        let block = Bytes.(concat empty words) in
+        Bytes.sub block offset size
 
-    let write_word_at pos w = U256.to_repr w |> U256.Repr.to_bytes |> write_block_at pos
+    let read_word_at pos (mem : t) : U256.t =
+      let pos' = U256.to_int pos in
+      if is_aligned pos' then
+        (* Aligned reads are cheaper. *)
+        U256.of_repr (read_aligned pos' mem)
+      else read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
+
+    let write_block_at (start : U256.t) (bytes : Bytes.t) (mem : t) =
+      if Bytes.(bytes = empty) then mem
+      else
+        let start = U256.to_int start in
+        let size = Bytes.length bytes in
+        overflow_check start size ;
+        active_bytes_overflow_check mem start size ;
+        let size = Bytes.length bytes in
+        let start, offset = align start in
+        (* Whole aligned words touched, including the trailing word the misalignment spills into. *)
+        let n_words = (offset + size + 31) / 32 in
+        let suffix_len = (n_words * 32) - offset - size in
+        (* The write fully overwrites every interior word, so only the two boundary words must be
+           read first: the [offset]-byte prefix of the first word and the [suffix_len]-byte tail of
+           the last word are preserved; everything between comes from [bytes]. *)
+        let prefix =
+          if offset = 0 then Bytes.empty else Bytes.sub (B32.to_bytes (read_aligned start mem)) 0 offset
+        in
+        let suffix =
+          if suffix_len = 0 then Bytes.empty
+          else
+            let last = B32.to_bytes (read_aligned (start + ((n_words - 1) * 32)) mem) in
+            Bytes.sub last (32 - suffix_len) suffix_len
+        in
+        (* [buffer] is exactly [n_words] aligned words laid end to end. *)
+        let buffer = Bytes.concat Bytes.empty [prefix; bytes; suffix] in
+        List.fold_left
+          (fun mem w_index -> write_aligned (start + (w_index * 32)) (B32.sub buffer (w_index * 32)) mem)
+          mem (List.init n_words Fun.id)
+
+    let write_word_at (pos : U256.t) w (mem : t) : t =
+      let pos' = U256.to_int pos in
+      if is_aligned pos' then write_aligned pos' (U256.to_repr w) mem
+      else write_block_at pos (U256.to_repr_bytes w) mem
 
     let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
+
     let empty ~memory_capacity =
       assert (memory_capacity <= max_memory_usage) ;
-      {contents = U256.Map.empty; active_bytes = Uint.zero; memory_capacity}
+      {contents = M.empty; active_bytes = Uint.zero; memory_capacity}
 
     let active_words mem = Uint.(bytes_to_whole_words mem.active_bytes)
 
