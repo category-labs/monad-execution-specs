@@ -160,7 +160,9 @@ struct
 
   (** [sub bytes i] returns the {!byte_width}-length byte-string starting at [bytes.[i]]. Throws
       an exception if [i] is out of bounds or [bytes] is shorter than [i + byte_width - 1]. *)
-  let sub (bytes : Bytes.t) i = init (fun j -> bytes.[i + j])
+  let sub (bytes : Bytes.t) i =
+    (* Significantly faster than calling init, as it uses memcpy under the hood. *)
+    of_bytes_exn (Bytes.sub bytes i byte_width)
 
   (** [sub_with_zero_padding bytes i] returns the {!byte_width}-length byte-string starting at [bytes.[i]].
       If the length of [bytes] is smaller than [i + byte_width - 1], it is padded with zeros. *)
