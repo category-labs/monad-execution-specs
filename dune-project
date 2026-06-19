@@ -8,6 +8,7 @@
  (name monad-spec)
  (depends
     (ocaml (= 5.4.0))
+    ocaml-option-flambda
     (zarith (= 1.14))
     (lens (= 1.2.5))
     (digestif (= 1.3.0))

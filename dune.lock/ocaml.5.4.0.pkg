@@ -15,7 +15,7 @@
 
 (depends
  (all_platforms
-  (ocaml-config ocaml-base-compiler)))
+  (ocaml-config ocaml-variants)))
 
 (exported_env
  (+= OCAMLTOP_INCLUDE_PATH "\%{toplevel}%")
