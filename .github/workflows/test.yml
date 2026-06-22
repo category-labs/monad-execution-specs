@@ -17,6 +17,7 @@ jobs:
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ocaml-variants.5.4.0+options,ocaml-option-flambda
+          dune-cache: true
 
       - name: Install dependencies
         run: |
