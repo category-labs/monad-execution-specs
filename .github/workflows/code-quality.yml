@@ -18,7 +18,8 @@ jobs:
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5.4.0
+          ocaml-compiler: ocaml-variants.5.4.0+options,ocaml-option-flambda
+          dune-cache: true
 
       - name: Install ocamlformat
         run: |
