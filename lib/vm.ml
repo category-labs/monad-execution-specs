@@ -177,7 +177,7 @@ struct
       { gas : Uint.t (* μ_g *)
       ; pc : U256.t (* μ_pc *)
       ; memory : Memory.t (* μ_m, μ_i *)
-      ; stack : U256.t list (* μ_s *)
+      ; stack : U256.t list * int (* μ_s *)
       ; output_buffer : Bytes.t (* μ_o *)
       ; gas_refund : Integer.t
             (* A_r *)
@@ -192,7 +192,7 @@ struct
       { gas
       ; pc = U256.zero
       ; memory = Memory.empty ~memory_capacity
-      ; stack = []
+      ; stack = ([], 0)
       ; output_buffer = Bytes.empty
       ; gas_refund = Integer.zero }
   end
@@ -417,9 +417,14 @@ struct
   open M
 
   let spend (amount : Uint.t) =
-    let$ gas_remaining = !(machine_state |-- gas) in
-    if Uint.(gas_remaining < amount) then fail Out_of_gas
-    else machine_state |-- gas := Uint.(gas_remaining - amount)
+   fun state ->
+    if Uint.(state.machine_state.gas < amount) then
+      Host.return (Error Evmc.Result.StatusCode.Out_of_gas, state)
+    else
+      Host.return
+        ( Ok ()
+        , {state with machine_state = {state.machine_state with gas = Uint.(state.machine_state.gas - amount)}}
+        )
 
   let check_write_permissions =
     let$ can_write = !(execution_environment |-- write_permission) in
@@ -432,23 +437,50 @@ struct
   let self : Address.t M.t = !(execution_environment |-- address)
 
   let push (x : U256.t) : unit M.t =
-    let$ s = !(machine_state |-- stack) in
-    if List.length s >= max_stack_depth then fail Stack_overflow else machine_state |-- stack := x :: s
+   fun state ->
+    let s, d = state.machine_state.stack in
+    if d >= max_stack_depth then Host.return (Error Evmc.Result.StatusCode.Stack_overflow, state)
+    else Host.return (Ok (), {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}})
 
   let pop : U256.t M.t =
-    let$ s = !(machine_state |-- stack) in
+   fun state ->
+    let s, d = state.machine_state.stack in
     match s with
-    | [] -> fail Stack_underflow
     | hd :: tl ->
-        let$ () = machine_state |-- stack := tl in
-        return hd
+        Host.return (Ok hd, {state with machine_state = {state.machine_state with stack = (tl, d - 1)}})
+    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+
+  let pop2 : (U256.t * U256.t) M.t =
+   fun state ->
+    let s, d = state.machine_state.stack in
+    match s with
+    | x :: y :: tl ->
+        Host.return (Ok (x, y), {state with machine_state = {state.machine_state with stack = (tl, d - 2)}})
+    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+
+  let pop3 : (U256.t * U256.t * U256.t) M.t =
+   fun state ->
+    let s, d = state.machine_state.stack in
+    match s with
+    | x :: y :: z :: tl ->
+        Host.return (Ok (x, y, z), {state with machine_state = {state.machine_state with stack = (tl, d - 3)}})
+    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
 
   let finish_execution ~return_output : bool M.t =
     let$ () = when_ (not return_output) (machine_state |-- output_buffer := Bytes.empty) in
     return false
+
   let update_pc_and_continue (f : U256.t -> U256.t) : bool M.t =
     update_field (machine_state |-- pc) f >> return true
-  let increase_pc_and_continue : bool M.t = update_pc_and_continue U256.(( + ) one)
+
+  let increase_pc_and_continue : bool M.t =
+   fun state ->
+    Host.return
+      ( Ok true
+      , {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}} )
+  (*
+    update_pc_and_continue U256.(( + ) one)
+   *)
 
   type opcode_impl = bool M.t
 
@@ -467,8 +499,7 @@ struct
 
   let add =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -481,8 +512,7 @@ struct
 
   let mul =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.low in
@@ -495,8 +525,7 @@ struct
 
   let sub =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -509,8 +538,7 @@ struct
 
   let udiv =
     (* Stack *)
-    let$ dividend = pop in
-    let$ divisor = pop in
+    let$ dividend, divisor = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.low in
@@ -523,8 +551,9 @@ struct
 
   let sdiv =
     (* Stack *)
-    let$ dividend = U256.as_signed <$> pop in
-    let$ divisor = U256.as_signed <$> pop in
+    let$ dividend_u, divisor_u = pop2 in
+    let dividend = U256.as_signed dividend_u in
+    let divisor = U256.as_signed divisor_u in
 
     (* Gas *)
     let$ () = spend Gas.low in
@@ -537,8 +566,7 @@ struct
 
   let umod =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.low in
@@ -565,9 +593,7 @@ struct
 
   let addmod =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
-    let$ m = pop in
+    let$ x, y, m = pop3 in
 
     (* Gas *)
     let$ () = spend Gas.mid in
@@ -580,9 +606,7 @@ struct
 
   let mulmod =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
-    let$ m = pop in
+    let$ x, y, m = pop3 in
 
     (* Gas *)
     let$ () = spend Gas.mid in
@@ -595,8 +619,7 @@ struct
 
   let exp =
     (* Stack *)
-    let$ base = pop in
-    let$ exponent = pop in
+    let$ base, exponent = pop2 in
 
     (* Gas *)
     let exponent_bytes = Uint.of_int (U256.significant_bytes exponent) in
@@ -610,8 +633,7 @@ struct
 
   let signextend =
     (* Stack *)
-    let$ byte_index = pop in
-    let$ x = pop in
+    let$ byte_index, x = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.low in
@@ -630,8 +652,7 @@ struct
 
   let lt =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -644,8 +665,7 @@ struct
 
   let gt =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -658,8 +678,9 @@ struct
 
   let slt =
     (* Stack *)
-    let$ x = U256.as_signed <$> pop in
-    let$ y = U256.as_signed <$> pop in
+    let$ x_u, y_u = pop2 in
+    let x = U256.as_signed x_u in
+    let y = U256.as_signed y_u in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -686,8 +707,7 @@ struct
 
   let eq =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -713,8 +733,7 @@ struct
 
   let bitwise_and =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -727,8 +746,7 @@ struct
 
   let bitwise_or =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -741,8 +759,7 @@ struct
 
   let bitwise_xor =
     (* Stack *)
-    let$ x = pop in
-    let$ y = pop in
+    let$ x, y = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -768,8 +785,7 @@ struct
 
   let byte =
     (* Stack *)
-    let$ index_be = pop in
-    let$ x = pop in
+    let$ index_be, x = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -789,8 +805,7 @@ struct
 
   let logical_shift_opcode_impl shift_fn =
     (* Stack *)
-    let$ shift_amount = pop in
-    let$ value = pop in
+    let$ shift_amount, value = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -813,8 +828,8 @@ struct
 
   let sar =
     (* Stack *)
-    let$ shift_amount = pop in
-    let$ value = U256.as_signed <$> pop in
+    let$ shift_amount, value_u = pop2 in
+    let value = U256.as_signed value_u in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -847,8 +862,7 @@ struct
 
   let keccak =
     (* Stack *)
-    let$ start = pop in
-    let$ size_bytes = pop in
+    let$ start, size_bytes = pop2 in
 
     (* Gas *)
     let num_hashed_words = U256.bytes_to_whole_words size_bytes in
@@ -932,13 +946,15 @@ struct
 
   let copy_input_data_opcode_impl data_location =
     (* Stack *)
-    let$ dst_start = pop in
-    let$ src_start = pop in
-    let$ size_bytes = pop in
+    let$ dst_start, src_start, size_bytes = pop3 in
 
     (* Gas *)
     let n_words = U256.(to_uint (bytes_to_whole_words size_bytes)) in
+    Format.eprintf "N_WORDS: %s\n" (Uint.to_hex_string n_words) ;
+    Format.eprintf "COPY SIZE %s TO %s\n" (U256.to_hex_string size_bytes) (U256.to_hex_string dst_start) ;
     let$ memory_extension_gas = extend_memory_to ~start:dst_start ~size_bytes in
+    Format.eprintf "GAS_EXT_COST %s\n" Uint.(to_hex_string memory_extension_gas) ;
+    Format.eprintf "COPY COST %s\n" Uint.(to_hex_string Gas.(very_low + (n_words * copy_cost_per_word))) ;
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
     (* Operation *)
@@ -978,9 +994,7 @@ struct
   let extcodecopy =
     (* Stack *)
     let$ address = Address.of_u256_truncating <$> pop in
-    let$ dst_start = pop in
-    let$ src_start = pop in
-    let$ size_bytes = pop in
+    let$ dst_start, src_start, size_bytes = pop3 in
 
     (* Gas *)
     let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account address in
@@ -1022,9 +1036,7 @@ struct
 
   let returndatacopy =
     (* Stack *)
-    let$ dst_start = pop in
-    let$ src_start = pop in
-    let$ size_bytes = pop in
+    let$ dst_start, src_start, size_bytes = pop3 in
 
     (* Gas *)
     let$ data = !(machine_state |-- output_buffer) in
@@ -1167,7 +1179,7 @@ struct
     (* Stack *)
     let$ nth_elt =
       !(machine_state |-- stack)
-      |> M.fmap (fun l -> List.nth_opt l (i - 1))
+      |> M.fmap (fun (l, _) -> List.nth_opt l (i - 1))
       >>= M.Option.or_fail Stack_underflow
     in
 
@@ -1192,10 +1204,9 @@ struct
     assert (i <= 16) ;
     (* Stack *)
     let$ first = pop in
-    let$ nth, stack' =
-      !(machine_state |-- stack) |> M.fmap (replace_list (i - 1) first) >>= Option.or_fail Stack_underflow
-    in
-    let$ () = machine_state |-- stack := stack' in
+    let$ s, d = !(machine_state |-- stack) in
+    let$ nth, stack' = Option.or_fail Stack_underflow (replace_list (i - 1) first s) in
+    let$ () = machine_state |-- stack := (stack', d) in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -1224,8 +1235,7 @@ struct
 
   let mstore =
     (* Stack *)
-    let$ pos = pop in
-    let$ value = pop in
+    let$ pos, value = pop2 in
 
     (* Gas *)
     let$ memory_extension_gas = extend_memory_to ~start:pos ~size_bytes:U256.(~$32) in
@@ -1239,8 +1249,7 @@ struct
 
   let mstore8 =
     (* Stack *)
-    let$ pos = pop in
-    let$ value = pop in
+    let$ pos, value = pop2 in
 
     (* Gas *)
     let$ memory_extension_gas = extend_memory_to ~start:pos ~size_bytes:U256.one in
@@ -1272,8 +1281,7 @@ struct
 
   let sstore =
     (* Stack *)
-    let$ key = pop in
-    let$ value' = pop in
+    let$ key, value' = pop2 in
 
     (* Gas *)
     (* Protection against reentrancy attacks, see EIP-2200 *)
@@ -1332,8 +1340,7 @@ struct
 
   let jumpi =
     (* Stack *)
-    let$ new_pc = pop in
-    let$ condition = pop in
+    let$ new_pc, condition = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.high in
@@ -1389,8 +1396,7 @@ struct
 
   let tstore =
     (* Stack *)
-    let$ key = pop in
-    let$ value = pop in
+    let$ key, value = pop2 in
 
     (* Gas *)
     let$ () = spend Gas.warm_access_cost in
@@ -1406,9 +1412,7 @@ struct
   (* EIP-5656. *)
   let mcopy =
     (* Stack *)
-    let$ dst_start = pop in
-    let$ src_start = pop in
-    let$ size_bytes = pop in
+    let$ dst_start, src_start, size_bytes = pop3 in
 
     (* Gas *)
     let n_words = U256.(to_uint (bytes_to_whole_words size_bytes)) in
@@ -1425,8 +1429,7 @@ struct
   let log n_topics =
     assert (n_topics >= 0 && n_topics <= 4) ;
     (* Stack *)
-    let$ start = pop in
-    let$ size_bytes = pop in
+    let$ start, size_bytes = pop2 in
 
     let$ topics : B32.t list =
       List.of_seq <$> (Seq.(take n_topics (ints 0)) |> Seq.mapM ~f:(fun _ -> U256.to_repr <$> pop))
@@ -1581,9 +1584,7 @@ struct
 
   let create =
     (* Stack *)
-    let$ endowment = pop in
-    let$ input_start = pop in
-    let$ input_size_bytes = pop in
+    let$ endowment, input_start, input_size_bytes = pop3 in
 
     (* Gas *)
     let$ memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size_bytes in
@@ -1674,6 +1675,7 @@ struct
     (* Stack *)
     let$ gas = U256.to_uint <$> pop in
     let$ recipient = Address.of_u256_truncating <$> pop in
+    (* TODO: unify. *)
     let$ value = pop in
     let$ input_start = pop in
     let$ input_size = pop in
@@ -1699,6 +1701,7 @@ struct
     (* Stack *)
     let$ gas = U256.to_uint <$> pop in
     let$ code_address = Address.of_u256_truncating <$> pop in
+    (* TODO: unify. *)
     let$ value = pop in
     let$ input_start = pop in
     let$ input_size = pop in
@@ -1722,8 +1725,7 @@ struct
 
   let return_ =
     (* Stack *)
-    let$ start = pop in
-    let$ size_bytes = pop in
+    let$ start, size_bytes = pop2 in
 
     (* Gas *)
     let$ () =
@@ -1745,6 +1747,7 @@ struct
     (* Stack *)
     let$ gas = U256.to_uint <$> pop in
     let$ code_address = Address.of_u256_truncating <$> pop in
+    (* TODO: unify *)
     let$ input_start = pop in
     let$ input_size = pop in
     let$ output_start = pop in
@@ -1770,6 +1773,7 @@ struct
 
   let create2 =
     (* Stack *)
+    (* TODO: unify. *)
     let$ endowment = pop in
     let$ input_start = pop in
     let$ input_size_bytes = pop in
@@ -1800,6 +1804,7 @@ struct
     (* Stack *)
     let$ gas = U256.to_uint <$> pop in
     let$ recipient = Address.of_u256_truncating <$> pop in
+    (* TODO: unify. *)
     let$ input_start = pop in
     let$ input_size = pop in
     let$ output_start = pop in
@@ -1822,8 +1827,7 @@ struct
 
   let revert =
     (* Stack *)
-    let$ start = pop in
-    let$ size_bytes = pop in
+    let$ start, size_bytes = pop2 in
 
     (* Gas *)
     let$ () =
@@ -1982,7 +1986,7 @@ struct
       Format.printf "PC: %s\n" (U256.to_string ms.pc) ;
       Format.printf "Gas: %s\n" (Uint.to_string ms.gas) ;
       Format.printf "Stack: \n" ;
-      trace_stack ms.stack ;
+      trace_stack (fst ms.stack) ;
       Format.printf "Memory: \n" ;
       Memory.dump ms.memory ;
       Format.print_flush () ;
@@ -2007,6 +2011,7 @@ struct
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
     trace (fun () -> "Start execution\n") ;
     trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
+    trace (fun () -> Format.sprintf "Call data: %s\n" (Bytes.to_hex_string msg.input_data)) ;
     let open Host in
     let open Monad.Make (Host) in
     let$ tx_context = get_tx_context in

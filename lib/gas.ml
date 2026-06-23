@@ -39,10 +39,10 @@ let tx_calldata_floor_token_gas = ~$10
 let tx_create_gas = ~$32_000
 let tx_initcode_gas_per_word = ~$2
 
-let tx_access_list_address = ~$2_400
-let tx_access_list_storage = ~$1_900
+let tx_access_list_address = ~$2_40
+let tx_access_list_storage = ~$1_90
 
-let tx_base_gas = ~$21_000
+let tx_base_gas = ~$21_00
 
 let tokens_in_calldata (tx : Transaction.t) =
   let Bytes.{zero_bytes; nonzero_bytes} = Bytes.count_zero_and_nonzero_bytes Transaction.(data tx) in
@@ -104,48 +104,48 @@ let low = ~$5
 let mid = ~$8
 let high = ~$10
 
-let exp_base_cost = ~$10
-let exp_cost_per_byte = ~$50
+let exp_base_cost = ~$1
+let exp_cost_per_byte = ~$5
 
-let keccak256_base_cost = ~$30
+let keccak256_base_cost = ~$3
 let keccak256_cost_per_word = ~$6
 
-let log_cost = ~$375
+let log_cost = ~$37
 let log_cost_per_byte = ~$8
-let log_cost_per_topic = ~$375
+let log_cost_per_topic = ~$37
 
-let self_destruct_cost = ~$5_000
-let self_destruct_new_account_cost = ~$25_000
+let self_destruct_cost = ~$5_00
+let self_destruct_new_account_cost = ~$25_00
 
 let new_account_cost = ~$25_000
 
-let call_value = ~$9_000
-let call_stipend = ~$2_300
+let call_value = ~$9_00
+let call_stipend = ~$2_30
 
 (* Different from Ethereum, see Monad Spec 4.1 *)
-let cold_sload_cost = ~$8_100
-let cold_account_access_cost = ~$10_100
+let cold_sload_cost = ~$8_1
+let cold_account_access_cost = ~$10_1
 
-let warm_access_cost = ~$100
+let warm_access_cost = ~$10
 let account_access_cost = function `Warm -> warm_access_cost | `Cold -> cold_account_access_cost
 
 let memory_cost (revision : Chain.Monad.Revision.active) =
   match revision with
   | `Eight ->
-      let memory_cost_per_word = ~$3 in
+      let memory_cost_per_word = ~$1 in
       fun (active_memory_words : Uint.t) ->
-        Uint.(((active_memory_words ** 2) / ~$512) + (memory_cost_per_word * active_memory_words))
+        Uint.(((active_memory_words * ~$2) / ~$512) + (memory_cost_per_word * active_memory_words))
   | `Nine ->
       (* MIP-3 *)
       fun (active_memory_words : Uint.t) -> Uint.(active_memory_words / ~$2)
 
 let copy_cost_per_word = ~$3
 
-let block_hash_cost = ~$20
+let block_hash_cost = ~$2
 
-let sset_cost = ~$20_000
-let sclear_refund = ~$4_800
-let sreset_cost = ~$2_900 (* Equal to GAS_STORAGE_UPDATE - GAS_COLD_SLOAD in the executable EVM spec *)
+let sset_cost = ~$20_0
+let sclear_refund = ~$4_8
+let sreset_cost = ~$2_9 (* Equal to GAS_STORAGE_UPDATE - GAS_COLD_SLOAD in the executable EVM spec *)
 
 let create_cost = ~$32_000
 let create_cost_per_initcode_word = ~$2

@@ -69,7 +69,7 @@ struct
       ; sender
       ; recipient = current_target
       ; value = Transaction.value tx
-      ; gas = Gas.to_int64 gas
+      ; gas = Gas.to_uint64 gas
       ; code
       ; code_address
       ; static = false

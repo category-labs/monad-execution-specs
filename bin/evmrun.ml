@@ -11,7 +11,7 @@ let revision : Revision.active ref = ref `Eight
 let chain_id : Uint.t ref = ref Testnet.chain_id
 let bytecode_source = ref None
 let calldata_source = ref None
-let gas_limit = ref 100000L
+let gas_limit = ref Uint64.max_uint
 let trace = ref false
 
 let set_source_file r = Arg.String (fun s -> r := Some (`File s))
@@ -57,7 +57,7 @@ let () =
 
 let read_source place =
   match !place with
-  | Some (`File file) -> In_channel.(with_open_bin file input_all)
+  | Some (`File file) -> In_channel.(with_open_bin file (fun f -> Bytes.of_hex_string (String.trim (input_all f))))
   | Some (`Literal lit) -> Bytes.of_hex_string lit
   | None -> ""
 
@@ -94,7 +94,13 @@ let result, _state =
   let block_state = Host.BlockState.make world_state block in
   let transaction_state = Host.TransactionState.make block_state Address.zero tx in
   let msg = {(Execution.prepare_message sender gas_limit tx) with code = bytecode; input_data = calldata} in
+  Execution.Vm.execute msg bytecode transaction_state
+(*
   Execution.Host.call_from_eoa tx msg transaction_state
+ *)
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"
+
+let () =
+  Gc.print_stat (Out_channel.stdout)

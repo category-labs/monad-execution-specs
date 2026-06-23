@@ -121,6 +121,7 @@ module Make (M : SIG) = struct
     include Seq
   end
 end
+[@@inlin]
 
 (* Alias to avoid shadowing Make from child modules. *)
 module Make_Monad = Make
@@ -230,6 +231,7 @@ module Make2 (M : SIG2) = struct
     include Seq
   end
 end
+[@@inline]
 
 (** A monad transformer is a module defining a monad, an inner monad [Inner], and a transformation
     [lift] which lifts a computation in the inner monad to the monad transformer *)
@@ -278,6 +280,7 @@ struct
       let$ v = !l in
       l := f v
   end
+  [@@inline]
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
@@ -299,6 +302,7 @@ struct
     let lower (x : state -> 'a * state) : 'a t = fun s -> Inner.return (x s)
     let lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (x, s)) x
   end
+  [@@inline]
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
     include Make (struct
@@ -308,9 +312,11 @@ struct
       let put x = MT.lift (M.put x)
     end)
   end
+  [@@inline]
 
   include Trans (Identity)
 end
+[@@inline]
 
 module Result (T : sig
   type t
@@ -333,6 +339,7 @@ struct
       let or_fail (err : error) = function None -> S.fail err | Some x -> S.return x
     end
   end
+  [@@inline]
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) : SIG = struct
     include Make (struct
@@ -341,6 +348,7 @@ struct
       let fail (x : T.t) : 'a MT.t = MT.lift (M.fail x)
     end)
   end
+  [@@inline]
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
@@ -358,9 +366,11 @@ struct
     let lower (x : ('a, T.t) result) : 'a t = Inner.return x
     let lift (x : 'a Inner.t) : 'a t = Inner.fmap Stdlib.Result.ok x
   end
+  [@@inline]
 
   include Trans (Identity)
 end
+[@@inline]
 
 (** A monad that produces either a state change or an error. Note that this provides the capabilities of both
     State and Result but is not equal to their composition. *)
@@ -399,5 +409,70 @@ module StErr = struct
     end
 
     include Trans (Identity)
+  end
+  [@@inline]
+end
+
+(* A classic (no Codensity) state+error monad. *)
+module State_error = struct
+  module Make (P : sig
+    type state
+    type error
+  end) =
+  struct
+    module Impl = struct
+      include P
+      type 'a t = state -> ('a, error) result * state
+      let[@inline] return (v : 'a) = fun state -> (Ok v, state)
+      let ( >>= ) (v : 'a t) (f : 'a -> 'b t) : 'b t =
+       fun state ->
+        let res, state = v state in
+        match res with Error err -> (Error err, state) | Ok v -> f v state
+
+      let get : state t = fun state -> (Ok state, state)
+      let put (state' : state) = fun _state -> (Ok (), state')
+
+      let fail (err : error) = fun state -> (Error err, state)
+    end
+    include Impl
+    include Make (Impl)
+    module S = State (struct
+      type t = state
+    end)
+    include S.Make (Impl)
+    module R = Result (struct
+      type t = error
+    end)
+    include R.Make (Impl)
+  end
+
+  module Product (P1 : sig
+    type state
+    type error
+  end) (P2 : sig
+    type state
+    type error
+  end) =
+  struct
+    module P = struct
+      type state = P1.state * P2.state
+      type error = Left of P1.error | Right of P2.error
+    end
+    include Make (P)
+
+    module Left = Make(P1)
+    module Right = Make(P2)
+
+    let run_left (v : 'a t) : P1.state -> (('a, P1.error) result * P1.state) Right.t =
+      fun s_1 ->
+      fun s_2 ->
+      match v (s_1, s_2) with
+      | Ok result, (s_1, s_2) ->
+         Ok ((Ok result, s_1)), s_2
+      | Error (Left e_1), (s_1, s_2) ->
+         Ok ((Error e_1, s_1)), s_2
+      | Error (Right e_2), (_s_1, s_2) ->
+         Error e_2, s_2
+
   end
 end

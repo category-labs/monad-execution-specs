@@ -59,6 +59,9 @@ module Bytes = struct
           let c0 = Char.code str.[start + (i * 2) + 1] in
           let num = (Iarray.get hex_table c1 * 16) + Iarray.get hex_table c0 in
           (* num is positive if and only if both c1 and c0 are valid hex digits. *)
+          if num < 0 then (
+            Format.eprintf "%d %d\n" c1 c0 ;
+            Format.eprintf "%c %c\n" str.[start + (i * 2)] str.[start + (i * 2) + 1] ) ;
           Char.chr num
       in
       String.init len byte_i
