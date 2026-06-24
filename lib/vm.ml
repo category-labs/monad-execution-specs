@@ -316,13 +316,14 @@ struct
   module StatusCode = Evmc.Result.StatusCode
   module Err = Monad.Result (Evmc.Result.StatusCode)
 
-  module StErr = Monad.State_error.Make (struct
+  module StErr = Monad.State_error_codensity.Make (struct
     type state = Context.t
     type error = Evmc.Result.StatusCode.t
   end)
 
   module M = struct
     module ErrStHost = StErr.Trans (Host)
+
     (*module StHost = St.Trans (Host)*)
     (*module ErrStHost = Err.Trans (StHost)*)
 
@@ -423,14 +424,22 @@ struct
   open M
 
   let spend (amount : Uint.t) =
-   fun state ->
-    if Uint.(state.machine_state.gas < amount) then
-      Host.return (Error Evmc.Result.StatusCode.Out_of_gas, state)
-    else
-      Host.return
-        ( Ok ()
-        , {state with machine_state = {state.machine_state with gas = Uint.(state.machine_state.gas - amount)}}
-        )
+    { run_k =
+        (fun k state ->
+          let available = state.machine_state.gas in
+          if Uint.(available < amount) then Host.return (Error Evmc.Result.StatusCode.Out_of_gas, state)
+          else k () {state with machine_state = {state.machine_state with gas = Uint.(available - amount)}} )
+    }
+  (*
+    boom (fun state ->
+        if Uint.(state.machine_state.gas < amount) then
+          Host.return (Error Evmc.Result.StatusCode.Out_of_gas, state)
+        else
+          Host.return
+            ( Ok ()
+            , { state with
+                machine_state = {state.machine_state with gas = Uint.(state.machine_state.gas - amount)} } ) )
+   *)
 
   let check_write_permissions =
     let$ can_write = !(execution_environment |-- write_permission) in
@@ -443,34 +452,72 @@ struct
   let self : Address.t M.t = !(execution_environment |-- address)
 
   let push (x : U256.t) : unit M.t =
-   fun state ->
-    let s, d = state.machine_state.stack in
-    if d >= max_stack_depth then Host.return (Error Evmc.Result.StatusCode.Stack_overflow, state)
-    else Host.return (Ok (), {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}})
+    let run_k continue state =
+      let s, d = state.machine_state.stack in
+      if d >= max_stack_depth then Host.return (Error Evmc.Result.StatusCode.Stack_overflow, state)
+      else continue () {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}}
+    in
+    {run_k}
+  (*
+    boom (fun state ->
+        let s, d = state.machine_state.stack in
+        if d >= max_stack_depth then Host.return (Error Evmc.Result.StatusCode.Stack_overflow, state)
+        else
+          Host.return (Ok (), {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}}) )
+     *)
 
   let pop : U256.t M.t =
-   fun state ->
-    let s, d = state.machine_state.stack in
-    match s with
-    | hd :: tl ->
-        Host.return (Ok hd, {state with machine_state = {state.machine_state with stack = (tl, d - 1)}})
-    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    let run_k continue state =
+      match state.machine_state.stack with
+      | hd :: tl, d -> continue hd {state with machine_state = {state.machine_state with stack = (tl, d - 1)}}
+      | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    in
+    {run_k}
 
   let pop2 : (U256.t * U256.t) M.t =
-   fun state ->
-    let s, d = state.machine_state.stack in
-    match s with
-    | x :: y :: tl ->
-        Host.return (Ok (x, y), {state with machine_state = {state.machine_state with stack = (tl, d - 2)}})
-    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    let run_k continue state =
+      match state.machine_state.stack with
+      | x :: y :: tl, d ->
+          continue (x, y) {state with machine_state = {state.machine_state with stack = (tl, d - 2)}}
+      | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    in
+    {run_k}
 
   let pop3 : (U256.t * U256.t * U256.t) M.t =
-   fun state ->
-    let s, d = state.machine_state.stack in
-    match s with
-    | x :: y :: z :: tl ->
-        Host.return (Ok (x, y, z), {state with machine_state = {state.machine_state with stack = (tl, d - 3)}})
-    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    let run_k continue state =
+      match state.machine_state.stack with
+      | x :: y :: z :: tl, d ->
+          continue (x, y, z) {state with machine_state = {state.machine_state with stack = (tl, d - 3)}}
+      | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    in
+    {run_k}
+
+  (*
+    boom (fun state ->
+        let s, d = state.machine_state.stack in
+        match s with
+        | hd :: tl ->
+            Host.return (Ok hd, {state with machine_state = {state.machine_state with stack = (tl, d - 1)}})
+        | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state) )
+
+  let pop2 : (U256.t * U256.t) M.t =
+    boom (fun state ->
+        let s, d = state.machine_state.stack in
+        match s with
+        | x :: y :: tl ->
+            Host.return
+              (Ok (x, y), {state with machine_state = {state.machine_state with stack = (tl, d - 2)}})
+        | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state) )
+
+  let pop3 : (U256.t * U256.t * U256.t) M.t =
+    boom (fun state ->
+        let s, d = state.machine_state.stack in
+        match s with
+        | x :: y :: z :: tl ->
+            Host.return
+              (Ok (x, y, z), {state with machine_state = {state.machine_state with stack = (tl, d - 3)}})
+        | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state) )
+   *)
 
   let finish_execution ~return_output : bool M.t =
     let$ () = when_ (not return_output) (machine_state |-- output_buffer := Bytes.empty) in
@@ -480,10 +527,18 @@ struct
     update_field (machine_state |-- pc) f >> return true
 
   let increase_pc_and_continue : bool M.t =
-   fun state ->
-    Host.return
-      ( Ok true
-      , {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}} )
+    let run_k continue state =
+      continue true
+        {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}}
+    in
+    {run_k}
+  (*
+    boom (fun state ->
+        Host.return
+          ( Ok true
+          , {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}}
+          ) )
+     *)
   (*
     update_pc_and_continue U256.(( + ) one)
    *)
@@ -1878,105 +1933,111 @@ struct
     (* PC *)
     finish_execution ~return_output:false
 
-  let execute_opcode (opcode : Opcode.t) =
-    let impl =
-      match opcode with
-      (* Arithmetic *)
-      | Add -> add
-      | Mul -> mul
-      | Sub -> sub
-      | Udiv -> udiv
-      | Sdiv -> sdiv
-      | Umod -> umod
-      | Smod -> smod
-      | Addmod -> addmod
-      | Mulmod -> mulmod
-      | Exp -> exp
-      | Signextend -> signextend
-      (* Comparison *)
-      | Lt -> lt
-      | Gt -> gt
-      | Slt -> slt
-      | Sgt -> sgt
-      | Eq -> eq
-      | Iszero -> is_zero
-      (* Bitwise *)
-      | And -> bitwise_and
-      | Or -> bitwise_or
-      | Xor -> bitwise_xor
-      | Not -> bitwise_not
-      | Byte -> byte
-      | Shl -> shl
-      | Shr -> shr
-      | Sar -> sar
-      (* Cryptography *)
-      | Keccak -> keccak
-      (* Environment *)
-      | Address -> address
-      | Balance -> balance
-      | Origin -> origin
-      | Caller -> caller
-      | Callvalue -> callvalue
-      | Calldataload -> calldataload
-      | Calldatasize -> calldatasize
-      | Calldatacopy -> calldatacopy
-      | Codesize -> codesize
-      | Codecopy -> codecopy
-      | Gasprice -> gasprice
-      | Extcodesize -> extcodesize
-      | Extcodecopy -> extcodecopy
-      | Returndatasize -> returndatasize
-      | Returndatacopy -> returndatacopy
-      | Extcodehash -> extcodehash
-      | Blockhash -> blockhash
-      | Coinbase -> coinbase
-      | Timestamp -> timestamp
-      | Number -> number
-      | Prevrandao -> prevrandao
-      | Gaslimit -> gaslimit
-      | Chainid -> chainid
-      | Selfbalance -> selfbalance
-      | Basefee -> basefee
-      | Blobhash -> blobhash
-      | Blobbasefee -> blobbasefee
-      | Gas -> gas_
-      (* Memory and storage *)
-      | Msize -> msize
-      | Mload -> mload
-      | Mstore -> mstore
-      | Mstore8 -> mstore8
-      | Sload -> sload
-      | Sstore -> sstore
-      | Tload -> tload
-      | Tstore -> tstore
-      | Mcopy -> mcopy
-      (* Control flow *)
-      | Jump -> jump
-      | Jumpi -> jumpi
-      | Pc -> pc_
-      | Jumpdest -> jumpdest
-      | Stop -> stop
-      | Return -> return_
-      | Revert -> revert
-      (* Stack *)
-      | Pop -> pop_
-      | Push i -> push_ i
-      | Dup i -> dup i
-      | Swap i -> swap i
-      (* System *)
-      | Log i -> log i
-      | Create -> create
-      | Call -> call
-      | Callcode -> callcode
-      | Delegatecall -> delegatecall
-      | Create2 -> create2
-      | Staticcall -> staticcall
-      | Selfdestruct -> selfdestruct
-      (* Error *)
-      | Invalid -> invalid
-      | Undefined _ -> undefined
+  let opcode_semantics : Opcode.t -> bool M.t = function
+    (* Arithmetic *)
+    | Add -> add
+    | Mul -> mul
+    | Sub -> sub
+    | Udiv -> udiv
+    | Sdiv -> sdiv
+    | Umod -> umod
+    | Smod -> smod
+    | Addmod -> addmod
+    | Mulmod -> mulmod
+    | Exp -> exp
+    | Signextend -> signextend
+    (* Comparison *)
+    | Lt -> lt
+    | Gt -> gt
+    | Slt -> slt
+    | Sgt -> sgt
+    | Eq -> eq
+    | Iszero -> is_zero
+    (* Bitwise *)
+    | And -> bitwise_and
+    | Or -> bitwise_or
+    | Xor -> bitwise_xor
+    | Not -> bitwise_not
+    | Byte -> byte
+    | Shl -> shl
+    | Shr -> shr
+    | Sar -> sar
+    (* Cryptography *)
+    | Keccak -> keccak
+    (* Environment *)
+    | Address -> address
+    | Balance -> balance
+    | Origin -> origin
+    | Caller -> caller
+    | Callvalue -> callvalue
+    | Calldataload -> calldataload
+    | Calldatasize -> calldatasize
+    | Calldatacopy -> calldatacopy
+    | Codesize -> codesize
+    | Codecopy -> codecopy
+    | Gasprice -> gasprice
+    | Extcodesize -> extcodesize
+    | Extcodecopy -> extcodecopy
+    | Returndatasize -> returndatasize
+    | Returndatacopy -> returndatacopy
+    | Extcodehash -> extcodehash
+    | Blockhash -> blockhash
+    | Coinbase -> coinbase
+    | Timestamp -> timestamp
+    | Number -> number
+    | Prevrandao -> prevrandao
+    | Gaslimit -> gaslimit
+    | Chainid -> chainid
+    | Selfbalance -> selfbalance
+    | Basefee -> basefee
+    | Blobhash -> blobhash
+    | Blobbasefee -> blobbasefee
+    | Gas -> gas_
+    (* Memory and storage *)
+    | Msize -> msize
+    | Mload -> mload
+    | Mstore -> mstore
+    | Mstore8 -> mstore8
+    | Sload -> sload
+    | Sstore -> sstore
+    | Tload -> tload
+    | Tstore -> tstore
+    | Mcopy -> mcopy
+    (* Control flow *)
+    | Jump -> jump
+    | Jumpi -> jumpi
+    | Pc -> pc_
+    | Jumpdest -> jumpdest
+    | Stop -> stop
+    | Return -> return_
+    | Revert -> revert
+    (* Stack *)
+    | Pop -> pop_
+    | Push i -> push_ i
+    | Dup i -> dup i
+    | Swap i -> swap i
+    (* System *)
+    | Log i -> log i
+    | Create -> create
+    | Call -> call
+    | Callcode -> callcode
+    | Delegatecall -> delegatecall
+    | Create2 -> create2
+    | Staticcall -> staticcall
+    | Selfdestruct -> selfdestruct
+    (* Error *)
+    | Invalid -> invalid
+    | Undefined _ -> undefined
+
+  let execute_opcode (opcode : Opcode.t) = opcode_semantics opcode
+
+  let execute_direct : char -> bool M.t =
+    let table =
+      Iarray.init 256 (fun i ->
+          let opcode = Opcode.of_byte (Char.chr i) in
+          opcode_semantics opcode )
     in
-    impl
+    fun byte -> Iarray.get table (Char.code byte)
 
   let trace_stack =
     if Params.trace then ( fun stack ->
@@ -2000,19 +2061,54 @@ struct
     else return ()
 
   let rec run (code : Bytes.t) : unit M.t =
+    let run_k continue state =
+      let pc = state.machine_state.pc in
+      let opcode =
+        (* YP (157) *)
+        match U256.to_int_opt pc with
+        | Some pc when pc < Bytes.length code -> code.[pc]
+        | _ -> '\x00'
+      in
+      let exe = execute_direct opcode in
+      exe.run_k (fun go state -> if go then (run code).run_k continue state else continue () state) state
+    in
+    {run_k}
+  (*
+          Inner.(
+            let$ result, state = execute_direct opcode state in
+            match result with
+            | Error err -> Inner.return (Error err, state)
+            | Ok continue -> if continue then run code state else Inner.return (Ok (), state) ) *)
+  (*
+   boom (fun state ->
+    (* TODO: restore tracing *)
+    let pc = state.machine_state.pc in
+    let opcode =
+      (* YP (157) *)
+      match U256.to_int_opt pc with
+      | Some pc when pc < Bytes.length code -> code.[pc]
+      | _ -> '\x00'
+    in
+    Inner.(
+      let$ result, state = execute_direct opcode state in
+      match result with
+      | Error err -> Inner.return (Error err, state)
+      | Ok continue -> if continue then run code state else Inner.return (Ok (), state) ))*)
+  (*
     let$ () = trace_state in
     let$ pc = !(machine_state |-- pc) in
     let opcode =
       (* YP (157) *)
       match U256.to_int_opt pc with
-      | Some pc when pc < Bytes.length code -> Opcode.of_byte code.[pc]
-      | _ -> Opcode.Stop
+      | Some pc when pc < Bytes.length code -> code.[pc]
+      | _ -> '\x00'
     in
     trace (fun () ->
-        let info = Opcode.info opcode in
+        let info = Opcode.info (Opcode.of_byte opcode) in
         Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
-    let$ continue = execute_opcode opcode in
-    if continue then run code else return ()
+    let$ continue = execute_direct opcode in
+    if continue then run code else return () 
+     *)
 
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
     trace (fun () -> "Start execution\n") ;
@@ -2022,7 +2118,7 @@ struct
     let open Monad.Make (Host) in
     let$ tx_context = get_tx_context in
     let ctx = Context.make tx_context msg code in
-    let$ res, ctx = run code ctx in
+    let$ res, ctx = M.run (run code) ctx in
     trace (fun () -> "Finished execution\n") ;
     return
       ( match res with

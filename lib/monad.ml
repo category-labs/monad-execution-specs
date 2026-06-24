@@ -121,7 +121,7 @@ module Make (M : SIG) = struct
     include Seq
   end
 end
-[@@inlin]
+[@@inline]
 
 (* Alias to avoid shadowing Make from child modules. *)
 module Make_Monad = Make
@@ -299,6 +299,14 @@ struct
       let put (s : T.t) : unit t = fun _ -> Inner.return ((), s)
     end)
 
+    (* Specialize lens ops. *)
+    let ( := ) (l : (state, 'x) Lens.t) (x : 'x) : unit t = fun state -> Inner.return ((), l.set x state)
+
+    let ( ! ) (l : (state, 'x) Lens.t) : 'x t = fun state -> Inner.return (l.get state, state)
+
+    let update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t =
+     fun state -> Inner.return ((), l.set (f (l.get state)) state)
+
     let lower (x : state -> 'a * state) : 'a t = fun s -> Inner.return (x s)
     let lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (x, s)) x
   end
@@ -308,8 +316,8 @@ struct
     include Make (struct
       include MT
       type state = T.t
-      let get : T.t MT.t = (MT.lift[@inline]) M.get
-      let put x = (MT.lift[@inline]) (M.put x)
+      let get : T.t MT.t = (MT.lift [@inlined]) M.get
+      let put x = (MT.lift [@inlined]) (M.put x)
     end)
   end
   [@@inline]
@@ -446,18 +454,27 @@ module State_error = struct
       include Make (struct
         include P
         type 'a t = state -> (('a, error) result * state) Inner.t
-        let[@inline] return (v : 'a) state = (Inner.return[@inlined]) (Ok v, state)
-        let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t)  =
-          fun state ->
+        let[@inline] return (v : 'a) state = (Inner.return [@inlined]) (Ok v, state)
+        let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) =
+         fun state ->
           Inner.(
             let$ res, state = (v [@inlined]) state in
-            match res with Error err -> (Inner.return[@inlined]) (Error err, state) | Ok v -> f v state )
+            match res with Error err -> (Inner.return [@inlined]) (Error err, state) | Ok v -> f v state )
 
         let get : state t = fun state -> Inner.return (Ok state, state)
         let put (state' : state) = fun _state -> Inner.return (Ok (), state')
 
         let fail (err : error) = fun state -> Inner.return (Error err, state)
       end)
+
+      (* Specialized lens stuff, faster. *)
+      let[@inline] ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
+       fun state ->
+        let state = l.set x state in
+        Inner.return (Ok (), state)
+      let[@inline] ( ! ) (l : (state, 'x) Lens.t) = fun state -> Inner.return (Ok (l.get state), state)
+      let[@inline] update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) =
+       fun state -> Inner.return (Ok (), l.set (f (l.get state)) state)
 
       let[@inline] lower (x : state -> ('a, error) result * state) : 'a t = fun s -> Inner.return (x s)
       let[@inline] lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (Ok x, s)) x
@@ -468,8 +485,8 @@ module State_error = struct
       include MT
       include P
       let get = (MT.lift [@inlined]) M.get
-      let put x = (MT.lift [@inlined]) ((M.put[@inlined]) x)
-      let fail err = (MT.lift [@inlined]) ((M.fail[@inlined]) err)
+      let put x = (MT.lift [@inlined]) ((M.put [@inlined]) x)
+      let fail err = (MT.lift [@inlined]) ((M.fail [@inlined]) err)
     end)
     [@@inline]
 
@@ -565,57 +582,76 @@ module State_error_codensity = struct
     type error
   end) =
   struct
-    module Impl = struct
-      include P
-
-      (* [∀r. (a -> M r) -> M r] with [M r = state -> ('r, error) result * state]. The
-         universally-quantified ['r] makes this a polymorphic (rank-2) record field. *)
-      type 'a t =
-        {run_k : 'r. ('a -> state -> ('r, error) result * state) -> state -> ('r, error) result * state}
-      [@@unboxed]
-
-      let[@inline] return (x : 'a) : 'a t =
-        let[@inline] run_k k s = (k [@inlined]) x s in
-        {run_k}
-
-      let[@inline] ( >>= ) (c : 'a t) (f : 'a -> 'b t) : 'b t =
-        let[@inline] run_k k s =
-          let[@inline] r a = (((f [@inlined]) a).run_k [@inlined]) k in
-          (c.run_k [@inlined]) r s
-        in
-        {run_k}
-      (*
-        { run_k = (fun k -> (c.run_k[@inlined]) (fun a -> (f a).run_k k)) }
-       *)
-
-      (* lift get  = fun k s -> k s s *)
-      let get : state t =
-        let[@inline] run_k k s = (k [@inlined]) s s in
-        {run_k}
-
-      (* lift (put s') = fun k _ -> k () s' *)
-      let[@inline] put (state' : state) : unit t =
-        let[@inline] run_k k _s = (k [@inlined]) () state' in
-        {run_k}
-
-      (* lift (fail e) short-circuits: the continuation is discarded. *)
-      let[@inline] fail (err : error) : 'a t = {run_k = (fun _k state -> (Error err, state))}
+    module State = State (struct
+      type t = P.state
+    end)
+    module Result = Result (struct
+      type t = P.error
+    end)
+    module type SIG = sig
+      include SIG
+      include State.SIG with type 'a t := 'a t
+      include Result.SIG with type 'a t := 'a t
     end
 
-    include Impl
-    include Make (Impl)
-    module S = State (struct
-      type t = state
-    end)
-    include S.Make (Impl)
-    module R = Result (struct
-      type t = error
-    end)
-    include R.Make (Impl)
+    module Make (S : SIG) = struct
+      include S
+      include Make (S)
+      include State.Make (S)
+      include Result.Make (S)
+    end
+    [@@inline]
+
+    module Trans (Inner : SIG_MONAD) = struct
+      module Inner = Make_Monad (Inner)
+
+      module Impl = struct
+        include P
+
+        type 'a t =
+          { run_k :
+              'r.
+                 ('a -> state -> (('r, error) result * state) Inner.t)
+              -> state
+              -> (('r, error) result * state) Inner.t }
+        [@@unboxed]
+
+        let[@inline] return (x : 'a) : 'a t =
+          let[@inline] run_k k = (k [@inlined]) x in
+          {run_k}
+
+        let[@inline] ( >>= ) (c : 'a t) (f : 'a -> 'b t) : 'b t =
+          let[@inline] run_k k s =
+            let[@inline] r a = (((f [@inlined]) a).run_k [@inlined]) k in
+            (c.run_k [@inlined]) r s
+          in
+          {run_k}
+
+        (* lift get  = fun k s -> k s s *)
+        let get : state t =
+          let[@inline] run_k k s = (k [@inlined]) s s in
+          {run_k}
+
+        (* lift (put s') = fun k _ -> k () s' *)
+        let[@inline] put (state' : state) : unit t =
+          let[@inline] run_k k _s = (k [@inlined]) () state' in
+          {run_k}
+
+        (* lift (fail e) short-circuits: the continuation is discarded. *)
+        let[@inline] fail (err : error) : 'a t = {run_k = (fun _k state -> Inner.return (Error err, state))}
+
+        let lift (x : 'a Inner.t) : 'a t =
+          {run_k = (fun k s -> Inner.(x >>= fun a -> k a s))}
+      end
+      include Make (Impl)
+      include Impl
 
     (* Feed in the trivial continuation to recover the underlying state+error computation. *)
-    let run (c : 'a t) (state : state) : ('a, error) result * state =
-      c.run_k (fun v state -> (Ok v, state)) state
+      let run (x : 'a t) (s : state) : (('a, error) result * state) Inner.t =
+        x.run_k (fun v state -> Inner.return (Ok v, state)) s
+    end
+
+    include Trans(Identity)
   end
   [@@inline]
 end
