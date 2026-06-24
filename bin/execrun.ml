@@ -81,7 +81,7 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
           (union actual_keys expected_keys) ) ) ;
     false )
 
-let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.Map.t) : bool =
+let check_postconditions (state : State.WorldState.t) (post : Account.t Address.Map.t) : bool =
   let check_account_existence_and_state addr =
     let actual = Address.Map.find_opt addr state.accounts in
     let expected = Address.Map.find_opt addr post in
@@ -102,12 +102,12 @@ let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.M
       ok && acc )
     all_addresses true
 
-let load_preconditions pre (state : Host.WorldState.t) =
-  let open Host.WorldState in
+let load_preconditions pre (state : State.WorldState.t) =
+  let open State.WorldState in
   let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
   {state with accounts}
 
-let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
+let load_genesis_block (genesis_block_header : Block.Header.t) (state : State.WorldState.t) =
   { state with
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
 
@@ -119,7 +119,7 @@ module Test_failure = struct
 end
 
 let process_block
-    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : Host.WorldState.t) (block : Block.t) =
+    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : State.WorldState.t) (block : Block.t) =
   let module Execution = Execution.Make (struct
     let chain_id = config.chain_id
     let revision =
@@ -145,11 +145,11 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
     | Ok _, Some err -> Error (Test_failure.Expected_error err)
     | Error err, None -> Error (Test_failure.Expected_ok err)
   in
-  Host.WorldState.empty
+  State.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  assert (B32.(Host.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
+  assert (B32.(State.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
   |> Result.get_ok'
@@ -161,7 +161,7 @@ let check_test_result (name, fixtures, post_state) =
 
 let check_test_results results = List.for_all check_test_result results
 
-let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : Host.WorldState.t) =
+let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : State.WorldState.t) =
   let post = post_state.accounts in
   (* TODO: allow for blocks that expect a failure. *)
   let blocks =
@@ -207,7 +207,7 @@ let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
   fixture_json
 
 let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) list) =
-  let test_results : (string * Fixtures.BlockchainTest.test_case * Host.WorldState.t) list =
+  let test_results : (string * Fixtures.BlockchainTest.test_case * State.WorldState.t) list =
     List.map (fun (test_name, fixtures) -> (test_name, fixtures, run_blockchain_test fixtures)) tests
   in
   match execution_mode with

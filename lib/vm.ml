@@ -316,15 +316,21 @@ struct
   module StatusCode = Evmc.Result.StatusCode
   module Err = Monad.Result (Evmc.Result.StatusCode)
 
-  module M = struct
-    module StHost = St.Trans (Host)
-    module ErrStHost = Err.Trans (StHost)
+  module StErr = Monad.State_error.Make (struct
+    type state = Context.t
+    type error = Evmc.Result.StatusCode.t
+  end)
 
-    include St.Lift (ErrStHost) (StHost)
+  module M = struct
+    module ErrStHost = StErr.Trans (Host)
+    (*module StHost = St.Trans (Host)*)
+    (*module ErrStHost = Err.Trans (StHost)*)
+
+    (*include StErr.Lift (ErrStHost) (Host)*)
     include ErrStHost
 
     module HostAPI = struct
-      module Base = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+      module Base = Evmc.Host.Lift (ErrStHost) (Host)
 
       let host_trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
 

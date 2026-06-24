@@ -1,7 +1,7 @@
 open Chain.Ethereum
 open Numeric
 open Byte_string
-open Host
+open State
 open Lens.Infix
 
 module Error = struct

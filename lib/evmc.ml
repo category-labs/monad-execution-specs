@@ -143,6 +143,37 @@ module StorageStatus = struct
     | Assigned
 end
 
+module type HOST_STATE = sig
+  type t
+
+  val account_exists : Address.t -> t -> bool * t
+
+  val get_storage : Address.t -> B32.t -> t -> B32.t * t
+  val set_storage : Address.t -> B32.t -> B32.t -> t -> StorageStatus.t * t
+
+  val get_balance : Address.t -> t -> U256.t * t
+
+  val get_code_size : Address.t -> t -> Uint64.t * t
+  val get_code_hash : Address.t -> B32.t option * t
+  val copy_code : Address.t -> offset:int -> size:int -> t -> Bytes.t * t
+
+  val selfdestruct : address:Address.t -> beneficiary:Address.t -> t -> bool * t
+
+  val call : Message.t -> t -> Result.t * t
+
+  val get_tx_context : t -> TxContext.t * t
+
+  val get_block_hash : Uint64.t -> B32.t option * t
+
+  val emit_log : Address.t -> data:Bytes.t -> topics:B32.t list -> t -> unit * t
+
+  val access_account : Address.t -> [`Warm | `Cold] * t
+  val access_storage : Address.t -> B32.t -> [`Warm | `Cold] * t
+
+  val get_transient_storage : Address.t -> B32.t -> t -> B32.t * t
+  val set_transient_storage : Address.t -> B32.t -> B32.t -> t -> unit * t
+end
+
 module Host = struct
   (** The type of monads that can provide the EVMC host API. This mirrors the structure
       of {{:https://evmc.ethereum.org/structevmc__host__interface.html}[evmc_host_interface]}, replacing

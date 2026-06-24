@@ -287,8 +287,8 @@ struct
 
     include Make (struct
       type 'a t = T.t -> ('a * T.t) Inner.t
-      let return (x : 'a) : 'a t = fun s -> Inner.return (x, s)
-      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+      let[@inline] return (x : 'a) : 'a t = fun s -> Inner.return (x, s)
+      let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
        fun s ->
         Inner.(
           let$ x, s = x s in
@@ -308,8 +308,8 @@ struct
     include Make (struct
       include MT
       type state = T.t
-      let get : T.t MT.t = MT.lift M.get
-      let put x = MT.lift (M.put x)
+      let get : T.t MT.t = (MT.lift[@inline]) M.get
+      let put x = (MT.lift[@inline]) (M.put x)
     end)
   end
   [@@inline]
@@ -420,32 +420,64 @@ module State_error = struct
     type error
   end) =
   struct
-    module Impl = struct
-      include P
-      type 'a t = state -> ('a, error) result * state
-      let[@inline] return (v : 'a) = fun state -> (Ok v, state)
-      let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) : 'b t =
-       fun state ->
-        let res, state = (v [@inlined]) state in
-        match res with Error err -> (Error err, state) | Ok v -> f v state
-
-      let get : state t = fun state -> (Ok state, state)
-      let put (state' : state) = fun _state -> (Ok (), state')
-
-      let fail (err : error) = fun state -> (Error err, state)
+    module State = State (struct
+      type t = P.state
+    end)
+    module Result = Result (struct
+      type t = P.error
+    end)
+    module type SIG = sig
+      include SIG
+      include State.SIG with type 'a t := 'a t
+      include Result.SIG with type 'a t := 'a t
     end
-    include Impl
-    include Make (Impl)
-    module S = State (struct
-      type t = state
-    end)
-    include S.Make (Impl)
-    module R = Result (struct
-      type t = error
-    end)
-    include R.Make (Impl)
-  end
 
+    module Make (S : SIG) = struct
+      include S
+      include Make (S)
+      include State.Make (S)
+      include Result.Make (S)
+    end
+    [@@inline]
+
+    module Trans (Inner : SIG_MONAD) = struct
+      module Inner = Make_Monad (Inner)
+
+      include Make (struct
+        include P
+        type 'a t = state -> (('a, error) result * state) Inner.t
+        let[@inline] return (v : 'a) state = (Inner.return[@inlined]) (Ok v, state)
+        let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t)  =
+          fun state ->
+          Inner.(
+            let$ res, state = (v [@inlined]) state in
+            match res with Error err -> (Inner.return[@inlined]) (Error err, state) | Ok v -> f v state )
+
+        let get : state t = fun state -> Inner.return (Ok state, state)
+        let put (state' : state) = fun _state -> Inner.return (Ok (), state')
+
+        let fail (err : error) = fun state -> Inner.return (Error err, state)
+      end)
+
+      let[@inline] lower (x : state -> ('a, error) result * state) : 'a t = fun s -> Inner.return (x s)
+      let[@inline] lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (Ok x, s)) x
+    end
+    [@@inline]
+
+    module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = Make (struct
+      include MT
+      include P
+      let get = (MT.lift [@inlined]) M.get
+      let put x = (MT.lift [@inlined]) ((M.put[@inlined]) x)
+      let fail err = (MT.lift [@inlined]) ((M.fail[@inlined]) err)
+    end)
+    [@@inline]
+
+    include Trans (Identity)
+  end
+end
+
+(*
   module Product (P1 : sig
     type state
     type error
@@ -479,38 +511,38 @@ module State_error = struct
        | Error (Right e_2), (s_1, s_2) -> (Ok (Error e_2, s_2), s_1)
        | Error (Left e_1), (s_1, _s_2) -> (Error e_1, s_1)
   end
-end
+ *)
 
 module Impure (P : sig
   type state
   type error
 end) =
-  struct
-    exception Failure of P.error
-    type some_ref_type = { x:int; y:int}
-    let state : P.state ref = Obj.magic (ref { x = 0; y = 0 })
-    module Impl = struct
-      include P
-      type 'a t = unit -> 'a
-      let[@inline] return (v : 'a) : 'a t = fun () -> v
-      let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) : 'b t = fun () -> f (v ()) ()
+struct
+  exception Failure of P.error
+  type some_ref_type = {x : int; y : int}
+  let state : P.state ref = Obj.magic (ref {x = 0; y = 0})
+  module Impl = struct
+    include P
+    type 'a t = unit -> 'a
+    let[@inline] return (v : 'a) : 'a t = fun () -> v
+    let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) : 'b t = fun () -> f (v ()) ()
 
-      let get : state t = fun () -> !state
-      let put (state' : state) = fun () -> state := state'
+    let get : state t = fun () -> !state
+    let put (state' : state) = fun () -> state := state'
 
-      let fail (err : error) = fun () -> raise (Failure err)
-    end
-    include Impl
-    include Make (Impl)
-    module S = State (struct
-      type t = state
-    end)
-    include S.Make (Impl)
-    module R = Result (struct
-      type t = error
-    end)
-    include R.Make (Impl)
+    let fail (err : error) = fun () -> raise (Failure err)
   end
+  include Impl
+  include Make (Impl)
+  module S = State (struct
+    type t = state
+  end)
+  include S.Make (Impl)
+  module R = Result (struct
+    type t = error
+  end)
+  include R.Make (Impl)
+end
 
 (* A codensity-transformed (CPS) state+error monad.
 
@@ -543,13 +575,13 @@ module State_error_codensity = struct
       [@@unboxed]
 
       let[@inline] return (x : 'a) : 'a t =
-        let[@inline] run_k k = (k [@inlined]) x in
+        let[@inline] run_k k s = (k [@inlined]) x s in
         {run_k}
 
       let[@inline] ( >>= ) (c : 'a t) (f : 'a -> 'b t) : 'b t =
-        let[@inline] run_k k =
-          let[@inline] r = fun a -> (((f [@inlined]) a).run_k [@inlined]) k in
-          (c.run_k [@inlined]) r
+        let[@inline] run_k k s =
+          let[@inline] r a = (((f [@inlined]) a).run_k [@inlined]) k in
+          (c.run_k [@inlined]) r s
         in
         {run_k}
       (*
