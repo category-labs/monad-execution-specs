@@ -424,9 +424,9 @@ module State_error = struct
       include P
       type 'a t = state -> ('a, error) result * state
       let[@inline] return (v : 'a) = fun state -> (Ok v, state)
-      let ( >>= ) (v : 'a t) (f : 'a -> 'b t) : 'b t =
+      let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) : 'b t =
        fun state ->
-        let res, state = v state in
+        let res, state = (v [@inlined]) state in
         match res with Error err -> (Error err, state) | Ok v -> f v state
 
       let get : state t = fun state -> (Ok state, state)
@@ -460,19 +460,191 @@ module State_error = struct
     end
     include Make (P)
 
-    module Left = Make(P1)
-    module Right = Make(P2)
+    module Left = Make (P1)
+    module Right = Make (P2)
 
     let run_left (v : 'a t) : P1.state -> (('a, P1.error) result * P1.state) Right.t =
-      fun s_1 ->
+     fun s_1 ->
       fun s_2 ->
-      match v (s_1, s_2) with
-      | Ok result, (s_1, s_2) ->
-         Ok ((Ok result, s_1)), s_2
-      | Error (Left e_1), (s_1, s_2) ->
-         Ok ((Error e_1, s_1)), s_2
-      | Error (Right e_2), (_s_1, s_2) ->
-         Error e_2, s_2
+       match v (s_1, s_2) with
+       | Ok result, (s_1, s_2) -> (Ok (Ok result, s_1), s_2)
+       | Error (Left e_1), (s_1, s_2) -> (Ok (Error e_1, s_1), s_2)
+       | Error (Right e_2), (_s_1, s_2) -> (Error e_2, s_2)
 
+    let run_right (v : 'a t) : P2.state -> (('a, P2.error) result * P2.state) Left.t =
+     fun s_2 ->
+      fun s_1 ->
+       match v (s_1, s_2) with
+       | Ok result, (s_1, s_2) -> (Ok (Ok result, s_2), s_1)
+       | Error (Right e_2), (s_1, s_2) -> (Ok (Error e_2, s_2), s_1)
+       | Error (Left e_1), (s_1, _s_2) -> (Error e_1, s_1)
+  end
+end
+
+module Impure (P : sig
+  type state
+  type error
+end) =
+  struct
+    exception Failure of P.error
+    type some_ref_type = { x:int; y:int}
+    let state : P.state ref = Obj.magic (ref { x = 0; y = 0 })
+    module Impl = struct
+      include P
+      type 'a t = unit -> 'a
+      let[@inline] return (v : 'a) : 'a t = fun () -> v
+      let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) : 'b t = fun () -> f (v ()) ()
+
+      let get : state t = fun () -> !state
+      let put (state' : state) = fun () -> state := state'
+
+      let fail (err : error) = fun () -> raise (Failure err)
+    end
+    include Impl
+    include Make (Impl)
+    module S = State (struct
+      type t = state
+    end)
+    include S.Make (Impl)
+    module R = Result (struct
+      type t = error
+    end)
+    include R.Make (Impl)
+  end
+
+(* A codensity-transformed (CPS) state+error monad.
+
+   The codensity transform of a monad [M] is [Codensity M a = ∀r. (a -> M r) -> M r].
+   Applied here to the classic state+error monad [M a = state -> ('a, error) result * state]
+   it yields a continuation-passing encoding where:
+
+   - [>>=] is O(1) and right-associates the bind tree for free: [c >>= f] just composes
+     continuations, so deeply left-nested binds no longer pay the quadratic re-traversal
+     cost they incur in the direct {!State_error} representation;
+   - no intermediate [('a, error) result * state] pair is allocated per bind — the state is
+     threaded as a plain argument through the continuation, and a [result] cell is only
+     built at [run] (on success) or at [fail] (on error).
+
+   [get]/[put]/[fail] below are exactly the [lift] of the corresponding {!State_error}
+   operations into the codensity monad. *)
+module State_error_codensity = struct
+  module Make (P : sig
+    type state
+    type error
+  end) =
+  struct
+    module Impl = struct
+      include P
+
+      (* [∀r. (a -> M r) -> M r] with [M r = state -> ('r, error) result * state]. The
+         universally-quantified ['r] makes this a polymorphic (rank-2) record field. *)
+      type 'a t =
+        {run_k : 'r. ('a -> state -> ('r, error) result * state) -> state -> ('r, error) result * state}
+      [@@unboxed]
+
+      let[@inline] return (x : 'a) : 'a t =
+        let[@inline] run_k k = (k [@inlined]) x in
+        {run_k}
+
+      let[@inline] ( >>= ) (c : 'a t) (f : 'a -> 'b t) : 'b t =
+        let[@inline] run_k k =
+          let[@inline] r = fun a -> (((f [@inlined]) a).run_k [@inlined]) k in
+          (c.run_k [@inlined]) r
+        in
+        {run_k}
+      (*
+        { run_k = (fun k -> (c.run_k[@inlined]) (fun a -> (f a).run_k k)) }
+       *)
+
+      (* lift get  = fun k s -> k s s *)
+      let get : state t =
+        let[@inline] run_k k s = (k [@inlined]) s s in
+        {run_k}
+
+      (* lift (put s') = fun k _ -> k () s' *)
+      let[@inline] put (state' : state) : unit t =
+        let[@inline] run_k k _s = (k [@inlined]) () state' in
+        {run_k}
+
+      (* lift (fail e) short-circuits: the continuation is discarded. *)
+      let[@inline] fail (err : error) : 'a t = {run_k = (fun _k state -> (Error err, state))}
+    end
+
+    include Impl
+    include Make (Impl)
+    module S = State (struct
+      type t = state
+    end)
+    include S.Make (Impl)
+    module R = Result (struct
+      type t = error
+    end)
+    include R.Make (Impl)
+
+    (* Feed in the trivial continuation to recover the underlying state+error computation. *)
+    let run (c : 'a t) (state : state) : ('a, error) result * state =
+      c.run_k (fun v state -> (Ok v, state)) state
+  end
+  [@@inline]
+end
+
+(* A codensity-transformed (CPS) state+error monad.
+
+   The codensity transform of a monad [M] is [Codensity M a = ∀r. (a -> M r) -> M r].
+   Applied here to the classic state+error monad [M a = state -> ('a, error) result * state]
+   it yields a continuation-passing encoding where:
+
+   - [>>=] is O(1) and right-associates the bind tree for free: [c >>= f] just composes
+     continuations, so deeply left-nested binds no longer pay the quadratic re-traversal
+     cost they incur in the direct {!State_error} representation;
+   - no intermediate [('a, error) result * state] pair is allocated per bind — the state is
+     threaded as a plain argument through the continuation, and a [result] cell is only
+     built at [run] (on success) or at [fail] (on error).
+
+   [get]/[put]/[fail] below are exactly the [lift] of the corresponding {!State_error}
+   operations into the codensity monad. *)
+module State_error_codensity_double_barrel = struct
+  module Make (P : sig
+    type state
+    type error
+  end) =
+  struct
+    module Impl = struct
+      include P
+
+      (* [∀r. (a -> M r) -> M r] with [M r = state -> ('r, error) result * state]. The
+         universally-quantified ['r] makes this a polymorphic (rank-2) record field. *)
+      type 'a t =
+        {run_k : 'r. ('a -> state -> ('r, error) result * state) -> state -> ('r, error) result * state}
+
+      let[@inline] return (x : 'a) : 'a t = {run_k = (fun k -> k x)}
+
+      let[@inline] ( >>= ) (c : 'a t) (f : 'a -> 'b t) : 'b t =
+        {run_k = (fun k -> c.run_k (fun a -> (f a).run_k k))}
+
+      (* lift get  = fun k s -> k s s *)
+      let get : state t = {run_k = (fun k s -> k s s)}
+
+      (* lift (put s') = fun k _ -> k () s' *)
+      let put (state' : state) : unit t = {run_k = (fun k _state -> k () state')}
+
+      (* lift (fail e) short-circuits: the continuation is discarded. *)
+      let fail (err : error) : 'a t = {run_k = (fun _k state -> (Error err, state))}
+    end
+
+    include Impl
+    include Make (Impl)
+    module S = State (struct
+      type t = state
+    end)
+    include S.Make (Impl)
+    module R = Result (struct
+      type t = error
+    end)
+    include R.Make (Impl)
+
+    (* Feed in the trivial continuation to recover the underlying state+error computation. *)
+    let run (c : 'a t) (state : state) : ('a, error) result * state =
+      c.run_k (fun v state -> (Ok v, state)) state
   end
 end
