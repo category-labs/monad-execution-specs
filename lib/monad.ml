@@ -24,7 +24,7 @@ module type SIG_MONAD = SIG
 module Make (M : SIG) = struct
   include M
 
-  let ( let$ ) x f = M.(x >>= f)
+  let[@inline] ( let$ ) x f = M.((( >>= ) [@inlined]) x f)
 
   let fmap f x = M.(x >>= fun x -> return (f x))
   let ( <$> ) f x = fmap f x
@@ -285,19 +285,37 @@ struct
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
 
+      include Make (struct
+                  type state = T.t
+        type 'a t = state -> ('a * state) Inner.t
+        let[@inline] return (v : 'a) state = (Inner.return [@inlined]) (v, state)
+        let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) =
+         fun state ->
+          Inner.(
+            let$ res, state = (v [@inlined]) state in
+            f res state )
+
+        let get : state t = fun state -> Inner.return (state, state)
+        let put (state' : state) = fun _state -> Inner.return ((), state')
+      end)
+    (*
     include Make (struct
       type 'a t = T.t -> ('a * T.t) Inner.t
-      let[@inline] return (x : 'a) : 'a t = fun s -> Inner.return (x, s)
+      let[@inline] return (x : 'a) : 'a t =
+        let[@inline] act s = (Inner.return [@inlined]) (x, s) in
+        act
       let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
-       fun s ->
-        Inner.(
-          let$ x, s = x s in
-          f x s )
+        let[@inline] act s =
+          let[@inline] body (x, s) = (f[@inlined]) x s in
+          Inner.((( >>= ) [@inlined]) ((x [@inlined]) s) body)
+        in
+        act
 
       type state = T.t
       let get : T.t t = fun s -> Inner.return (s, s)
       let put (s : T.t) : unit t = fun _ -> Inner.return ((), s)
     end)
+            *)
 
     (* Specialize lens ops. *)
     let ( := ) (l : (state, 'x) Lens.t) (x : 'x) : unit t = fun state -> Inner.return ((), l.set x state)
@@ -478,6 +496,8 @@ module State_error = struct
 
       let[@inline] lower (x : state -> ('a, error) result * state) : 'a t = fun s -> Inner.return (x s)
       let[@inline] lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (Ok x, s)) x
+
+      let[@inline] run (f : 'a t) (s : state) : (('a, error) result * state) Inner.t = f s
     end
     [@@inline]
 
@@ -492,9 +512,7 @@ module State_error = struct
 
     include Trans (Identity)
   end
-end
 
-(*
   module Product (P1 : sig
     type state
     type error
@@ -503,14 +521,14 @@ end
     type error
   end) =
   struct
+    module Left = Make (P1)
+    module Right = Make (P2)
+
     module P = struct
       type state = P1.state * P2.state
       type error = Left of P1.error | Right of P2.error
     end
     include Make (P)
-
-    module Left = Make (P1)
-    module Right = Make (P2)
 
     let run_left (v : 'a t) : P1.state -> (('a, P1.error) result * P1.state) Right.t =
      fun s_1 ->
@@ -528,7 +546,7 @@ end
        | Error (Right e_2), (s_1, s_2) -> (Ok (Error e_2, s_2), s_1)
        | Error (Left e_1), (s_1, _s_2) -> (Error e_1, s_1)
   end
- *)
+end
 
 module Impure (P : sig
   type state
@@ -561,21 +579,6 @@ struct
   include R.Make (Impl)
 end
 
-(* A codensity-transformed (CPS) state+error monad.
-
-   The codensity transform of a monad [M] is [Codensity M a = ∀r. (a -> M r) -> M r].
-   Applied here to the classic state+error monad [M a = state -> ('a, error) result * state]
-   it yields a continuation-passing encoding where:
-
-   - [>>=] is O(1) and right-associates the bind tree for free: [c >>= f] just composes
-     continuations, so deeply left-nested binds no longer pay the quadratic re-traversal
-     cost they incur in the direct {!State_error} representation;
-   - no intermediate [('a, error) result * state] pair is allocated per bind — the state is
-     threaded as a plain argument through the continuation, and a [result] cell is only
-     built at [run] (on success) or at [fail] (on error).
-
-   [get]/[put]/[fail] below are exactly the [lift] of the corresponding {!State_error}
-   operations into the codensity monad. *)
 module State_error_codensity = struct
   module Make (P : sig
     type state
@@ -621,9 +624,9 @@ module State_error_codensity = struct
           {run_k}
 
         let[@inline] ( >>= ) (c : 'a t) (f : 'a -> 'b t) : 'b t =
-          let[@inline] run_k k s =
-            let[@inline] r a = (((f [@inlined]) a).run_k [@inlined]) k in
-            (c.run_k [@inlined]) r s
+          let[@inline] run_k continue s =
+            let[@inline] continue a = ((f [@inlined]) a).run_k continue in
+            (c.run_k [@inlined]) continue s
           in
           {run_k}
 
@@ -640,79 +643,30 @@ module State_error_codensity = struct
         (* lift (fail e) short-circuits: the continuation is discarded. *)
         let[@inline] fail (err : error) : 'a t = {run_k = (fun _k state -> Inner.return (Error err, state))}
 
-        let lift (x : 'a Inner.t) : 'a t =
-          {run_k = (fun k s -> Inner.(x >>= fun a -> k a s))}
+        let lift (x : 'a Inner.t) : 'a t = {run_k = (fun k s -> Inner.(x >>= fun a -> k a s))}
       end
       include Make (Impl)
       include Impl
 
-    (* Feed in the trivial continuation to recover the underlying state+error computation. *)
+      (* Inline lens operators. *)
+      let ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
+        let run_k continue state = continue () (l.set x state) in
+        {run_k}
+
+      let ( ! ) (l : (state, 'x) Lens.t) : 'x t =
+        let run_k continue state = continue (l.get state) state in
+        {run_k}
+
+      let update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t =
+        let run_k continue state = continue () (l.set (f (l.get state)) state) in
+        {run_k}
+
+      (* Feed in the trivial continuation to recover the underlying state+error computation. *)
       let run (x : 'a t) (s : state) : (('a, error) result * state) Inner.t =
         x.run_k (fun v state -> Inner.return (Ok v, state)) s
     end
 
-    include Trans(Identity)
+    include Trans (Identity)
   end
   [@@inline]
-end
-
-(* A codensity-transformed (CPS) state+error monad.
-
-   The codensity transform of a monad [M] is [Codensity M a = ∀r. (a -> M r) -> M r].
-   Applied here to the classic state+error monad [M a = state -> ('a, error) result * state]
-   it yields a continuation-passing encoding where:
-
-   - [>>=] is O(1) and right-associates the bind tree for free: [c >>= f] just composes
-     continuations, so deeply left-nested binds no longer pay the quadratic re-traversal
-     cost they incur in the direct {!State_error} representation;
-   - no intermediate [('a, error) result * state] pair is allocated per bind — the state is
-     threaded as a plain argument through the continuation, and a [result] cell is only
-     built at [run] (on success) or at [fail] (on error).
-
-   [get]/[put]/[fail] below are exactly the [lift] of the corresponding {!State_error}
-   operations into the codensity monad. *)
-module State_error_codensity_double_barrel = struct
-  module Make (P : sig
-    type state
-    type error
-  end) =
-  struct
-    module Impl = struct
-      include P
-
-      (* [∀r. (a -> M r) -> M r] with [M r = state -> ('r, error) result * state]. The
-         universally-quantified ['r] makes this a polymorphic (rank-2) record field. *)
-      type 'a t =
-        {run_k : 'r. ('a -> state -> ('r, error) result * state) -> state -> ('r, error) result * state}
-
-      let[@inline] return (x : 'a) : 'a t = {run_k = (fun k -> k x)}
-
-      let[@inline] ( >>= ) (c : 'a t) (f : 'a -> 'b t) : 'b t =
-        {run_k = (fun k -> c.run_k (fun a -> (f a).run_k k))}
-
-      (* lift get  = fun k s -> k s s *)
-      let get : state t = {run_k = (fun k s -> k s s)}
-
-      (* lift (put s') = fun k _ -> k () s' *)
-      let put (state' : state) : unit t = {run_k = (fun k _state -> k () state')}
-
-      (* lift (fail e) short-circuits: the continuation is discarded. *)
-      let fail (err : error) : 'a t = {run_k = (fun _k state -> (Error err, state))}
-    end
-
-    include Impl
-    include Make (Impl)
-    module S = State (struct
-      type t = state
-    end)
-    include S.Make (Impl)
-    module R = Result (struct
-      type t = error
-    end)
-    include R.Make (Impl)
-
-    (* Feed in the trivial continuation to recover the underlying state+error computation. *)
-    let run (c : 'a t) (state : state) : ('a, error) result * state =
-      c.run_k (fun v state -> (Ok v, state)) state
-  end
 end

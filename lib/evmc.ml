@@ -143,7 +143,7 @@ module StorageStatus = struct
     | Assigned
 end
 
-module type HOST_STATE = sig
+module type HOST = sig
   type t
 
   val account_exists : Address.t -> t -> bool * t
