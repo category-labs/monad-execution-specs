@@ -272,7 +272,16 @@ struct
   module Context = struct
     type t =
       { execution_environment : ExecutionEnvironment.t (* I *)
-      ; machine_state : MachineState.t (* μ *)
+      ; gas : Uint.t (* μ_g *)
+      ; pc : U256.t (* μ_pc *)
+      ; memory : Memory.t (* μ_m, μ_i *)
+      ; stack : U256.t list * int (* μ_s *)
+      ; output_buffer : Bytes.t (* μ_o *)
+      ; gas_refund : Integer.t
+            (* A_r *)
+            (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
+               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
+               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
       ; jump_destinations : U256.Set.t (* D(c) *)
       ; host : Host.t
       ; initial_storage : U256.t U256.Map.t
@@ -296,9 +305,12 @@ struct
 
     let make (host : Host.t) (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
       { execution_environment = ExecutionEnvironment.make ctx msg code
-      ; machine_state =
-          MachineState.initial ~gas:(Uint.of_uint64 msg.gas)
-            ~memory_capacity:Uint.(of_uint32 msg.memory_capacity)
+      ; gas = Uint.of_uint64 msg.gas
+      ; pc = U256.zero
+      ; memory = Memory.empty ~memory_capacity:(Uint.of_uint32 msg.memory_capacity)
+      ; stack = ([], 0)
+      ; output_buffer = Bytes.empty
+      ; gas_refund = Integer.zero
       ; jump_destinations = valid_jump_destinations code
       ; initial_storage = U256.Map.empty
       ; host }
@@ -469,42 +481,42 @@ struct
   (*
   let spend (amount : Uint.t) =
     let run_k continue state =
-      let available = state.machine_state.gas in
+      let available = state.gas in
       if Uint.(available < amount) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
-      else continue () {state with machine_state = {state.machine_state with gas = Uint.(available - amount)}}
+      else continue () {state with machine_state = {state with gas = Uint.(available - amount)}}
     in
     {run_k}
 
   let push (x : U256.t) : unit M.t =
     let run_k continue state =
-      let s, d = state.machine_state.stack in
+      let s, d = state.stack in
       if d >= max_stack_depth then (Error Evmc.Result.StatusCode.Stack_overflow, state)
-      else continue () {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}}
+      else continue () {state with stack = (x :: s, d + 1)}
     in
     {run_k}
 
   let pop : U256.t M.t =
     let run_k continue state =
-      match state.machine_state.stack with
-      | hd :: tl, d -> continue hd {state with machine_state = {state.machine_state with stack = (tl, d - 1)}}
+      match state.stack with
+      | hd :: tl, d -> continue hd {state with stack = (tl, d - 1)}
       | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
     in
     {run_k}
 
   let pop2 : (U256.t * U256.t) M.t =
     let run_k continue state =
-      match state.machine_state.stack with
+      match state.stack with
       | x :: y :: tl, d ->
-          continue (x, y) {state with machine_state = {state.machine_state with stack = (tl, d - 2)}}
+          continue (x, y) {state with stack = (tl, d - 2)}
       | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
     in
     {run_k}
 
   let pop3 : (U256.t * U256.t * U256.t) M.t =
     let run_k continue state =
-      match state.machine_state.stack with
+      match state.stack with
       | x :: y :: z :: tl, d ->
-          continue (x, y, z) {state with machine_state = {state.machine_state with stack = (tl, d - 3)}}
+          continue (x, y, z) {state with stack = (tl, d - 3)}
       | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
     in
     {run_k}
@@ -512,44 +524,44 @@ struct
   let increase_pc_and_continue : bool M.t =
     let run_k continue state =
       continue true
-        {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}}
+        {state with machine_state = {state with pc = U256.(state.pc + one)}}
     in
     {run_k}
     *)
 
   let spend (amount : Uint.t) state =
-    if Uint.(state.machine_state.gas < amount) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
+    if Uint.(state.gas < amount) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
     else
       ( Ok ()
-      , {state with machine_state = {state.machine_state with gas = Uint.(state.machine_state.gas - amount)}}
+      , {state with gas = Uint.(state.gas - amount)}
       )
 
   let push (x : U256.t) state =
-    let s, d = state.machine_state.stack in
+    let s, d = state.stack in
     if d >= max_stack_depth then (Error Evmc.Result.StatusCode.Stack_overflow, state)
-    else (Ok (), {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}})
+    else (Ok (), {state with stack = (x :: s, d + 1)})
 
   let pop state =
-    let s, d = state.machine_state.stack in
+    let s, d = state.stack in
     match s with
-    | hd :: tl -> (Ok hd, {state with machine_state = {state.machine_state with stack = (tl, d - 1)}})
+    | hd :: tl -> (Ok hd, {state with stack = (tl, d - 1)})
     | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
 
   let pop2 state =
-    let s, d = state.machine_state.stack in
+    let s, d = state.stack in
     match s with
-    | x :: y :: tl -> (Ok (x, y), {state with machine_state = {state.machine_state with stack = (tl, d - 2)}})
+    | x :: y :: tl -> (Ok (x, y), {state with stack = (tl, d - 2)})
     | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
 
   let pop3 state =
-    let s, d = state.machine_state.stack in
+    let s, d = state.stack in
     match s with
     | x :: y :: z :: tl ->
-        (Ok (x, y, z), {state with machine_state = {state.machine_state with stack = (tl, d - 3)}})
+        (Ok (x, y, z), {state with stack = (tl, d - 3)})
     | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
 
   let increase_pc_and_continue state =
-    (Ok true, {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}})
+    (Ok true, {state with pc = U256.(state.pc + one)})
 
   (*
   let spend (amount : Uint.t) state =
@@ -605,11 +617,11 @@ struct
    *)
 
   let finish_execution ~return_output : bool M.t =
-    let$ () = when_ (not return_output) (machine_state |-- output_buffer := Bytes.empty) in
+    let$ () = when_ (not return_output) (output_buffer := Bytes.empty) in
     return false
 
   let update_pc_and_continue (f : U256.t -> U256.t) : bool M.t =
-    update_field (machine_state |-- pc) f >> return true
+    update_field (pc) f >> return true
 
   type opcode_impl = bool M.t
 
@@ -979,11 +991,11 @@ struct
   let extend_memory_to ~start ~size_bytes : Uint.t M.t =
     if U256.(size_bytes = zero) then return Uint.zero
     else
-      let$ current = !(machine_state |-- memory) in
+      let$ current = !(memory) in
       let current_active_words = Memory.active_words current in
       let$ extended = Memory.extend_to ~start ~size_bytes current |> Option.or_fail Out_of_memory in
-      let$ () = machine_state |-- memory := extended in
-      let$ new_active_words = Memory.active_words <$> !(machine_state |-- memory) in
+      let$ () = memory := extended in
+      let$ new_active_words = Memory.active_words <$> !(memory) in
       if Uint.(current_active_words >= new_active_words) then return Uint.zero
       else
         return
@@ -1005,7 +1017,7 @@ struct
     in
 
     (* Operation *)
-    let$ bytes = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
+    let$ bytes = Memory.read_block_at start size_bytes <$> !(memory) in
     let$ () = push (U256.of_repr (Crypto.keccak_256 bytes)) in
 
     (* PC *)
@@ -1094,7 +1106,7 @@ struct
       | _, Some size -> Bytes.make size '\x00'
       | _, None -> assert false
     in
-    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+    let$ () = update_field (memory) (Memory.write_block_at dst_start block) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1139,7 +1151,7 @@ struct
       | None, Some size -> return (Bytes.make size '\x00')
       | _, None -> assert false (* This should have caused an OOG error. *)
     in
-    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+    let$ () = update_field (memory) (Memory.write_block_at dst_start block) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1161,14 +1173,14 @@ struct
 
   let returndatasize =
     fetch_environment_variable_opcode_impl (fun ctx ->
-        U256.of_int (Bytes.length ctx.machine_state.output_buffer) )
+        U256.of_int (Bytes.length ctx.output_buffer) )
 
   let returndatacopy =
     (* Stack *)
     let$ dst_start, src_start, size_bytes = pop3 in
 
     (* Gas *)
-    let$ data = !(machine_state |-- output_buffer) in
+    let$ data = !(output_buffer) in
     (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access. We check this before
        extending the memory and spending gas. *)
     (* YP (158) *)
@@ -1185,7 +1197,7 @@ struct
 
     (* Operation *)
     let block = Bytes.sub data src_start size in
-    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+    let$ () = update_field (memory) (Memory.write_block_at dst_start block) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1295,7 +1307,7 @@ struct
     let$ () = spend (if i = 0 then Gas.base else Gas.very_low) in
 
     (* Operation *)
-    let$ here = U256.to_int <$> !(machine_state |-- pc) in
+    let$ here = U256.to_int <$> !(pc) in
     let$ code = !(execution_environment |-- bytecode) in
     let$ () = push (U256.of_uint_exn (Uint.of_bytes_be (Bytes.sub_with_zero_padding code (here + 1) i))) in
 
@@ -1303,21 +1315,21 @@ struct
     update_pc_and_continue (fun pc -> U256.(pc + one + ~$i))
 
   (* Testing how good it is to hardcode push. *)
-    (*
+  (*
   let push_ i =
     let gas_cost = if i = 0 then Gas.base else Gas.very_low in
     fun state ->
-      if Gas.(state.machine_state.gas < gas_cost) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
+      if Gas.(state.gas < gas_cost) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
       else
-        let here = U256.to_int state.machine_state.pc in
+        let here = U256.to_int state.pc in
         let code = state.execution_environment.bytecode in
         let v = U256.of_bytes_be_exn (Bytes.sub_with_zero_padding code (here + 1) i) in
-        let s, d = state.machine_state.stack in
+        let s, d = state.stack in
         let state =
           { state with
             machine_state =
-              { state.machine_state with
-                pc = U256.(state.machine_state.pc + one + ~$i)
+              { state with
+                pc = U256.(state.pc + one + ~$i)
               ; stack = (v :: s, d + 1) } }
         in
         (* TODO: check for overflow *)
@@ -1329,7 +1341,7 @@ struct
     assert (i <= 16) ;
     (* Stack *)
     let$ nth_elt =
-      !(machine_state |-- stack)
+      !(stack)
       |> M.fmap (fun (l, _) -> List.nth_opt l (i - 1))
       >>= M.Option.or_fail Stack_underflow
     in
@@ -1355,9 +1367,9 @@ struct
     assert (i <= 16) ;
     (* Stack *)
     let$ first = pop in
-    let$ s, d = !(machine_state |-- stack) in
+    let$ s, d = !(stack) in
     let$ nth, stack' = Option.or_fail Stack_underflow (replace_list (i - 1) first s) in
-    let$ () = machine_state |-- stack := (stack', d) in
+    let$ () = stack := (stack', d) in
 
     (* Gas *)
     let$ () = spend Gas.very_low in
@@ -1378,7 +1390,7 @@ struct
     let$ () = spend Gas.(very_low + memory_extension_gas) in
 
     (* Operation *)
-    let$ mem = Memory.read_word_at pos <$> !(machine_state |-- memory) in
+    let$ mem = Memory.read_word_at pos <$> !(memory) in
     let$ () = push mem in
 
     (* PC *)
@@ -1393,7 +1405,7 @@ struct
     let$ () = spend Gas.(very_low + memory_extension_gas) in
 
     (* Operation *)
-    let$ () = update_field (machine_state |-- memory) (Memory.write_word_at pos value) in
+    let$ () = update_field (memory) (Memory.write_word_at pos value) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1408,7 +1420,7 @@ struct
 
     (* Operation *)
     let$ () =
-      update_field (machine_state |-- memory) (Memory.write_byte_at pos U256.(byte ~index_le:0 value))
+      update_field (memory) (Memory.write_byte_at pos U256.(byte ~index_le:0 value))
     in
 
     (* PC *)
@@ -1436,7 +1448,7 @@ struct
 
     (* Gas *)
     (* Protection against reentrancy attacks, see EIP-2200 *)
-    let$ current_gas = !(machine_state |-- gas) in
+    let$ current_gas = !(gas) in
     let$ () = when_ Gas.(current_gas <= call_stipend) (fail Out_of_gas) in
 
     (* Operation *)
@@ -1470,7 +1482,7 @@ struct
     in
     let$ () =
       (* Overall gas refund is non-negative, but we have to do signed addition here *)
-      update_field (machine_state |-- gas_refund) (fun r -> Integer.(r + refund))
+      update_field (gas_refund) (fun r -> Integer.(r + refund))
     in
 
     (* PC *)
@@ -1503,11 +1515,11 @@ struct
       let$ () = check_jump_destination new_pc in
       update_pc_and_continue (fun _ -> new_pc)
 
-  let pc_ = fetch_environment_variable_opcode_impl (machine_state |-- pc).get
+  let pc_ = fetch_environment_variable_opcode_impl (pc).get
 
   let msize =
     fetch_environment_variable_opcode_impl (fun ctx ->
-        U256.of_uint_truncating Uint.(~$32 * Memory.active_words ctx.machine_state.memory) )
+        U256.of_uint_truncating Uint.(~$32 * Memory.active_words ctx.memory) )
 
   let gas_ =
     (* Stack *)
@@ -1515,7 +1527,7 @@ struct
     let$ () = spend Gas.base in
 
     (* Operation *)
-    let$ current_gas = !(machine_state |-- gas) in
+    let$ current_gas = !(gas) in
     let$ () = push (U256.of_uint_truncating current_gas) in
 
     (* PC *)
@@ -1571,8 +1583,8 @@ struct
     let$ () = spend Gas.(very_low + (n_words * copy_cost_per_word) + memory_extension_gas) in
 
     (* Operation *)
-    let$ block = Memory.read_block_at src_start size_bytes <$> !(machine_state |-- memory) in
-    let$ () = update_field (machine_state |-- memory) (Memory.write_block_at dst_start block) in
+    let$ block = Memory.read_block_at src_start size_bytes <$> !(memory) in
+    let$ () = update_field (memory) (Memory.write_block_at dst_start block) in
 
     (* PC *)
     increase_pc_and_continue
@@ -1600,16 +1612,16 @@ struct
     (* Operation *)
     let$ () = check_write_permissions in
     let$ self_addr = self in
-    let$ data = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
+    let$ data = Memory.read_block_at start size_bytes <$> !(memory) in
     let$ () = HostAPI.emit_log self_addr ~data ~topics in
 
     (* PC *)
     increase_pc_and_continue
 
   let merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund =
-    let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g + of_int64 gas_left)) in
+    let$ () = update_field (gas) (fun g -> Uint.(g + of_int64 gas_left)) in
     if status_code = Evmc.Result.StatusCode.Success then
-      update_field (machine_state |-- MachineState.gas_refund) (fun g -> Integer.(g + of_int64 gas_refund))
+      update_field (Context.gas_refund) (fun g -> Integer.(g + of_int64 gas_refund))
     else return (assert (Int64.(gas_refund = zero)))
 
   type delegation =
@@ -1629,14 +1641,14 @@ struct
       ~(input_size : U256.t)
       ~(output_start : U256.t)
       ~(output_size : U256.t) =
-    let$ () = machine_state |-- output_buffer := Bytes.empty in
+    let$ () = output_buffer := Bytes.empty in
 
     let$ new_depth = ( + ) 1 <$> !(execution_environment |-- depth) in
     if new_depth > max_stack_depth then
-      let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g + U256.to_uint call_gas)) in
+      let$ () = update_field (gas) (fun g -> Uint.(g + U256.to_uint call_gas)) in
       push U256.zero
     else
-      let$ mem = !(machine_state |-- memory) in
+      let$ mem = !(memory) in
       let input_data = Memory.read_block_at input_start input_size mem in
       let delegated = match delegation with Direct _ -> false | Delegated _ -> true in
       let message =
@@ -1660,14 +1672,14 @@ struct
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       assert (Address.(zero = create_address)) ;
 
-      let$ () = machine_state |-- output_buffer := output_data in
+      let$ () = output_buffer := output_data in
       let$ () =
         let truncated_output =
           match U256.to_int_opt output_size with
           | None -> output_data
           | Some i -> Bytes.sub output_data 0 (min i (Bytes.length output_data))
         in
-        update_field (machine_state |-- memory) (Memory.write_block_at output_start truncated_output)
+        update_field (memory) (Memory.write_block_at output_start truncated_output)
       in
       push (if status_code = Success then U256.one else U256.zero)
 
@@ -1699,11 +1711,11 @@ struct
         let$ delegation = access_delegation self_addr in
         match delegation with Delegated _ -> fail Create_from_delegated_eoa | Direct _ -> return ()
       in
-      let$ create_message_gas = Uint.minus_1_64th <$> !(machine_state |-- gas) in
-      let$ () = update_field (machine_state |-- gas) (fun g -> Uint.(g - create_message_gas)) in
+      let$ create_message_gas = Uint.minus_1_64th <$> !(gas) in
+      let$ () = update_field (gas) (fun g -> Uint.(g - create_message_gas)) in
 
-      let$ () = machine_state |-- output_buffer := Bytes.empty in
-      let$ mem = !(machine_state |-- memory) in
+      let$ () = output_buffer := Bytes.empty in
+      let$ mem = !(memory) in
       let call_data = Memory.read_block_at input_start input_size_bytes mem in
 
       let message =
@@ -1727,10 +1739,10 @@ struct
       let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
       if status_code = Evmc.Result.StatusCode.Success then
         let$ () = spend Gas.(code_deposit_per_byte * ~$(Bytes.length output_data)) in
-        let$ () = machine_state |-- output_buffer := Bytes.empty in
+        let$ () = output_buffer := Bytes.empty in
         push (Address.to_u256 create_address)
       else
-        let$ () = machine_state |-- output_buffer := output_data in
+        let$ () = output_buffer := output_data in
         push U256.zero
 
   let create =
@@ -1788,7 +1800,7 @@ struct
 
     let transfer_gas = Gas.(if transfer_value then call_value else zero) in
 
-    let$ gas_left = !(machine_state |-- MachineState.gas) in
+    let$ gas_left = !(Context.gas) in
     let Gas.{caller_spent_gas; callee_available_gas} =
       Gas.call_gas ~transfer_value ~gas ~gas_left ~memory_cost:memory_extension_gas
         ~extra_cost:Uint.(access_gas + transfer_gas + create_gas)
@@ -1809,9 +1821,9 @@ struct
       if (transfer_value && U256.(self_balance < value)) || call_depth >= max_stack_depth then
         let$ () = push U256.zero in
         let$ () =
-          update_field (machine_state |-- MachineState.gas) (fun g -> Uint.(g + callee_available_gas))
+          update_field (Context.gas) (fun g -> Uint.(g + callee_available_gas))
         in
-        machine_state |-- output_buffer := Bytes.empty
+        output_buffer := Bytes.empty
       else
         generic_call_impl ~kind
           ~call_gas:U256.(of_uint_exn callee_available_gas)
@@ -1888,8 +1900,8 @@ struct
     in
 
     (* Operation *)
-    let$ result = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
-    let$ () = machine_state |-- output_buffer := result in
+    let$ result = Memory.read_block_at start size_bytes <$> !(memory) in
+    let$ () = output_buffer := result in
 
     (* PC *)
     finish_execution ~return_output:true
@@ -1990,8 +2002,8 @@ struct
     in
 
     (* Operation *)
-    let$ result = Memory.read_block_at start size_bytes <$> !(machine_state |-- memory) in
-    let$ () = machine_state |-- output_buffer := result in
+    let$ result = Memory.read_block_at start size_bytes <$> !(memory) in
+    let$ () = output_buffer := result in
 
     (* PC *)
     fail Revert
@@ -2148,13 +2160,13 @@ struct
 
   let trace_state =
     if Params.trace then (
-      let$ ms = !machine_state in
-      Format.printf "PC: %s\n" (U256.to_string ms.pc) ;
-      Format.printf "Gas: %s\n" (Uint.to_string ms.gas) ;
+      let$ state = get in
+      Format.printf "PC: %s\n" (U256.to_string state.pc) ;
+      Format.printf "Gas: %s\n" (Uint.to_string state.gas) ;
       Format.printf "Stack: \n" ;
-      trace_stack (fst ms.stack) ;
+      trace_stack (fst state.stack) ;
       Format.printf "Memory: \n" ;
-      Memory.dump ms.memory ;
+      Memory.dump state.memory ;
       Format.print_flush () ;
       return () )
     else return ()
@@ -2163,7 +2175,7 @@ struct
    (* TODO: restore tracing. *)
    (*
     let run_k continue state =
-      let pc = state.machine_state.pc in
+      let pc = state.pc in
       let opcode =
         (* YP (157) *)
         match U256.to_int_opt pc with
@@ -2177,7 +2189,7 @@ struct
     *)
    fun state ->
     (* TODO: restore tracing *)
-    let pc = state.machine_state.pc in
+    let pc = state.pc in
     let opcode =
       (* YP (157) *)
       match U256.to_int_opt pc with
@@ -2186,12 +2198,12 @@ struct
     in
     let result, state = execute_direct opcode state in
     match result with
-    | Error err -> ((Error err), state)
+    | Error err -> (Error err, state)
     | Ok continue -> if continue then run code state else (Ok (), state)
   (*
    fun state ->
     (* TODO: restore tracing *)
-    let pc = state.machine_state.pc in
+    let pc = state.pc in
     let opcode =
       (* YP (157) *)
       match U256.to_int_opt pc with
@@ -2205,7 +2217,7 @@ struct
 *)
   (*
     let$ () = trace_state in
-    let$ pc = !(machine_state |-- pc) in
+    let$ pc = !(pc) in
     let opcode =
       (* YP (157) *)
       match U256.to_int_opt pc with
@@ -2234,12 +2246,12 @@ struct
       | Ok () ->
           trace (fun () ->
               Format.sprintf "Execution OK, returning [[%s]]\n"
-                (Bytes.to_hex_string ctx.machine_state.output_buffer) ) ;
+                (Bytes.to_hex_string ctx.output_buffer) ) ;
           Evmc.Result.
             { status_code = Success
-            ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-            ; gas_refund = Integer.to_int64 ctx.machine_state.gas_refund
-            ; output_data = ctx.machine_state.output_buffer
+            ; gas_left = Uint.to_uint64 ctx.gas
+            ; gas_refund = Integer.to_int64 ctx.gas_refund
+            ; output_data = ctx.output_buffer
             ; create_address = Address.zero }
       | Error err -> (
           trace (fun () -> Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err)) ;
@@ -2250,9 +2262,9 @@ struct
                buffer is returned, see YP (152) *)
               Evmc.Result.
                 { status_code = err
-                ; gas_left = Uint.to_uint64 ctx.machine_state.gas
+                ; gas_left = Uint.to_uint64 ctx.gas
                 ; gas_refund = 0L
-                ; output_data = ctx.machine_state.output_buffer
+                ; output_data = ctx.output_buffer
                 ; create_address = Address.zero }
           | _ -> Evmc.Result.failure err )
     in
@@ -2273,12 +2285,12 @@ struct
       | () ->
           trace (fun () ->
               Format.sprintf "Execution OK, returning [[%s]]\n"
-                (Bytes.to_hex_string ctx.machine_state.output_buffer) ) ;
+                (Bytes.to_hex_string ctx.output_buffer) ) ;
           Evmc.Result.
             { status_code = Success
-            ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-            ; gas_refund = Integer.to_int64 ctx.machine_state.gas_refund
-            ; output_data = ctx.machine_state.output_buffer
+            ; gas_left = Uint.to_uint64 ctx.gas
+            ; gas_refund = Integer.to_int64 ctx.gas_refund
+            ; output_data = ctx.output_buffer
             ; create_address = Address.zero }
       )
    *)

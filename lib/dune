@@ -12,6 +12,7 @@
  (name monad_lib)
  (public_name monad-spec.monad_lib)
  (libraries
+  unix
   zarith
   lens
   digestif
