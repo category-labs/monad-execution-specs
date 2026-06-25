@@ -13,7 +13,9 @@ struct
   open Account.TLens
   open WorldState
   open TransactionState
-  include M
+  open TransactionState.M
+
+  type t = TransactionState.t
 
   let dump_account addr =
     let$ acc = !(account addr) in
@@ -286,7 +288,7 @@ struct
     let log : Log.t = {address; topics; data} in
     update_field logs (fun logs -> log :: logs)
 
-  let access_account addr : [`Warm | `Cold] t =
+  let access_account addr =
     let$ accessed = !accessed_addresses in
     if Option.is_some (Address.Set.find_opt addr accessed) then return `Warm
     else
@@ -315,9 +317,9 @@ end
 module Instantiate
     (ChainParams : Chain.Monad.PARAMS)
     (Vm : functor
-      (Host : Evmc.Host.SIG with type 'a t = 'a TransactionState.M.t)
-      -> Evmc.Vm(TransactionState.M).SIG) =
+      (Host : Evmc.HOST)
+      -> Evmc.Vm(Host).SIG) =
 struct
-  include Evmc.Instantiate (TransactionState.M) (Make (ChainParams)) (Vm)
+  include Evmc.Instantiate (TransactionState) (Make (ChainParams)) (Vm)
   module Host = Make (ChainParams) (Vm)
 end

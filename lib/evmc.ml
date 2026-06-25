@@ -154,7 +154,7 @@ module type HOST = sig
   val get_balance : Address.t -> t -> U256.t * t
 
   val get_code_size : Address.t -> t -> Uint64.t * t
-  val get_code_hash : Address.t -> B32.t option * t
+  val get_code_hash : Address.t -> t -> B32.t option * t
   val copy_code : Address.t -> offset:int -> size:int -> t -> Bytes.t * t
 
   val selfdestruct : address:Address.t -> beneficiary:Address.t -> t -> bool * t
@@ -163,12 +163,12 @@ module type HOST = sig
 
   val get_tx_context : t -> TxContext.t * t
 
-  val get_block_hash : Uint64.t -> B32.t option * t
+  val get_block_hash : Uint64.t -> t -> B32.t option * t
 
   val emit_log : Address.t -> data:Bytes.t -> topics:B32.t list -> t -> unit * t
 
-  val access_account : Address.t -> [`Warm | `Cold] * t
-  val access_storage : Address.t -> B32.t -> [`Warm | `Cold] * t
+  val access_account : Address.t -> t -> [`Warm | `Cold] * t
+  val access_storage : Address.t -> B32.t -> t -> [`Warm | `Cold] * t
 
   val get_transient_storage : Address.t -> B32.t -> t -> B32.t * t
   val set_transient_storage : Address.t -> B32.t -> B32.t -> t -> unit * t
@@ -241,27 +241,26 @@ module Host = struct
   end
 end
 
-(** The type of EVMC VMs over monad M, broadly based on
+(** The type of EVMC VMs over a host H, broadly based on
     {{:https://evmc.ethereum.org/structevmc__vm.html}[evmc_vm]}, minus the ancilliary introspection
     operations. *)
-module Vm (M : Monad.SIG) = struct
+module Vm (T : sig type t end) = struct
   module type SIG = sig
-    val execute : Message.t -> Bytes.t -> Result.t M.t
+    val execute : Message.t -> Bytes.t -> T.t -> Result.t * T.t
   end
 end
 
 (** Helper module to instantiate a host and VM over the same monad.  *)
 module Instantiate
-    (M : Monad.SIG)
-    (HostF : functor (Vm : Vm(M).SIG) -> Host.SIG with type 'a t = 'a M.t)
-    (VmF : functor (Host : Host.SIG with type 'a t = 'a M.t) -> Vm(M).SIG) : sig
-  module Host : Host.SIG with type 'a t = 'a M.t
-  module Vm : Vm(M).SIG
+    (T : sig type t end)
+    (HostF : functor (Vm : Vm(T).SIG) -> HOST with type t = T.t)
+    (VmF : functor (H : HOST) -> Vm(H).SIG) : sig
+  module Host : HOST with type t = T.t
+  module Vm : Vm(T).SIG
 end = struct
-  module H = Host
   module V = Vm
 
-  module rec Host : (H.SIG with type 'a t = 'a M.t) = HostF (Vm)
+  module rec Host : (HOST with type t = T.t) = HostF (Vm)
 
-  and Vm : V(M).SIG = VmF (Host)
+  and Vm : V(T).SIG = VmF (Host)
 end

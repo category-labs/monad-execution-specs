@@ -2,12 +2,21 @@ open Numeric
 open Byte_string
 open Lens.Infix
 
+(* TODO remove *)
+open State
+
+(* Per-opcode execution counters and accumulated wall-clock time in nanoseconds,
+   indexed by opcode byte (0..255). Top-level so a harness can read them after a
+   run (e.g. [Monad_lib.Vm.instr_count]); populated by [Make.execute_direct]. *)
+let instr_count = Array.make 256 0
+let instr_time_ns = Array.make 256 0.
+
 module Make
     (Params : sig
       include Chain.Monad.PARAMS
       val trace : bool
     end)
-    (Host : Evmc.Host.SIG) =
+    (Host : Evmc.HOST) =
 struct
   module Memory : sig
     type t
@@ -122,7 +131,7 @@ struct
           (fun mem w_index -> write_aligned (start + (w_index * 32)) (B32.sub buffer (w_index * 32)) mem)
           mem (List.init n_words Fun.id)
 
-    let write_word_at (pos : U256.t) w (mem : t) : t =
+    let write_word_at (pos : U256.t) (w : U256.t) (mem : t) : t =
       let pos' = U256.to_int pos in
       if is_aligned pos' then write_aligned pos' (U256.to_repr w) mem
       else write_block_at pos (U256.to_repr_bytes w) mem
@@ -265,6 +274,7 @@ struct
       { execution_environment : ExecutionEnvironment.t (* I *)
       ; machine_state : MachineState.t (* μ *)
       ; jump_destinations : U256.Set.t (* D(c) *)
+      ; host : Host.t
       ; initial_storage : U256.t U256.Map.t
             (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *)
       }
@@ -284,13 +294,14 @@ struct
       in
       loop 0 U256.Set.empty
 
-    let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
+    let make (host : Host.t) (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
       { execution_environment = ExecutionEnvironment.make ctx msg code
       ; machine_state =
           MachineState.initial ~gas:(Uint.of_uint64 msg.gas)
             ~memory_capacity:Uint.(of_uint32 msg.memory_capacity)
       ; jump_destinations = valid_jump_destinations code
-      ; initial_storage = U256.Map.empty }
+      ; initial_storage = U256.Map.empty
+      ; host }
   end
 
   let max_stack_depth = 1024
@@ -316,86 +327,102 @@ struct
   module StatusCode = Evmc.Result.StatusCode
   module Err = Monad.Result (Evmc.Result.StatusCode)
 
+  (*
+  module StErr = Monad.State_error_codensity.Make (struct
+    type state = Context.t
+    type error = Evmc.Result.StatusCode.t
+  end)
+                 *)
   module StErr = Monad.State_error.Make (struct
     type state = Context.t
     type error = Evmc.Result.StatusCode.t
   end)
-  (*
-  module StErr = Monad.State (struct
-    type t = Context.t
-  end)
-   *)
 
   module M = struct
-    module ErrStHost = StErr.Trans (Host)
-    exception EvmcExn of Evmc.Result.StatusCode.t
+    include StErr
 
-    (*module StHost = St.Trans (Host)*)
-    (*module ErrStHost = Err.Trans (StHost)*)
-
-    (*include StErr.Lift (ErrStHost) (Host)*)
-    include ErrStHost
+    (*
+    let hoist (f : Host.t -> 'a * Host.t) =
+      let run_k continue state =
+        let result, host = f state.host in
+        continue result {state with host}
+      in
+      {run_k}
+     *)
+    let hoist (f : Host.t -> 'a * Host.t) =
+     fun state ->
+      let result, host = f state.host in
+      (Ok result, {state with host})
+    (*
+    let hoist (f : Host.t -> 'a * Host.t) =
+     fun (state : _ ref) ->
+      let result, host = f state.contents.host in
+      state.contents <- {state.contents with host} ;
+      Ok result
+     *)
 
     module HostAPI = struct
-      module Base = Evmc.Host.Lift (ErrStHost) (Host)
+      module Base = StErr
 
       let host_trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
 
       (* TODO: trace other API calls. *)
       let account_exists addr =
         host_trace (fun () -> Format.sprintf "account_exists %s" (Address.to_short_hex_string addr)) ;
-        Base.account_exists addr
+        hoist (Host.account_exists addr)
 
       let get_storage addr key =
         host_trace (fun () ->
             Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) ) ;
-        Base.get_storage addr key
+        hoist (Host.get_storage addr key)
 
       let set_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
-        Base.set_storage addr key v
+        hoist (Host.set_storage addr key v)
 
       let get_balance addr =
         host_trace (fun () -> Format.sprintf "get_balance %s" (Address.to_short_hex_string addr)) ;
-        Base.get_balance addr
+        hoist (Host.get_balance addr)
 
       let access_account addr =
         host_trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
-        Base.access_account addr
+        hoist (Host.access_account addr)
 
       let access_storage addr key =
         host_trace (fun () ->
             Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) ) ;
-        Base.access_storage addr key
+        hoist (Host.access_storage addr key)
 
       let get_code_size addr =
         host_trace (fun () -> Format.sprintf "get_code_size %s" (Address.to_short_hex_string addr)) ;
-        Base.get_code_size addr
+        hoist (Host.get_code_size addr)
 
       let get_code_hash addr =
         host_trace (fun () -> Format.sprintf "get_code_hash %s" (Address.to_short_hex_string addr)) ;
-        Base.get_code_hash addr
+        hoist (Host.get_code_hash addr)
 
       let copy_code addr ~offset ~size =
         host_trace (fun () ->
             Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
-        Base.copy_code addr ~offset ~size
+        hoist (Host.copy_code addr ~offset ~size)
 
       let get_block_hash id =
         host_trace (fun () -> Format.sprintf "get_block_hash %Ld" id) ;
-        Base.get_block_hash id
+        hoist (Host.get_block_hash id)
 
       let call (msg : Evmc.Message.t) =
         host_trace (fun () ->
             Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
-        let$ result = Base.call msg in
+        let$ result = hoist (Host.call msg) in
+        (*
         trace (fun () ->
             Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
         trace (fun () -> Format.sprintf "\tOutput buffer %s\n" (Bytes.to_hex_string result.output_data)) ;
+         *)
         return result
 
       let selfdestruct ~address ~beneficiary =
@@ -403,7 +430,7 @@ struct
             Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
               (Address.to_short_hex_string address)
               (Address.to_short_hex_string beneficiary) ) ;
-        Base.selfdestruct ~address ~beneficiary
+        hoist (Host.selfdestruct ~address ~beneficiary)
 
       let emit_log addr ~data ~topics =
         host_trace (fun () ->
@@ -412,50 +439,22 @@ struct
               (List.fold_left
                  (fun acc topic -> Format.sprintf "%s, %s" acc (B32.to_short_hex_string topic))
                  "" topics ) ) ;
-        Base.emit_log addr ~data ~topics
+        hoist (Host.emit_log addr ~data ~topics)
 
       let get_transient_storage addr key =
         host_trace (fun () ->
             Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) ) ;
-        Base.get_transient_storage addr key
+        hoist (Host.get_transient_storage addr key)
 
       let set_transient_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
-        Base.set_transient_storage addr key v
+        hoist (Host.set_transient_storage addr key v)
     end
   end
   open M
-
-   (*
-  let spend (amount : Uint.t) =
-    { run_k =
-        (fun k state ->
-          let available = state.machine_state.gas in
-          if Uint.(available < amount) then Host.return (Error Evmc.Result.StatusCode.Out_of_gas, state)
-          else k () {state with machine_state = {state.machine_state with gas = Uint.(available - amount)}} )
-    }
-    *)
-  let spend (amount : Uint.t) state =
-    if Uint.(state.machine_state.gas < amount) then
-      Host.return (Error Evmc.Result.StatusCode.Out_of_gas, state)
-    else
-      Host.return
-        ( Ok ()
-        , {state with machine_state = {state.machine_state with gas = Uint.(state.machine_state.gas - amount)}}
-        )
-    (*
-   fun state ->
-    if Uint.(state.machine_state.gas < amount) then
-      raise (EvmcExn (Evmc.Result.StatusCode.Out_of_gas))
-    else
-      Host.return
-        ( ()
-        , {state with machine_state = {state.machine_state with gas = Uint.(state.machine_state.gas - amount)}}
-        )
-     *)
 
   let check_write_permissions =
     let$ can_write = !(execution_environment |-- write_permission) in
@@ -467,32 +466,28 @@ struct
 
   let self : Address.t M.t = !(execution_environment |-- address)
 
-   (*
+  (*
+  let spend (amount : Uint.t) =
+    let run_k continue state =
+      let available = state.machine_state.gas in
+      if Uint.(available < amount) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
+      else continue () {state with machine_state = {state.machine_state with gas = Uint.(available - amount)}}
+    in
+    {run_k}
+
   let push (x : U256.t) : unit M.t =
     let run_k continue state =
       let s, d = state.machine_state.stack in
-      if d >= max_stack_depth then Host.return (Error Evmc.Result.StatusCode.Stack_overflow, state)
+      if d >= max_stack_depth then (Error Evmc.Result.StatusCode.Stack_overflow, state)
       else continue () {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}}
     in
     {run_k}
-    *)
-  let push (x : U256.t) state =
-    let s, d = state.machine_state.stack in
-    if d >= max_stack_depth then Host.return (Error Evmc.Result.StatusCode.Stack_overflow, state)
-    else Host.return (Ok (), {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}})
-    (*
-   fun state ->
-    let s, d = state.machine_state.stack in
-    if d >= max_stack_depth then raise (EvmcExn Evmc.Result.StatusCode.Stack_overflow)
-    else Host.return ((), {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}})
-         *)
 
-  (*
   let pop : U256.t M.t =
     let run_k continue state =
       match state.machine_state.stack with
       | hd :: tl, d -> continue hd {state with machine_state = {state.machine_state with stack = (tl, d - 1)}}
-      | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+      | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
     in
     {run_k}
 
@@ -501,7 +496,7 @@ struct
       match state.machine_state.stack with
       | x :: y :: tl, d ->
           continue (x, y) {state with machine_state = {state.machine_state with stack = (tl, d - 2)}}
-      | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+      | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
     in
     {run_k}
 
@@ -510,55 +505,103 @@ struct
       match state.machine_state.stack with
       | x :: y :: z :: tl, d ->
           continue (x, y, z) {state with machine_state = {state.machine_state with stack = (tl, d - 3)}}
-      | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+      | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
     in
     {run_k}
-   *)
+
+  let increase_pc_and_continue : bool M.t =
+    let run_k continue state =
+      continue true
+        {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}}
+    in
+    {run_k}
+    *)
+
+  let spend (amount : Uint.t) state =
+    if Uint.(state.machine_state.gas < amount) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
+    else
+      ( Ok ()
+      , {state with machine_state = {state.machine_state with gas = Uint.(state.machine_state.gas - amount)}}
+      )
+
+  let push (x : U256.t) state =
+    let s, d = state.machine_state.stack in
+    if d >= max_stack_depth then (Error Evmc.Result.StatusCode.Stack_overflow, state)
+    else (Ok (), {state with machine_state = {state.machine_state with stack = (x :: s, d + 1)}})
 
   let pop state =
     let s, d = state.machine_state.stack in
     match s with
-    | hd :: tl ->
-        Host.return (Ok hd, {state with machine_state = {state.machine_state with stack = (tl, d - 1)}})
-    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    | hd :: tl -> (Ok hd, {state with machine_state = {state.machine_state with stack = (tl, d - 1)}})
+    | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
 
   let pop2 state =
     let s, d = state.machine_state.stack in
     match s with
-    | x :: y :: tl ->
-        Host.return (Ok (x, y), {state with machine_state = {state.machine_state with stack = (tl, d - 2)}})
-    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+    | x :: y :: tl -> (Ok (x, y), {state with machine_state = {state.machine_state with stack = (tl, d - 2)}})
+    | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
 
   let pop3 state =
     let s, d = state.machine_state.stack in
     match s with
     | x :: y :: z :: tl ->
-        Host.return (Ok (x, y, z), {state with machine_state = {state.machine_state with stack = (tl, d - 3)}})
-    | _ -> Host.return (Error Evmc.Result.StatusCode.Stack_underflow, state)
+        (Ok (x, y, z), {state with machine_state = {state.machine_state with stack = (tl, d - 3)}})
+    | _ -> (Error Evmc.Result.StatusCode.Stack_underflow, state)
+
+  let increase_pc_and_continue state =
+    (Ok true, {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}})
+
   (*
-  let pop : U256.t M.t =
-   fun state ->
-    let s, d = state.machine_state.stack in
+  let spend (amount : Uint.t) state =
+    if Uint.(state.contents.machine_state.gas < amount) then Error Evmc.Result.StatusCode.Out_of_gas
+    else (
+      state.contents <-
+        { state.contents with
+          machine_state =
+            {state.contents.machine_state with gas = Uint.(state.contents.machine_state.gas - amount)} } ;
+      Ok () )
+
+  let push (x : U256.t) state =
+    let s, d = state.contents.machine_state.stack in
+    if d >= max_stack_depth then Error Evmc.Result.StatusCode.Stack_overflow
+    else (
+      state.contents <-
+        {state.contents with machine_state = {state.contents.machine_state with stack = (x :: s, d + 1)}} ;
+      Ok () )
+
+  let pop state =
+    let s, d = state.contents.machine_state.stack in
     match s with
     | hd :: tl ->
-        Host.return ( hd, {state with machine_state = {state.machine_state with stack = (tl, d - 1)}})
-    | _ -> raise (EvmcExn Evmc.Result.StatusCode.Stack_underflow)
+        state.contents <-
+          {state.contents with machine_state = {state.contents.machine_state with stack = (tl, d - 1)}} ;
+        Ok hd
+    | _ -> Error Evmc.Result.StatusCode.Stack_underflow
 
-  let pop2 : (U256.t * U256.t) M.t =
-   fun state ->
-    let s, d = state.machine_state.stack in
+  let pop2 state =
+    let s, d = state.contents.machine_state.stack in
     match s with
     | x :: y :: tl ->
-        Host.return ( (x, y), {state with machine_state = {state.machine_state with stack = (tl, d - 2)}})
-    | _ -> raise (EvmcExn Evmc.Result.StatusCode.Stack_underflow)
+        state.contents <-
+          {state.contents with machine_state = {state.contents.machine_state with stack = (tl, d - 2)}} ;
+        Ok (x, y)
+    | _ -> Error Evmc.Result.StatusCode.Stack_underflow
 
-  let pop3 : (U256.t * U256.t * U256.t) M.t =
-   fun state ->
-    let s, d = state.machine_state.stack in
+  let pop3 state =
+    let s, d = state.contents.machine_state.stack in
     match s with
     | x :: y :: z :: tl ->
-        Host.return ( (x, y, z), {state with machine_state = {state.machine_state with stack = (tl, d - 3)}})
-    | _ -> raise (EvmcExn Evmc.Result.StatusCode.Stack_underflow)
+        state.contents <-
+          {state.contents with machine_state = {state.contents.machine_state with stack = (tl, d - 3)}} ;
+        Ok (x, y, z)
+    | _ -> Error Evmc.Result.StatusCode.Stack_underflow
+
+  let increase_pc_and_continue state =
+    state.contents <-
+      { state.contents with
+        machine_state = {state.contents.machine_state with pc = U256.(state.contents.machine_state.pc + one)}
+      } ;
+    Ok true
    *)
 
   let finish_execution ~return_output : bool M.t =
@@ -567,28 +610,6 @@ struct
 
   let update_pc_and_continue (f : U256.t -> U256.t) : bool M.t =
     update_field (machine_state |-- pc) f >> return true
-
-   (*
-  let increase_pc_and_continue : bool M.t =
-    let run_k continue state =
-      continue true
-        {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}}
-    in
-    {run_k}
-    *)
-  let increase_pc_and_continue state =
-    Host.return
-      ( Ok true
-      , {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}} )
-    (*
-   fun state ->
-    Host.return
-      (  true
-      , {state with machine_state = {state.machine_state with pc = U256.(state.machine_state.pc + one)}} )
-    *)
-  (*
-    update_pc_and_continue U256.(( + ) one)
-   *)
 
   type opcode_impl = bool M.t
 
@@ -1280,6 +1301,28 @@ struct
 
     (* PC *)
     update_pc_and_continue (fun pc -> U256.(pc + one + ~$i))
+
+  (* Testing how good it is to hardcode push. *)
+    (*
+  let push_ i =
+    let gas_cost = if i = 0 then Gas.base else Gas.very_low in
+    fun state ->
+      if Gas.(state.machine_state.gas < gas_cost) then (Error Evmc.Result.StatusCode.Out_of_gas, state)
+      else
+        let here = U256.to_int state.machine_state.pc in
+        let code = state.execution_environment.bytecode in
+        let v = U256.of_bytes_be_exn (Bytes.sub_with_zero_padding code (here + 1) i) in
+        let s, d = state.machine_state.stack in
+        let state =
+          { state with
+            machine_state =
+              { state.machine_state with
+                pc = U256.(state.machine_state.pc + one + ~$i)
+              ; stack = (v :: s, d + 1) } }
+        in
+        (* TODO: check for overflow *)
+        (Ok true, state)
+     *)
 
   let dup i =
     assert (i >= 1) ;
@@ -2081,11 +2124,19 @@ struct
   let execute_direct : char -> bool M.t =
     let table =
       Iarray.init 256 (fun i ->
-          let opcode = Opcode.of_byte (Char.chr i) in
-          opcode_semantics opcode )
+          let comp = opcode_semantics (Opcode.of_byte (Char.chr i)) in
+          (* Bracket the actual execution ([comp state]) with the Unix clock and
+             accumulate into the per-opcode counters. *)
+          if false then ( fun state ->
+            let t0 = Unix.gettimeofday () in
+            let result = comp state in
+            let t1 = Unix.gettimeofday () in
+            instr_count.(i) <- instr_count.(i) + 1 ;
+            instr_time_ns.(i) <- instr_time_ns.(i) +. ((t1 -. t0) *. 1e9) ;
+            result )
+          else comp )
     in
-    fun byte ->
-    Iarray.get table (Char.code byte)
+    fun byte -> Iarray.get table (Char.code byte)
 
   let trace_stack =
     if Params.trace then ( fun stack ->
@@ -2133,12 +2184,11 @@ struct
       | Some pc when pc < Bytes.length code -> code.[pc]
       | _ -> '\x00'
     in
-    Inner.(
-      let$ result, state = execute_direct opcode state in
-      match result with
-      | Error err -> Inner.return (Error err, state)
-      | Ok continue -> if continue then run code state else Inner.return (Ok (), state) )
-    (*
+    let result, state = execute_direct opcode state in
+    match result with
+    | Error err -> ((Error err), state)
+    | Ok continue -> if continue then run code state else (Ok (), state)
+  (*
    fun state ->
     (* TODO: restore tracing *)
     let pc = state.machine_state.pc in
@@ -2169,18 +2219,18 @@ struct
     if continue then run code else return () 
      *)
 
-  let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
+  let execute (msg : Evmc.Message.t) (code : Bytes.t) : Host.t -> Evmc.Result.t * Host.t =
+   fun host ->
+    let open Host in
     trace (fun () -> "Start execution\n") ;
     trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
     trace (fun () -> Format.sprintf "Call data: %s\n" (Bytes.to_hex_string msg.input_data)) ;
-    let open Host in
-    let open Monad.Make (Host) in
-    let$ tx_context = get_tx_context in
-    let ctx = Context.make tx_context msg code in
-    let$ res, ctx = M.run (run code) ctx in
+    let tx_context, host = get_tx_context host in
+    let ctx = Context.make host tx_context msg code in
+    let res, ctx = M.run (run code) ctx in
     trace (fun () -> "Finished execution\n") ;
-    return
-      ( match res with
+    let result =
+      match res with
       | Ok () ->
           trace (fun () ->
               Format.sprintf "Execution OK, returning [[%s]]\n"
@@ -2204,7 +2254,9 @@ struct
                 ; gas_refund = 0L
                 ; output_data = ctx.machine_state.output_buffer
                 ; create_address = Address.zero }
-          | _ -> Evmc.Result.failure err ) )
+          | _ -> Evmc.Result.failure err )
+    in
+    (result, host)
   (*
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
     trace (fun () -> "Start execution\n") ;

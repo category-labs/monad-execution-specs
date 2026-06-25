@@ -26,14 +26,14 @@ module Make (M : SIG) = struct
 
   let[@inline] ( let$ ) x f = M.((( >>= ) [@inlined]) x f)
 
-  let fmap f x = M.(x >>= fun x -> return (f x))
-  let ( <$> ) f x = fmap f x
-  let ( <*> ) (f : ('a -> 'b) M.t) (x : 'a M.t) : 'b M.t =
+  let[@inline] fmap f x = M.(x >>= fun x -> return (f x))
+  let[@inline] ( <$> ) f x = fmap f x
+  let[@inline] ( <*> ) (f : ('a -> 'b) M.t) (x : 'a M.t) : 'b M.t =
     let$ f = f in
     let$ x = x in
     return (f x)
 
-  let ( >> ) (mx : unit M.t) (y : 'a M.t) : 'a M.t = M.(mx >>= fun _ -> y)
+  let[@inline] ( >> ) (mx : unit M.t) (y : 'a M.t) : 'a M.t = M.(mx >>= fun _ -> y)
 
   let when_ cond mx = if cond then mx else M.return ()
 
@@ -285,19 +285,19 @@ struct
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
 
-      include Make (struct
-                  type state = T.t
-        type 'a t = state -> ('a * state) Inner.t
-        let[@inline] return (v : 'a) state = (Inner.return [@inlined]) (v, state)
-        let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) =
-         fun state ->
-          Inner.(
-            let$ res, state = (v [@inlined]) state in
-            f res state )
+    include Make (struct
+      type state = T.t
+      type 'a t = state -> ('a * state) Inner.t
+      let[@inline] return (v : 'a) state = (Inner.return [@inlined]) (v, state)
+      let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) =
+       fun state ->
+        Inner.(
+          let$ res, state = (v [@inlined]) state in
+          f res state )
 
-        let get : state t = fun state -> Inner.return (state, state)
-        let put (state' : state) = fun _state -> Inner.return ((), state')
-      end)
+      let get : state t = fun state -> Inner.return (state, state)
+      let put (state' : state) = fun _state -> Inner.return ((), state')
+    end)
     (*
     include Make (struct
       type 'a t = T.t -> ('a * T.t) Inner.t
@@ -512,39 +512,170 @@ module State_error = struct
 
     include Trans (Identity)
   end
+end
 
-  module Product (P1 : sig
-    type state
-    type error
-  end) (P2 : sig
+module State_error_ref = struct
+  module Make (P : sig
     type state
     type error
   end) =
   struct
-    module Left = Make (P1)
-    module Right = Make (P2)
-
-    module P = struct
-      type state = P1.state * P2.state
-      type error = Left of P1.error | Right of P2.error
+    module State = State (struct
+      type t = P.state
+    end)
+    module Result = Result (struct
+      type t = P.error
+    end)
+    module type SIG = sig
+      include SIG
+      include State.SIG with type 'a t := 'a t
+      include Result.SIG with type 'a t := 'a t
     end
-    include Make (P)
 
-    let run_left (v : 'a t) : P1.state -> (('a, P1.error) result * P1.state) Right.t =
-     fun s_1 ->
-      fun s_2 ->
-       match v (s_1, s_2) with
-       | Ok result, (s_1, s_2) -> (Ok (Ok result, s_1), s_2)
-       | Error (Left e_1), (s_1, s_2) -> (Ok (Error e_1, s_1), s_2)
-       | Error (Right e_2), (_s_1, s_2) -> (Error e_2, s_2)
+    module Make (S : SIG) = struct
+      include S
+      include Make (S)
+      include State.Make (S)
+      include Result.Make (S)
+    end
+    [@@inline]
 
-    let run_right (v : 'a t) : P2.state -> (('a, P2.error) result * P2.state) Left.t =
-     fun s_2 ->
-      fun s_1 ->
-       match v (s_1, s_2) with
-       | Ok result, (s_1, s_2) -> (Ok (Ok result, s_2), s_1)
-       | Error (Right e_2), (s_1, s_2) -> (Ok (Error e_2, s_2), s_1)
-       | Error (Left e_1), (s_1, _s_2) -> (Error e_1, s_1)
+    module Trans (Inner : SIG_MONAD) = struct
+      module Inner = Make_Monad (Inner)
+
+      include Make (struct
+        include P
+        type 'a t = state ref -> ('a, error) result Inner.t
+        let[@inline] return (v : 'a) state = (Inner.return [@inlined]) (Ok v)
+        let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) =
+         fun state ->
+          Inner.(
+            let$ res = (v [@inlined]) state in
+            match res with Error err -> (Inner.return [@inlined]) (Error err) | Ok v -> f v state )
+
+        let get : state t = fun state -> Inner.return (Ok state.contents)
+        let put (state' : state) =
+         fun state ->
+          state.contents <- state' ;
+          Inner.return (Ok ())
+
+        let fail (err : error) = fun state -> Inner.return (Error err)
+      end)
+
+      (* Specialized lens stuff, faster. *)
+      let[@inline] ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
+       fun state ->
+        state.contents <- l.set x state.contents ;
+        Inner.return (Ok ())
+      let[@inline] ( ! ) (l : (state, 'x) Lens.t) = fun state ->
+        Inner.return (Ok (l.get state.contents))
+      let[@inline] update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) =
+        fun (state : state ref) ->
+        state.contents <- l.set (f (l.get state.contents)) state.contents ;
+        Inner.return (Ok ())
+
+      let[@inline] lower (x : state -> ('a, error) result * state) : 'a t =
+       fun s ->
+        let result, state' = x s.contents in
+        s.contents <- state' ;
+        Inner.return result
+      let[@inline] lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> Ok x) x
+
+      let[@inline] run (f : 'a t) (s : state) : (('a, error) result * state) Inner.t =
+        let s = ref s in
+        Inner.(
+          let$ result = f s in
+          return (result, s.contents) )
+    end
+    [@@inline]
+
+    module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = Make (struct
+      include MT
+      include P
+      let get = (MT.lift [@inlined]) M.get
+      let put x = (MT.lift [@inlined]) ((M.put [@inlined]) x)
+      let fail err = (MT.lift [@inlined]) ((M.fail [@inlined]) err)
+    end)
+    [@@inline]
+
+    include Trans (Identity)
+  end
+end
+
+module State_exn = struct
+  module Make (P : sig
+    type state
+    type error
+  end) =
+  struct
+    module State = State (struct
+      type t = P.state
+    end)
+    module Result = Result (struct
+      type t = P.error
+    end)
+    module type SIG = sig
+      include SIG
+      include State.SIG with type 'a t := 'a t
+      include Result.SIG with type 'a t := 'a t
+    end
+
+    module Make (S : SIG) = struct
+      include S
+      include Make (S)
+      include State.Make (S)
+      include Result.Make (S)
+    end
+    [@@inline]
+
+    module Trans (Inner : SIG_MONAD) = struct
+      module Inner = Make_Monad (Inner)
+
+      include Make (struct
+        include P
+        type 'a t = state -> ('a * state) Inner.t
+        let[@inline] return (v : 'a) state = (Inner.return [@inlined]) (v, state)
+        let[@inline] ( >>= ) (v : 'a t) (f : 'a -> 'b t) =
+         fun state ->
+          Inner.(
+            let$ res, state = (v [@inlined]) state in
+            f res state )
+
+        let get : state t = fun state -> Inner.return (state, state)
+        let put (state' : state) = fun _state -> Inner.return ((), state')
+
+        let fail (err : error) : 'a t = fun state -> ignore err ; failwith "oops"
+      end)
+
+      (* Specialized lens stuff, faster. *)
+      let[@inline] ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
+       fun state ->
+        let state = l.set x state in
+        Inner.return ((), state)
+      let[@inline] ( ! ) (l : (state, 'x) Lens.t) = fun state -> Inner.return (l.get state, state)
+      let[@inline] update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) =
+       fun state -> Inner.return ((), l.set (f (l.get state)) state)
+
+      let[@inline] lower (x : state -> 'a * state) : 'a t = fun s -> Inner.return (x s)
+      let[@inline] lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (x, s)) x
+
+      let[@inline] run (f : 'a t) (s : state) : (('a, error) result * state) Inner.t =
+        Inner.(
+          let$ r, s = f s in
+          return (Ok r, s) )
+    end
+    [@@inline]
+
+    module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = Make (struct
+      include MT
+      include P
+      let get = (MT.lift [@inlined]) M.get
+      let put x = (MT.lift [@inlined]) ((M.put [@inlined]) x)
+      let fail err = (MT.lift [@inlined]) ((M.fail [@inlined]) err)
+    end)
+    [@@inline]
+
+    include Trans (Identity)
   end
 end
 
