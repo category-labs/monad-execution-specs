@@ -314,6 +314,12 @@ struct
   [@@inline]
 
   include Trans (Identity)
+
+  (* For performance, common state update combinators are specialized here. *)
+  let update (f : state -> state) : unit t = fun s -> ((), f s)
+  let ( ! ) (l : (state, 'x) Lens.t) : 'x t = fun s -> (l.get s, s)
+  let ( := ) (l : (state, 'x) Lens.t) (v : 'x) : unit t = fun s -> ((), l.set v s)
+  let update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t = fun s -> ((), l.set (f (l.get s)) s)
 end
 [@@inline]
 
@@ -429,5 +435,11 @@ struct
   [@@inline]
 
   include Trans (Identity)
+
+  (* For performance, common state update combinators are specialized here. *)
+  let update (f : state -> state) : unit t = fun s -> (Ok (), f s)
+  let ( ! ) (l : (state, 'x) Lens.t) : 'x t = fun s -> (Ok (l.get s), s)
+  let ( := ) (l : (state, 'x) Lens.t) (v : 'x) : unit t = fun s -> (Ok (), l.set v s)
+  let update_field (l : (state, 'x) Lens.t) (f : 'x -> 'x) : unit t = fun s -> (Ok (), l.set (f (l.get s)) s)
 end
 [@@inline]
