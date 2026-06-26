@@ -130,7 +130,7 @@ module Make_Monad = Make
 module Make2 (M : SIG2) = struct
   include M
 
-  let ( let$ ) x f = M.(x >>= f)
+  let[@inline] ( let$ ) x f = M.(x >>= f)
 
   let fmap f x = M.(x >>= fun x -> return (f x))
   let ( <$> ) f x = fmap f x
@@ -139,7 +139,7 @@ module Make2 (M : SIG2) = struct
     let$ x = x in
     return (f x)
 
-  let ( >> ) mx y = M.(mx >>= fun () -> y)
+  let[@inline] ( >> ) mx y = M.(mx >>= fun () -> y)
 
   let when_ cond mx = if cond then mx else M.return ()
 
@@ -244,8 +244,8 @@ end
 module Identity = struct
   module Impl = struct
     type 'a t = 'a
-    let return x = x
-    let ( >>= ) x f = f x
+    let[@inline] return x = x
+    let[@inline] ( >>= ) x f = f x
   end
   include Impl
   include Make (Impl)
@@ -286,8 +286,8 @@ struct
 
     include Make (struct
       type 'a t = T.t -> ('a * T.t) Inner.t
-      let return (x : 'a) : 'a t = fun s -> Inner.return (x, s)
-      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+      let[@inline] return (x : 'a) : 'a t = fun s -> Inner.return (x, s)
+      let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
        fun s ->
         Inner.(
           let$ x, s = x s in
@@ -353,8 +353,8 @@ struct
 
     include Make (struct
       type 'a t = ('a, T.t) result Inner.t
-      let return (x : 'a) : 'a t = Inner.return (Ok x)
-      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+      let[@inline] return (x : 'a) : 'a t = Inner.return (Ok x)
+      let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
         Inner.(x >>= function Error err -> Inner.return (Error err) | Ok x -> f x)
 
       let fail (err : T.t) = Inner.return (Error err)
@@ -401,8 +401,8 @@ struct
 
     include Make (struct
       type 'a t = state -> (('a, error) result * state) Inner.t
-      let return (x : 'a) : 'a t = fun s -> Inner.return (Ok x, s)
-      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+      let[@inline] return (x : 'a) : 'a t = fun s -> Inner.return (Ok x, s)
+      let[@inline] ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
        fun s ->
         Inner.(
           let$ x, s = x s in
