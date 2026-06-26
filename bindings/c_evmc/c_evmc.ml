@@ -28,7 +28,7 @@ module Message = struct
     let code = Bytes.empty in
     let _memory_handle = getf repr memory_handle in
     let _memory = getf repr memory in
-    let memory_capacity = Unsigned.UInt32.to_int (getf repr memory_capacity) in
+    let memory_capacity = Unsigned.UInt32.to_int32 (getf repr memory_capacity) in
     Evmc.Message.
       { kind
       ; static
@@ -65,7 +65,7 @@ module Message = struct
     setf repr code_address (Address.to_c msg.code_address) ;
     setf repr memory_handle (coerce (ptr void) (ptr uint8_t) null) ;
     setf repr memory (coerce (ptr void) (ptr uint8_t) null) ;
-    setf repr memory_capacity (Unsigned.UInt32.of_int msg.memory_capacity) ;
+    setf repr memory_capacity (Unsigned.UInt32.of_int32 msg.memory_capacity) ;
     repr
 end
 

@@ -7,7 +7,12 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
   open Common
 
   (* TODO: make this configurable. *)
-  module Chain_params : Chain.Monad.PARAMS = Chain.Monad.Mainnet
+  module Chain_params : Chain.Monad.PARAMS = struct
+    include Chain.Monad.Mainnet
+
+    (* TODO: bump to Nine once EIP-5 lands. *)
+    let revision = `Eight
+  end
 
   (* Unpack a C host vtable into an Evmc.Host implementation. *)
   module C_host (Host : sig
@@ -136,6 +141,7 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
           let module Vm =
             Monad_lib.Vm.Make
               (struct
+                include Chain_params
                 let trace = false
               end)
               (Host)
