@@ -178,6 +178,7 @@ struct
       ; pc : U256.t (* μ_pc *)
       ; memory : Memory.t (* μ_m, μ_i *)
       ; stack : U256.t list (* μ_s *)
+      ; stack_depth : int
       ; output_buffer : Bytes.t (* μ_o *)
       ; gas_refund : Integer.t
             (* A_r *)
@@ -193,6 +194,7 @@ struct
       ; pc = U256.zero
       ; memory = Memory.empty ~memory_capacity
       ; stack = []
+      ; stack_depth = 0
       ; output_buffer = Bytes.empty
       ; gas_refund = Integer.zero }
   end
@@ -432,15 +434,18 @@ struct
   let self : Address.t M.t = !(execution_environment |-- address)
 
   let push (x : U256.t) : unit M.t =
-    let$ s = !(machine_state |-- stack) in
-    if List.length s >= max_stack_depth then fail Stack_overflow else machine_state |-- stack := x :: s
+    let$ d = !(machine_state |-- stack_depth) in
+    if d >= max_stack_depth then fail Stack_overflow
+    else update_field machine_state (fun s -> {s with stack = x :: s.stack; stack_depth = d})
 
   let pop : U256.t M.t =
     let$ s = !(machine_state |-- stack) in
     match s with
     | [] -> fail Stack_underflow
     | hd :: tl ->
-        let$ () = machine_state |-- stack := tl in
+        let$ () =
+          update_field machine_state (fun s -> {s with stack = tl; stack_depth = s.stack_depth - 1})
+        in
         return hd
 
   let finish_execution ~return_output : bool M.t =
