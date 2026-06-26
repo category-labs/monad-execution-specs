@@ -121,6 +121,7 @@ module Make (M : SIG) = struct
     include Seq
   end
 end
+[@@inline]
 
 (* Alias to avoid shadowing Make from child modules. *)
 module Make_Monad = Make
@@ -230,6 +231,7 @@ module Make2 (M : SIG2) = struct
     include Seq
   end
 end
+[@@inline]
 
 (** A monad transformer is a module defining a monad, an inner monad [Inner], and a transformation
     [lift] which lifts a computation in the inner monad to the monad transformer *)
@@ -278,6 +280,7 @@ struct
       let$ v = !l in
       l := f v
   end
+  [@@inline]
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
@@ -299,6 +302,7 @@ struct
     let lower (x : state -> 'a * state) : 'a t = fun s -> Inner.return (x s)
     let lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (x, s)) x
   end
+  [@@inline]
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
     include Make (struct
@@ -308,9 +312,11 @@ struct
       let put x = MT.lift (M.put x)
     end)
   end
+  [@@inline]
 
   include Trans (Identity)
 end
+[@@inline]
 
 module Result (T : sig
   type t
@@ -333,6 +339,7 @@ struct
       let or_fail (err : error) = function None -> S.fail err | Some x -> S.return x
     end
   end
+  [@@inline]
 
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) : SIG = struct
     include Make (struct
@@ -341,6 +348,7 @@ struct
       let fail (x : T.t) : 'a MT.t = MT.lift (M.fail x)
     end)
   end
+  [@@inline]
 
   module Trans (Inner : SIG_MONAD) = struct
     module Inner = Make_Monad (Inner)
@@ -358,46 +366,8 @@ struct
     let lower (x : ('a, T.t) result) : 'a t = Inner.return x
     let lift (x : 'a Inner.t) : 'a t = Inner.fmap Stdlib.Result.ok x
   end
+  [@@inline]
 
   include Trans (Identity)
 end
-
-(** A monad that produces either a state change or an error. Note that this provides the capabilities of both
-    State and Result but is not equal to their composition. *)
-module StErr = struct
-  module Make (T : sig
-    type state
-    type error
-  end) =
-  struct
-    module Trans (Inner : SIG_MONAD) = struct
-      module Impl = struct
-        module Inner = Make_Monad (Inner)
-        type 'a t = T.state -> ('a * T.state, T.error) Stdlib.Result.t Inner.t
-        let return (x : 'a) : 'a t = fun s -> Inner.return (Ok (x, s))
-        let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
-         fun s -> Inner.(x s >>= function Error err -> Inner.return (Error err) | Ok (x, s') -> f x s')
-
-        type state = T.state
-        type error = T.error
-
-        let fail (err : T.error) : 'a t = fun _s -> Inner.return (Error err)
-        let get = fun s -> Inner.return (Ok (s, s))
-        let put s' = fun _s -> Inner.return (Ok ((), s'))
-      end
-
-      module State = State (struct
-        type t = T.state
-      end)
-      module Result = Result (struct
-        type t = T.error
-      end)
-      include Impl
-      include Make_Monad (Impl)
-      include State.Make (Impl)
-      include Result.Make (Impl)
-    end
-
-    include Trans (Identity)
-  end
-end
+[@@inline]
