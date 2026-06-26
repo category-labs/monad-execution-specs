@@ -57,7 +57,7 @@ let () =
 
 let read_source place =
   match !place with
-  | Some (`File file) -> In_channel.(with_open_bin file input_all)
+  | Some (`File file) -> In_channel.(Bytes.of_hex_string (String.trim (with_open_text file input_all)))
   | Some (`Literal lit) -> Bytes.of_hex_string lit
   | None -> ""
 
@@ -94,7 +94,7 @@ let result, _state =
   let block_state = Host.BlockState.make world_state block in
   let transaction_state = Host.TransactionState.make block_state Address.zero tx in
   let msg = {(Execution.prepare_message sender gas_limit tx) with code = bytecode; input_data = calldata} in
-  Execution.Host.call_from_eoa tx msg transaction_state
+  Execution.Vm.execute msg bytecode transaction_state
 
 let () =
   match result.status_code with Success -> Format.printf "Ok\n" | _ -> Format.printf "Execution failure\n"
