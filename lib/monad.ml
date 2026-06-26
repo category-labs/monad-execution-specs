@@ -255,9 +255,9 @@ module State (T : sig
   type t
 end) =
 struct
+  type state = T.t
   module type SIG = sig
     include SIG
-    type state = T.t
     val get : state t
     val put : state -> unit t
   end
@@ -265,7 +265,6 @@ struct
   module Make (S : SIG) = struct
     include S
     include Make (S)
-    type state = T.t
     let update (f : state -> state) : unit t = get >>= fun s -> put (f s)
 
     let ( := ) (l : (state, 'x) Lens.t) (x : 'x) =
@@ -322,16 +321,16 @@ module Result (T : sig
   type t
 end) =
 struct
+  type error = T.t
+
   module type SIG = sig
     include SIG_MONAD
-    type error = T.t
     val fail : error -> 'a t
   end
 
   module Make (S : SIG) = struct
     include S
     include Make_Monad (S)
-    type error = T.t
 
     module Option = struct
       include Option
@@ -344,7 +343,6 @@ struct
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) : SIG = struct
     include Make (struct
       include MT
-      type error = T.t
       let fail (x : T.t) : 'a MT.t = MT.lift (M.fail x)
     end)
   end
@@ -359,12 +357,74 @@ struct
       let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
         Inner.(x >>= function Error err -> Inner.return (Error err) | Ok x -> f x)
 
-      type error = T.t
       let fail (err : T.t) = Inner.return (Error err)
     end)
 
     let lower (x : ('a, T.t) result) : 'a t = Inner.return x
     let lift (x : 'a Inner.t) : 'a t = Inner.fmap Stdlib.Result.ok x
+  end
+  [@@inline]
+
+  include Trans (Identity)
+end
+[@@inline]
+
+module State_result (T : sig
+  type state
+  type error
+end) =
+struct
+  open T
+  module State = State (struct
+    type t = state
+  end)
+  module Result = Result (struct
+    type t = error
+  end)
+  module type SIG = sig
+    include SIG
+    val get : state t
+    val put : state -> unit t
+    val fail : error -> 'a t
+  end
+
+  module Make (S : SIG) = struct
+    include S
+    include Make (S)
+    include State.Make (S)
+    include Result.Make (S)
+  end
+  [@@inline]
+
+  module Trans (Inner : SIG_MONAD) = struct
+    module Inner = Make_Monad (Inner)
+
+    include Make (struct
+      type 'a t = state -> (('a, error) result * state) Inner.t
+      let return (x : 'a) : 'a t = fun s -> Inner.return (Ok x, s)
+      let ( >>= ) (x : 'a t) (f : 'a -> 'b t) =
+       fun s ->
+        Inner.(
+          let$ x, s = x s in
+          match x with Error err -> Inner.return (Error err, s) | Ok x -> f x s )
+
+      let get : state t = fun s -> Inner.return (Ok s, s)
+      let put (s : state) : unit t = fun _ -> Inner.return (Ok (), s)
+      let fail (e : error) : 'a t = fun s -> Inner.return (Error e, s)
+    end)
+
+    let lower (x : state -> ('a, error) result * state) : 'a t = fun s -> Inner.return (x s)
+    let lift (x : 'a Inner.t) : 'a t = fun s -> Inner.fmap (fun x -> (Ok x, s)) x
+  end
+  [@@inline]
+
+  module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
+    include Make (struct
+      include MT
+      let get : state MT.t = MT.lift M.get
+      let put x = MT.lift (M.put x)
+      let fail err = MT.lift (M.fail err)
+    end)
   end
   [@@inline]
 
