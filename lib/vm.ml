@@ -269,8 +269,7 @@ struct
       ; jump_destinations : U256.Set.t (* D(c) *)
       ; initial_storage : U256.t U256.Map.t
             (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *)
-      ; host : Host.t
-      }
+      ; host : Host.t }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
@@ -315,13 +314,11 @@ struct
 
   module Address = Chain.Ethereum.Address
 
-  module St = Monad.State (Context)
-  module Err = Monad.Result (Evmc.Result.StatusCode)
-
   module M = struct
-    module ErrSt = Err.Trans (St)
-    include St.Lift (ErrSt) (St)
-    include ErrSt
+    include Monad.State_result (struct
+      type state = Context.t
+      type error = Evmc.Result.StatusCode.t
+    end)
 
     module HostAPI = struct
       module Base = Host
@@ -329,10 +326,9 @@ struct
       let host_trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
 
       let lift (fn : Host.t -> 'a * Host.t) : 'a t =
-        fun state ->
-            let result, host = fn state.host in
-            Ok result, { state with host }
-
+       fun state ->
+        let result, host = fn state.host in
+        (Ok result, {state with host})
 
       (* TODO: trace other API calls. *)
       let account_exists addr =
