@@ -143,94 +143,65 @@ module StorageStatus = struct
     | Assigned
 end
 
-module Host = struct
-  (** The type of monads that can provide the EVMC host API. This mirrors the structure
+module type HOST = sig
+  (** Types supporting a purely functional version of the EVMC host API. This mirrors the structure
       of {{:https://evmc.ethereum.org/structevmc__host__interface.html}[evmc_host_interface]}, replacing
-      the explicit [evmc_host_context*] parameter with a monad which may be equivalent to a
-      [evmc_host_context ->] reader monad. *)
-  module type SIG = sig
-    include Monad.SIG
-    val account_exists : Address.t -> bool t
+      the [evmc_host_context*] parameter with an explicit state threading monad. *)
+  type t
 
-    val get_storage : Address.t -> B32.t -> B32.t t
-    val set_storage : Address.t -> B32.t -> B32.t -> StorageStatus.t t
+  val account_exists : Address.t -> t -> bool * t
 
-    val get_balance : Address.t -> U256.t t
+  val get_storage : Address.t -> B32.t -> t -> B32.t * t
+  val set_storage : Address.t -> B32.t -> B32.t -> t -> StorageStatus.t * t
 
-    val get_code_size : Address.t -> Uint64.t t
-    val get_code_hash : Address.t -> B32.t option t
-    val copy_code : Address.t -> offset:int -> size:int -> Bytes.t t
+  val get_balance : Address.t -> t -> U256.t * t
 
-    val selfdestruct : address:Address.t -> beneficiary:Address.t -> bool t
+  val get_code_size : Address.t -> t -> Uint64.t * t
+  val get_code_hash : Address.t -> t -> B32.t option * t
+  val copy_code : Address.t -> offset:int -> size:int -> t -> Bytes.t * t
 
-    val call : Message.t -> Result.t t
+  val selfdestruct : address:Address.t -> beneficiary:Address.t -> t -> bool * t
 
-    val get_tx_context : TxContext.t t
+  val call : Message.t -> t -> Result.t * t
 
-    val get_block_hash : Uint64.t -> B32.t option t
+  val get_tx_context : t -> TxContext.t * t
 
-    val emit_log : Address.t -> data:Bytes.t -> topics:B32.t list -> unit t
+  val get_block_hash : Uint64.t -> t -> B32.t option * t
 
-    val access_account : Address.t -> [`Warm | `Cold] t
-    val access_storage : Address.t -> B32.t -> [`Warm | `Cold] t
+  val emit_log : Address.t -> data:Bytes.t -> topics:B32.t list -> t -> unit * t
 
-    val get_transient_storage : Address.t -> B32.t -> B32.t t
-    val set_transient_storage : Address.t -> B32.t -> B32.t -> unit t
-  end
+  val access_account : Address.t -> t -> [`Warm | `Cold] * t
+  val access_storage : Address.t -> B32.t -> t -> [`Warm | `Cold] * t
 
-  (* Lift a host monad through a transformer stack *)
-  module Lift (MT : Monad.TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
-    include MT
-    let account_exists acc = MT.lift (M.account_exists acc)
-
-    let get_storage addr k = MT.lift (M.get_storage addr k)
-    let set_storage addr k v = MT.lift (M.set_storage addr k v)
-
-    let get_balance addr = MT.lift (M.get_balance addr)
-
-    let get_code_size addr = MT.lift (M.get_code_size addr)
-    let get_code_hash addr = MT.lift (M.get_code_hash addr)
-    let copy_code addr ~offset ~size = MT.lift (M.copy_code addr ~offset ~size)
-
-    let selfdestruct ~address ~beneficiary = MT.lift (M.selfdestruct ~address ~beneficiary)
-
-    let call msg = MT.lift (M.call msg)
-
-    let get_tx_context = MT.lift M.get_tx_context
-
-    let get_block_hash i = MT.lift (M.get_block_hash i)
-
-    let emit_log addr ~data ~topics = MT.lift (M.emit_log addr ~data ~topics)
-
-    let access_account addr = MT.lift (M.access_account addr)
-    let access_storage addr k = MT.lift (M.access_storage addr k)
-
-    let get_transient_storage addr k = MT.lift (M.get_transient_storage addr k)
-    let set_transient_storage addr k v = MT.lift (M.set_transient_storage addr k v)
-  end
+  val get_transient_storage : Address.t -> B32.t -> t -> B32.t * t
+  val set_transient_storage : Address.t -> B32.t -> B32.t -> t -> unit * t
 end
 
 (** The type of EVMC VMs over monad M, broadly based on
     {{:https://evmc.ethereum.org/structevmc__vm.html}[evmc_vm]}, minus the ancilliary introspection
     operations. *)
-module Vm (M : Monad.SIG) = struct
+module Vm (H : sig
+  type t
+end) =
+struct
   module type SIG = sig
-    val execute : Message.t -> Bytes.t -> Result.t M.t
+    val execute : Message.t -> Bytes.t -> H.t -> Result.t * H.t
   end
 end
 
 (** Helper module to instantiate a host and VM over the same monad.  *)
 module Instantiate
-    (M : Monad.SIG)
-    (HostF : functor (Vm : Vm(M).SIG) -> Host.SIG with type 'a t = 'a M.t)
-    (VmF : functor (Host : Host.SIG with type 'a t = 'a M.t) -> Vm(M).SIG) : sig
-  module Host : Host.SIG with type 'a t = 'a M.t
-  module Vm : Vm(M).SIG
+    (T : sig
+      type t
+    end)
+    (HostF : functor (Vm : Vm(T).SIG) -> HOST with type t = T.t)
+    (VmF : functor (H : HOST with type t = T.t) -> Vm(T).SIG) : sig
+  module Host : HOST with type t = T.t
+  module Vm : Vm(T).SIG
 end = struct
-  module H = Host
   module V = Vm
 
-  module rec Host : (H.SIG with type 'a t = 'a M.t) = HostF (Vm)
+  module rec Host : (HOST with type t = T.t) = HostF (Vm)
 
-  and Vm : V(M).SIG = VmF (Host)
+  and Vm : V(T).SIG = VmF (Host)
 end

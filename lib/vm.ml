@@ -7,7 +7,7 @@ module Make
       include Chain.Monad.PARAMS
       val trace : bool
     end)
-    (Host : Evmc.Host.SIG) =
+    (Host : Evmc.HOST) =
 struct
   module Memory : sig
     type t
@@ -269,6 +269,7 @@ struct
       ; jump_destinations : U256.Set.t (* D(c) *)
       ; initial_storage : U256.t U256.Map.t
             (* Cached initial values of storage cells modified in the transaction, to compute sstore costs *)
+      ; host : Host.t
       }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
@@ -286,13 +287,14 @@ struct
       in
       loop 0 U256.Set.empty
 
-    let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
+    let make (host : Host.t) (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
       { execution_environment = ExecutionEnvironment.make ctx msg code
       ; machine_state =
           MachineState.initial ~gas:(Uint.of_uint64 msg.gas)
             ~memory_capacity:Uint.(of_uint32 msg.memory_capacity)
       ; jump_destinations = valid_jump_destinations code
-      ; initial_storage = U256.Map.empty }
+      ; initial_storage = U256.Map.empty
+      ; host }
   end
 
   let max_stack_depth = 1024
@@ -311,77 +313,79 @@ struct
       Format.print_flush () )
     else ()
 
-  module Ethereum = Chain.Ethereum
-  module Address = Ethereum.Address
+  module Address = Chain.Ethereum.Address
 
   module St = Monad.State (Context)
-  module StatusCode = Evmc.Result.StatusCode
   module Err = Monad.Result (Evmc.Result.StatusCode)
 
   module M = struct
-    module StHost = St.Trans (Host)
-    module ErrStHost = Err.Trans (StHost)
-
-    include St.Lift (ErrStHost) (StHost)
-    include ErrStHost
+    module ErrSt = Err.Trans (St)
+    include St.Lift (ErrSt) (St)
+    include ErrSt
 
     module HostAPI = struct
-      module Base = Evmc.Host.Lift (ErrStHost) (Evmc.Host.Lift (StHost) (Host))
+      module Base = Host
 
       let host_trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
+
+      let lift (fn : Host.t -> 'a * Host.t) : 'a t =
+        fun state ->
+            let result, host = fn state.host in
+            Ok result, { state with host }
+
 
       (* TODO: trace other API calls. *)
       let account_exists addr =
         host_trace (fun () -> Format.sprintf "account_exists %s" (Address.to_short_hex_string addr)) ;
-        Base.account_exists addr
+        lift (Base.account_exists addr)
 
       let get_storage addr key =
         host_trace (fun () ->
             Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) ) ;
-        Base.get_storage addr key
+        lift (Base.get_storage addr key)
 
       let set_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
-        Base.set_storage addr key v
+        lift (Base.set_storage addr key v)
 
       let get_balance addr =
         host_trace (fun () -> Format.sprintf "get_balance %s" (Address.to_short_hex_string addr)) ;
-        Base.get_balance addr
+        lift (Base.get_balance addr)
 
       let access_account addr =
         host_trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
-        Base.access_account addr
+        lift (Base.access_account addr)
 
       let access_storage addr key =
         host_trace (fun () ->
             Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) ) ;
-        Base.access_storage addr key
+        lift (Base.access_storage addr key)
 
       let get_code_size addr =
         host_trace (fun () -> Format.sprintf "get_code_size %s" (Address.to_short_hex_string addr)) ;
-        Base.get_code_size addr
+        lift (Base.get_code_size addr)
 
       let get_code_hash addr =
         host_trace (fun () -> Format.sprintf "get_code_hash %s" (Address.to_short_hex_string addr)) ;
-        Base.get_code_hash addr
+        lift (Base.get_code_hash addr)
 
       let copy_code addr ~offset ~size =
         host_trace (fun () ->
             Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
-        Base.copy_code addr ~offset ~size
+        lift (Base.copy_code addr ~offset ~size)
 
       let get_block_hash id =
         host_trace (fun () -> Format.sprintf "get_block_hash %Ld" id) ;
-        Base.get_block_hash id
+        lift (Base.get_block_hash id)
 
       let call (msg : Evmc.Message.t) =
         host_trace (fun () ->
             Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
-        let$ result = Base.call msg in
+        let$ result = lift (Base.call msg) in
         trace (fun () ->
             Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
         trace (fun () -> Format.sprintf "\tOutput buffer %s\n" (Bytes.to_hex_string result.output_data)) ;
@@ -392,7 +396,7 @@ struct
             Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
               (Address.to_short_hex_string address)
               (Address.to_short_hex_string beneficiary) ) ;
-        Base.selfdestruct ~address ~beneficiary
+        lift (Base.selfdestruct ~address ~beneficiary)
 
       let emit_log addr ~data ~topics =
         host_trace (fun () ->
@@ -401,19 +405,19 @@ struct
               (List.fold_left
                  (fun acc topic -> Format.sprintf "%s, %s" acc (B32.to_short_hex_string topic))
                  "" topics ) ) ;
-        Base.emit_log addr ~data ~topics
+        lift (Base.emit_log addr ~data ~topics)
 
       let get_transient_storage addr key =
         host_trace (fun () ->
             Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) ) ;
-        Base.get_transient_storage addr key
+        lift (Base.get_transient_storage addr key)
 
       let set_transient_storage addr key v =
         host_trace (fun () ->
             Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
-        Base.set_transient_storage addr key v
+        lift (Base.set_transient_storage addr key v)
     end
   end
   open M
@@ -2009,14 +2013,15 @@ struct
     let$ continue = execute_opcode opcode in
     if continue then run code else return ()
 
-  let execute (msg : Evmc.Message.t) (code : Bytes.t) : Evmc.Result.t Host.t =
+  let execute (msg : Evmc.Message.t) (code : Bytes.t) : Host.t -> Evmc.Result.t * Host.t =
     trace (fun () -> "Start execution\n") ;
     trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
     let open Host in
-    let open Monad.Make (Host) in
+    let open Monad.State (Host) in
     let$ tx_context = get_tx_context in
-    let ctx = Context.make tx_context msg code in
-    let$ res, ctx = run code ctx in
+    let$ host = get in
+    let ctx = Context.make host tx_context msg code in
+    let res, ctx = run code ctx in
     trace (fun () -> "Finished execution\n") ;
     return
       ( match res with

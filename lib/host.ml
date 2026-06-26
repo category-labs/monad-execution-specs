@@ -271,8 +271,8 @@ module Make
 struct
   open Account.TLens
   open WorldState
-  open TransactionState
-  include M
+  include TransactionState
+  open M
 
   let dump_account addr =
     let$ acc = !(account addr) in
@@ -573,10 +573,8 @@ end
 
 module Instantiate
     (ChainParams : Chain.Monad.PARAMS)
-    (Vm : functor
-      (Host : Evmc.Host.SIG with type 'a t = 'a TransactionState.M.t)
-      -> Evmc.Vm(TransactionState.M).SIG) =
+    (Vm : functor (Host : Evmc.HOST with type t = TransactionState.t) -> Evmc.Vm(TransactionState).SIG) =
 struct
-  include Evmc.Instantiate (TransactionState.M) (Make (ChainParams)) (Vm)
+  include Evmc.Instantiate (TransactionState) (Make (ChainParams)) (Vm)
   module Host = Make (ChainParams) (Vm)
 end
