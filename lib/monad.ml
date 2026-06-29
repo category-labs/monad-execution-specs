@@ -375,7 +375,8 @@ struct
 end
 [@@inline]
 
-module State_result (T : sig
+(** A flattened Result + State monad. Equivalent to Result(R).Trans(State(S)) but more optimizer-friendly. *)
+module Result_state (T : sig
   type state
   type error
 end) =
