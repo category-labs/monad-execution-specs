@@ -278,7 +278,7 @@ struct
   module Address = Chain.Ethereum.Address
 
   module M = struct
-    include Monad.State_result (struct
+    include Monad.Result_state (struct
       type state = MachineState.t
       type error = Evmc.Result.StatusCode.t
     end)
