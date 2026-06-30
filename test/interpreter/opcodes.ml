@@ -7,8 +7,6 @@ open Test_utils
 open Test_utils.Utils
 open Alcotest
 
-open Lens.Infix
-
 module Address = Monad_lib.Chain.Ethereum.Address
 
 let test_keccak (input : Bytes.t) (output : U256.t) =
@@ -19,14 +17,14 @@ let test_keccak (input : Bytes.t) (output : U256.t) =
     (test_message
        ~prepare_vm:
          Evm.Vm.M.(
-           let$ mem = !Evm.Vm.(Context.machine_state |-- MachineState.memory) in
+           let$ mem = !Evm.Vm.MachineState.memory in
            let mem =
              mem
              |> Evm.Vm.Memory.extend_to ~start:U256.zero ~size_bytes:U256.(~$(Bytes.length input))
              |> Option.get
              |> Evm.Vm.Memory.write_block_at U256.zero input
            in
-           Evm.Vm.(Context.machine_state |-- MachineState.memory) := mem )
+           Evm.Vm.MachineState.memory := mem )
        ~check_vm_state:(expect_stack [output]) msg )
 
 let test_cases_keccak test_cases =

@@ -123,35 +123,42 @@ module Evm = struct
 end
 
 let test_message
-    ?(prepare_env : unit Evm.Host.t = Evm.Host.return ())
+    ?(prepare_env : Host.TransactionState.t -> Host.TransactionState.t = Fun.id)
     ?(prepare_vm : unit Evm.Vm.M.t = Evm.Vm.M.return ())
     ?(check_vm_state : unit Evm.Vm.M.t option)
-    ?(check_env_state : unit Evm.Host.t = Evm.Host.return ())
+    ?(check_env_state : Host.TransactionState.t -> unit = fun _ -> ())
     ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
     (msg : Evmc.Message.t) =
   (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
      With better VM instrumentation we can remove the duplication *)
   let action =
     let open Evm.Host in
-    let$ () = prepare_env in
+    let open Monad.State (Host.TransactionState) in
     let$ tx_context = get_tx_context in
-    let ctx = Evm.Vm.Context.make tx_context msg msg.code in
-    let$ res, ctx =
+    let$ host = get in
+    let module Exe = Evm.Vm.Executor (struct
+      let execution_environment = Evm.Vm.ExecutionEnvironment.make tx_context msg msg.code
+    end) in
+    let gas = Gas.of_uint64 msg.gas in
+    let memory_capacity = Uint.of_uint32 msg.memory_capacity in
+    let state = Evm.Vm.MachineState.initial ~host ~gas ~memory_capacity in
+    let res, state =
       Evm.Vm.M.(
         let$ () = prepare_vm in
-        let$ () = Evm.Vm.run msg.code in
+        let$ () = Exe.run in
         match check_vm_state with None -> return () | Some check -> check )
-        ctx
+        state
     in
-    let$ () = check_env_state in
+    check_env_state state.host ;
+    let$ () = put state.host in
     return
       ( match res with
       | Ok () ->
           Evmc.Result.
             { status_code = Success
-            ; gas_left = Uint.to_uint64 ctx.machine_state.gas
-            ; gas_refund = 0L
-            ; output_data = ctx.machine_state.output_buffer
+            ; gas_left = Uint.to_uint64 state.gas
+            ; gas_refund = Integer.to_int64 state.gas_refund
+            ; output_data = state.output_buffer
             ; create_address = Address.zero }
       | Error err -> (
         match err with
@@ -161,19 +168,13 @@ let test_message
                buffer is returned, see YP (152) *)
             Evmc.Result.
               { status_code = err
-              ; gas_left = Uint.to_uint64 ctx.machine_state.gas
+              ; gas_left = Uint.to_uint64 state.gas
               ; gas_refund = 0L
-              ; output_data = ctx.machine_state.output_buffer
+              ; output_data = state.output_buffer
               ; create_address = Address.zero }
-        | _ ->
-            Evmc.Result.
-              { status_code = err
-              ; gas_left = 0L
-              ; gas_refund = 0L
-              ; output_data = Bytes.empty
-              ; create_address = Address.zero } ) )
+        | _ -> Evmc.Result.failure err ) )
   in
-  let result, state = action Host.TransactionState.empty in
+  let result, state = action (prepare_env Host.TransactionState.empty) in
   (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
   if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
@@ -198,9 +199,8 @@ let bytecode_to_call_message code =
       ; memory_capacity = Uint.to_uint32 Evm.Vm.Memory.max_memory_usage } )
 
 let expect_stack expected_stack =
-  let open Lens.Infix in
   let open Evm.Vm.M in
-  let$ stack = !(Evm.Vm.Context.machine_state |-- Evm.Vm.MachineState.stack) in
+  let$ stack = !Evm.Vm.MachineState.stack in
   Alcotest.check' Alcotest.int ~msg:"Stack after execution has correct size"
     ~expected:(List.length expected_stack) ~actual:(List.length stack) ;
   return
@@ -210,12 +210,11 @@ let expect_stack expected_stack =
        (List.combine expected_stack stack) )
 
 let test_bytecode_pure bc ~input_stack ~output_stack =
-  let open Lens.Infix in
   let open Evm.Vm.M in
   let msg = bytecode_to_call_message bc in
   ignore
     (test_message
-       ~prepare_vm:(Evm.Vm.Context.machine_state |-- Evm.Vm.MachineState.stack := input_stack)
+       ~prepare_vm:(Evm.Vm.MachineState.stack := input_stack)
        ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =
