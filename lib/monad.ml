@@ -293,7 +293,6 @@ struct
           let$ x, s = x s in
           f x s )
 
-      type state = T.t
       let get : T.t t = fun s -> Inner.return (s, s)
       let put (s : T.t) : unit t = fun _ -> Inner.return ((), s)
     end)
@@ -306,7 +305,6 @@ struct
   module Lift (MT : TRANS) (M : SIG with type 'a t = 'a MT.Inner.t) = struct
     include Make (struct
       include MT
-      type state = T.t
       let get : T.t MT.t = MT.lift M.get
       let put x = MT.lift (M.put x)
     end)

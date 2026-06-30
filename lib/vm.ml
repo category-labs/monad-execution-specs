@@ -1,6 +1,5 @@
 open Numeric
 open Byte_string
-open Lens.Infix
 
 module Make
     (Params : sig
@@ -1927,7 +1926,7 @@ struct
         Format.printf "Memory: \n" ;
         Memory.dump s.memory ;
         Format.print_flush () )
-      else fun s -> ()
+      else fun _ -> ()
 
     let rec run (s : MachineState.t) =
       (* The dispatch loop runs on each opcode so it's written in direct style for performance. *)
@@ -1962,6 +1961,8 @@ struct
     let state = MachineState.initial ~host ~gas ~memory_capacity in
     let res, state = Exe.run state in
     trace (fun () -> "Finished execution\n") ;
+    (* Propagate host updates back to the caller. *)
+    let$ () = put state.host in
     return
       ( match res with
       | Ok () ->
