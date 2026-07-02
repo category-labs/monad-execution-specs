@@ -5,6 +5,7 @@ module Make
     (Params : sig
       include Chain.Monad.PARAMS
       val trace : bool
+      val debug_tstore : bool (* VM fuzzer support *)
     end)
     (Host : Evmc.HOST) =
 struct
@@ -126,7 +127,7 @@ struct
     let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
 
     let empty ~memory_capacity =
-      assert (memory_capacity <= max_memory_usage) ;
+      assert (Uint.(memory_capacity <= max_memory_usage || max_memory_usage = ~$0)) ;
       {contents = M.empty; active_bytes = Uint.zero; memory_capacity}
 
     let active_words mem = Uint.(bytes_to_whole_words mem.active_bytes)
@@ -448,6 +449,28 @@ struct
 
     let self : Address.t = execution_environment.address
 
+    let debug_tstore_stack (is_jumpdest : bool) =
+      if not Params.debug_tstore then return ()
+      else
+        let sz = Bytes.length execution_environment.bytecode in
+        let$ pc = fun s -> (Ok s.pc, s) in
+        let base_offset = if is_jumpdest then pc else U256.of_int sz in
+        let magic = U256.of_int 0xdeb009 in
+        let base = U256.((magic + base_offset) * of_int 1024) in
+        let$ first_slot = HostAPI.get_transient_storage self (U256.to_repr base) in
+        if U256.(of_repr first_slot <> zero) then return ()
+        else
+          let$ stack = fun s -> (Ok s.stack, s) in
+          let$ _ =
+            List.fold_leftM
+              ~f:(fun i x ->
+                let v = if x < magic then U256.(x + one) else x in
+                let$ _ = HostAPI.set_transient_storage self (U256.to_repr i) (U256.to_repr v) in
+                return U256.(i + one) )
+              base stack
+          in
+          return ()
+
     (* General undefined opcode *)
     let undefined : opcode_impl = fail Undefined_instruction
 
@@ -455,6 +478,8 @@ struct
     let invalid : opcode_impl = fail Invalid_instruction
 
     let stop =
+      let$ () = debug_tstore_stack false in
+
       (* Stack *)
       (* Gas *)
       (* Operation *)
@@ -967,14 +992,21 @@ struct
       let$ () = spend Gas.((n_words * copy_cost_per_word) + memory_extension_gas + access_gas) in
 
       (* Operation *)
-      let$ block =
+      let$ size, block =
         match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
-        | _, Some 0 -> return Bytes.empty (* No need for the copy_code call *)
-        | Some offset, Some size -> HostAPI.copy_code address ~offset ~size
-        | None, Some size -> return (Bytes.make size '\x00')
+        | _, Some 0 -> return (0, Bytes.empty) (* No need for the copy_code call *)
+        | Some offset, Some size -> (fun x -> (size, x)) <$> HostAPI.copy_code address ~offset ~size
+        | None, Some size -> return (size, Bytes.make size '\x00')
         | _, None -> assert false (* This should have caused an OOG error. *)
       in
       let$ () = update_field memory (Memory.write_block_at dst_start block) in
+      let n = Bytes.length block in
+      let$ () =
+        if n < size then
+          update_field memory
+            (Memory.write_block_at U256.(dst_start + of_int n) (Bytes.make (size - n) '\x00'))
+        else return ()
+      in
 
       (* PC *)
       increase_pc_and_continue
@@ -1327,6 +1359,8 @@ struct
       increase_pc_and_continue
 
     let jumpdest =
+      let$ () = debug_tstore_stack true in
+
       (* Stack *)
       (* Gas *)
       let$ () = spend Gas.jumpdest in
@@ -1442,7 +1476,11 @@ struct
       else
         let$ mem = !memory in
         let input_data = Memory.read_block_at input_start input_size mem in
-        let delegated = match delegation with Direct _ -> false | Delegated _ -> true in
+        let delegated, code_address =
+          match delegation with
+          | Direct _ -> (false, code_address)
+          | Delegated {code_address; _} -> (true, code_address)
+        in
         let message =
           Evmc.(
             Message.
@@ -1496,17 +1534,20 @@ struct
       let new_depth = execution_environment.depth + 1 in
 
       let$ self_balance = HostAPI.get_balance self in
-      if self_balance < endowment || new_depth > max_stack_depth then push U256.zero
+
+      let$ () =
+        (* Monad §TODO: delegated EOAs cannot call CREATE/CREATE2. *)
+        let$ delegation = access_delegation self in
+        match delegation with Delegated _ -> fail Create_from_delegated_eoa | Direct _ -> return ()
+      in
+
+      if self_balance < endowment || new_depth > max_stack_depth then
+        let$ () = output_buffer := Bytes.empty in
+        push U256.zero
       else
-        let$ () =
-          (* Monad §TODO: delegated EOAs cannot call CREATE/CREATE2. *)
-          let$ delegation = access_delegation self in
-          match delegation with Delegated _ -> fail Create_from_delegated_eoa | Direct _ -> return ()
-        in
         let$ create_message_gas = Uint.minus_1_64th <$> !gas in
         let$ () = update_field gas (fun g -> Uint.(g - create_message_gas)) in
 
-        let$ () = output_buffer := Bytes.empty in
         let$ mem = !memory in
         let call_data = Memory.read_block_at input_start input_size_bytes mem in
 
@@ -1575,7 +1616,7 @@ struct
       (* Gas *)
       let$ input_memory_extension_gas = extend_memory_to ~start:input_start ~size_bytes:input_size in
       let$ output_memory_extension_gas = extend_memory_to ~start:output_start ~size_bytes:output_size in
-      let memory_extension_gas = Gas.(max input_memory_extension_gas output_memory_extension_gas) in
+      let memory_extension_gas = Gas.(input_memory_extension_gas + output_memory_extension_gas) in
 
       let$ access_gas = Gas.account_access_cost <$> HostAPI.access_account code_address in
       let$ delegation = access_delegation code_address in
@@ -1601,7 +1642,7 @@ struct
       let$ () = spend Gas.(caller_spent_gas + memory_extension_gas) in
 
       (* Operation *)
-      let$ () = when_ transfer_value check_write_permissions in
+      let$ () = when_ (kind = Evmc.Message.CallKind.Call && transfer_value) check_write_permissions in
 
       let in_static_context = not execution_environment.write_permission in
       let static = static_call || in_static_context in
@@ -1668,6 +1709,8 @@ struct
   [@@ocamlformat "disable"]
 
     let return_ =
+      let$ () = debug_tstore_stack false in
+
       (* Stack *)
       let$ start, size_bytes = pop2 in
 
@@ -1781,6 +1824,8 @@ struct
       fail Revert
 
     let selfdestruct =
+      let$ () = debug_tstore_stack false in
+
       (* Stack *)
       let$ beneficiary = Address.of_u256_truncating <$> pop in
 

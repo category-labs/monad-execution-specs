@@ -191,19 +191,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
 
   let ( ** ) base exp = of_z_after_op (Z.pow (to_z base) exp)
 
-  let exp x y =
-    match to_int_opt y with
-    | Some y -> x ** y
-    | None ->
-        let rec loop acc mul y =
-          if y = zero then acc
-          else
-            let acc = if modulo y ~$2 = ~$1 then acc * mul else acc in
-            let mul = mul * mul in
-            let y = y / ~$2 in
-            loop acc mul y
-        in
-        loop ~$1 x y
+  let exp x y = of_z_after_op (Z.powm (to_z x) (to_z y) (Z.shift_left Z.one 256))
 
   (* Not constant-time. *)
   let exp_mod ~(modulo : t) (x : t) (y : t) = of_z_after_op (Z.powm (to_z x) (to_z y) (to_z modulo))

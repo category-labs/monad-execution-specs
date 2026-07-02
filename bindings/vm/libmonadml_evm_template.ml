@@ -129,7 +129,7 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
       coerce (Foreign.funptr Vm.destroy_fn) (static_funptr Vm.destroy_fn)
         (fun (_vm : Vm.repr structure ptr) -> () )
 
-    let execute =
+    let execute debug_tstore =
       coerce (Foreign.funptr Vm.execute_fn) (static_funptr Vm.execute_fn)
         (fun
           (_vm : Vm.repr structure ptr)
@@ -151,6 +151,7 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
               (struct
                 include Chain_params
                 let trace = false
+                let debug_tstore = debug_tstore
               end)
               (Host)
           in
@@ -164,21 +165,29 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
     let set_option = coerce (ptr void) (static_funptr Vm.set_option_fn) null
   end
 
-  let monadml_evm =
+  let make_monadml_evm debug_tstore =
     let open C_evmc.Vm in
     let vm = addr (make repr) in
     vm |-> abi_version <-@ Int64.to_int C_evmc.evmc_abi_version ;
     vm |-> name <-@ "monadml_evm" ;
     vm |-> version <-@ Version.hash ;
     vm |-> destroy <-@ Evm_bindings.destroy ;
-    vm |-> execute <-@ Evm_bindings.execute ;
+    vm |-> execute <-@ Evm_bindings.execute debug_tstore ;
     vm |-> get_capabilities <-@ Evm_bindings.get_capabilities ;
     vm |-> set_option <-@ Evm_bindings.set_option ;
     vm
-  let () = ignore (Root.create monadml_evm)
 
+  let monadml_evm_default = make_monadml_evm false
+  let () = ignore (Root.create monadml_evm_default)
   let () =
     I.internal ~runtime_lock:false "evmc_create_monadml_evm"
       (void @-> returning (ptr C_evmc.Vm.repr))
-      (fun () -> monadml_evm)
+      (fun () -> monadml_evm_default)
+
+  let monadml_evm_debug_tstore = make_monadml_evm true
+  let () = ignore (Root.create monadml_evm_debug_tstore)
+  let () =
+    I.internal ~runtime_lock:false "evmc_create_monadml_evm_debug_tstore"
+      (void @-> returning (ptr C_evmc.Vm.repr))
+      (fun () -> monadml_evm_debug_tstore)
 end

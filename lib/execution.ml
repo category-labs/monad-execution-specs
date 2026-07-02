@@ -54,9 +54,13 @@ struct
     Error Error.(Invalid_transaction {block; transaction; reason})
   type 'a or_error = ('a, Error.t) result
 
-  module Instantiation = Host.Instantiate (Params) (Vm.Make (Params))
+  module VmParams = struct
+    include Params
+    let debug_tstore = false
+  end
+  module Instantiation = Host.Instantiate (Params) (Vm.Make (VmParams))
   module Host = Instantiation.Host
-  module Vm = Vm.Make (Params) (Host)
+  module Vm = Vm.Make (VmParams) (Host)
 
   let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
     let kind, current_target, data, code, code_address =
