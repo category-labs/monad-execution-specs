@@ -112,6 +112,7 @@ module Params = struct
   let chain_id = Chain.Monad.Testnet.chain_id
   let revision = `Eight
   let trace = false
+  let debug_tstore = false
 end
 
 module Evm = struct

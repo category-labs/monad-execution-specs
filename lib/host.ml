@@ -380,7 +380,7 @@ struct
       let$ () = touch_account addr in
       update_field accessed_keys (StorageKey.Set.add (addr, key)) )
 
-  let process_call (msg : Evmc.Message.t) =
+  let process_call (from_tx : Transaction.t option) (msg : Evmc.Message.t) =
     assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
     let$ transfer_ok =
       if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
@@ -390,9 +390,9 @@ struct
         ~otherwise:
           (let$ code =
              let$ account_code = !(account msg.code_address |-- code) in
-             match Delegation.get_delegated_address account_code with
-             | None -> return account_code
-             | Some delegated_addr -> !(account delegated_addr |-- code)
+             match (from_tx, Delegation.get_delegated_address account_code) with
+             | Some _, Some delegated_addr -> !(account delegated_addr |-- code)
+             | _ -> return account_code
            in
            Vm.execute msg code )
     else return Evmc.Result.(failure StatusCode.Insufficient_balance)
@@ -469,7 +469,7 @@ struct
     let$ initial_state = get in
     let$ result =
       match msg.kind with
-      | Call | DelegateCall | CallCode -> process_call msg
+      | Call | DelegateCall | CallCode -> process_call from_tx msg
       | Create | Create2 -> process_create msg
     in
     let$ result =

@@ -76,7 +76,7 @@ module Bytes = struct
   (** [sub_with_zero_padding bytes i sz] returns the [sz]-length byte-string starting at [bytes.[i]].
       If the length of [bytes] is smaller than [i + sz - 1], it is padded with zeros. *)
   let sub_with_zero_padding bytes i sz =
-    init sz (fun j -> if i + j >= length bytes then '\x00' else bytes.[i + j])
+    init sz (fun j -> if i + j >= length bytes || i + j < 0 then '\x00' else bytes.[i + j])
 
   include Comparable.Make (struct
     type nonrec t = t
@@ -172,7 +172,7 @@ struct
   (** [sub_with_zero_padding bytes i] returns the {!byte_width}-length byte-string starting at [bytes.[i]].
       If the length of [bytes] is smaller than [i + byte_width - 1], it is padded with zeros. *)
   let sub_with_zero_padding (bytes : Bytes.t) i =
-    init (fun j -> if i + j >= Bytes.length bytes then '\x00' else bytes.[i + j])
+    init (fun j -> if i + j >= Bytes.length bytes || i + j < 0 then '\x00' else bytes.[i + j])
 
   (** Print [bytes] as a hexadecimal string, without a '0x' prefix. *)
   let to_hex_string (bytes : t) = Bytes.to_hex_string (bytes :> string)
