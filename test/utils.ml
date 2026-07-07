@@ -210,11 +210,14 @@ let expect_stack expected_stack =
        (List.combine expected_stack stack) )
 
 let test_bytecode_pure bc ~input_stack ~output_stack =
+  let input_stack_depth = List.length input_stack in
   let open Evm.Vm.M in
   let msg = bytecode_to_call_message bc in
   ignore
     (test_message
-       ~prepare_vm:(Evm.Vm.MachineState.stack := input_stack)
+       ~prepare_vm:
+         (let$ () = Evm.Vm.MachineState.stack := input_stack in
+          Evm.Vm.MachineState.stack_depth := input_stack_depth )
        ~check_vm_state:(expect_stack output_stack) msg )
 
 let opcode_test_name opcode inputs output =
