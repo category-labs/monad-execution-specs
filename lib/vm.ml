@@ -47,13 +47,13 @@ struct
           (* MIP-3. *)
           Uint.of_int (8 * 1024 * 1024)
 
-    (** Check that the index start + size - 1 does not overflow U256.t. *)
-    let overflow_check start size_bytes = assert (start + size_bytes > start)
-
-    (** Check that the index start + size - 1 does not exceed the active bytes. Memory must be extended
-        by a call to [extend_to] beforehand. *)
+    (** Check that the index start + size - 1 does not exceed the active bytes. This should never fail, since
+        memory must be extended by a call to {!extend_to} beforehand.
+        Since [active_bytes] is constrained by gas (and has a hard cap starting at MONAD_NINE), this check also
+        ensures that both [start] and [size_bytes] will fit into a native [int].
+     *)
     let active_bytes_overflow_check mem start size_bytes =
-      assert (Uint.(mem.active_bytes >= ~$start + ~$size_bytes))
+      assert (Uint.(mem.active_bytes >= U256.to_uint start + U256.to_uint size_bytes))
 
     let alignment_mask = 32 - 1
 
@@ -71,18 +71,17 @@ struct
 
     let read_block_at start size (mem : t) =
       if U256.(size = zero) then Bytes.empty
-      else
+      else (
+        active_bytes_overflow_check mem start size ;
         let start = U256.to_int start in
         let size = U256.to_int size in
-        overflow_check start size ;
-        active_bytes_overflow_check mem start size ;
         let start, offset = align start in
-        let n_words = ((size + 31) / 32) + if offset = 0 then 0 else 1 in
+        let n_words = (offset + size + 31) / 32 in
         let words =
           List.init n_words (fun w_index -> B32.to_bytes (read_aligned (start + (w_index * 32)) mem))
         in
         let block = Bytes.(concat empty words) in
-        Bytes.sub block offset size
+        Bytes.sub block offset size )
 
     let read_word_at pos (mem : t) : U256.t =
       let pos' = U256.to_int pos in
@@ -94,11 +93,9 @@ struct
     let write_block_at (start : U256.t) (bytes : Bytes.t) (mem : t) =
       if Bytes.(bytes = empty) then mem
       else
+        let size = Bytes.length bytes in
+        active_bytes_overflow_check mem start (U256.of_int size) ;
         let start = U256.to_int start in
-        let size = Bytes.length bytes in
-        overflow_check start size ;
-        active_bytes_overflow_check mem start size ;
-        let size = Bytes.length bytes in
         let start, offset = align start in
         (* Whole aligned words touched, including the trailing word the misalignment spills into. *)
         let n_words = (offset + size + 31) / 32 in
