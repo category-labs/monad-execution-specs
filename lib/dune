@@ -17,6 +17,8 @@
   digestif
   secp256k1-internal
   yojson
+  ctypes
+  ctypes-foreign
   ppx_deriving_yojson.runtime)
  (preprocess
   (pps lens.ppx_deriving ppx_deriving_yojson)))

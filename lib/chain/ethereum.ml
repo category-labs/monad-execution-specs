@@ -458,6 +458,44 @@ module Transaction = struct
       | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
       | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
 
+  (* TODO: this is a temporary hack. Do a second pass over the transaction to check for ELF payloads. *)
+  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+    let elf_blob_prefix = "ELF:" in
+    let kvm_prefix = Bytes.of_hex_string "ae0001" in
+    let is_elf_blob_path (data : string) : (string * string) option =
+      if String.starts_with ~prefix:elf_blob_prefix data then
+        let data = String.(sub data (length elf_blob_prefix) (length data - length elf_blob_prefix)) in
+        Some
+          ( match String.find_substring ~substring:"," data with
+          | Some sep_i ->
+              ( String.sub data 0 sep_i
+              , Bytes.of_hex_string (String.sub data sep_i (String.length data - sep_i)) )
+          | None -> (data, Bytes.empty) )
+      else None
+    in
+    let load_elf_blob (data : string) : string =
+      match is_elf_blob_path data with
+      | None -> data
+      | Some (blob_path, data) ->
+          let blob_data = In_channel.(with_open_bin blob_path input_all) in
+          let blob_size = Bytes.length blob_data in
+          let blob_size_encoded =
+            (* LE-encoded blob size as a byte array. *)
+            let bs = Stdlib.Bytes.create 4 in
+            Stdlib.Bytes.set_int32_le bs 0 (Int32.of_int blob_size) ;
+            Stdlib.Bytes.to_string bs
+          in
+          Bytes.(concat empty [kvm_prefix; blob_size_encoded; blob_data; data])
+    in
+    Result.(
+      let$ tx = of_yojson json in
+      return
+        ( match tx with
+        | Legacy tx -> Legacy {tx with data = load_elf_blob tx.data}
+        | AccessList tx -> AccessList {tx with data = load_elf_blob tx.data}
+        | FeeMarket tx -> FeeMarket {tx with data = load_elf_blob tx.data}
+        | SetCode tx -> SetCode {tx with data = load_elf_blob tx.data} ) )
+
   let to_yojson (tx : t) : Yojson.Safe.t =
     let untagged_tx =
       match tx with

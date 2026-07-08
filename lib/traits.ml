@@ -18,6 +18,11 @@ module Byte_width = struct
     let byte_width : [> `Fixed of int] = `Fixed 20
   end
 
+  (* 128 bits, used to represent KVM code tokens. *)
+  module Bytes16 = struct
+    let byte_width : [> `Fixed of int] = `Fixed 16
+  end
+
   (* 64 bits *)
   module Bytes8 = struct
     let byte_width : [> `Fixed of int] = `Fixed 8

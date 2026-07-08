@@ -9,12 +9,8 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
   (* TODO: make this configurable. *)
   module Chain_params : Chain.Monad.PARAMS = struct
     include Chain.Monad.Mainnet
-
-    (* TODO: bump to Nine once EIP-5 lands. *)
-    let revision = `Eight
+    let revision = `Nine
   end
-
-  (* Unpack a C host vtable into an Evmc.Host implementation. *)
   module C_host (Host : sig
     val intf : C_evmc.Host_interface.repr structure ptr
     val ctx : C_evmc.Host_context.repr structure ptr
@@ -146,16 +142,12 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
             let intf = intf
             let ctx = ctx
           end) in
-          let module Vm =
-            Monad_lib.Vm.Make
-              (struct
-                include Chain_params
-                let trace = false
-                let debug_tstore = debug_tstore
-              end)
-              (Host)
-          in
-          let result, () = Vm.execute msg code () in
+          let module Vm = Monad_lib.Vm.Make (struct
+            include Chain_params
+            let trace = false
+            let debug_tstore = debug_tstore
+          end) in
+          let result, () = Vm.execute (module Host) msg code () in
           C_evmc.Result.to_c result )
 
     let get_capabilities =

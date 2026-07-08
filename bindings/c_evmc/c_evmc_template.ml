@@ -71,8 +71,10 @@ module Types (F : Ctypes.TYPE) = struct
 
       let static = constant "EVMC_STATIC" int64_t
       let delegated = constant "EVMC_DELEGATED" int64_t
+      let elf_init = constant "4" int64_t (* TODO: replace this by a real flag. *)
 
-      let t : [`Delegated | `Static] typ = enum "evmc_flags" [(`Static, static); (`Delegated, delegated)]
+      let t : [`Delegated | `Static | `Elf_init] typ =
+        enum "evmc_flags" [(`Static, static); (`Delegated, delegated); (`Elf_init, elf_init)]
     end
 
     (** evmc_message *)

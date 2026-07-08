@@ -13,6 +13,7 @@ module Message = struct
     let flags = Unsigned.UInt32.to_int64 (getf repr flags) in
     let static = Uint64.(logand flags Flags.static <> 0L) in
     let delegated = Uint64.(logand flags Flags.delegated <> 0L) in
+    let elf_init = Uint64.(logand flags Flags.elf_init <> 0L) in
     let depth = getf repr depth in
     let gas = getf repr gas in
     let recipient = Address.of_c (getf repr recipient) in
@@ -33,6 +34,7 @@ module Message = struct
       { kind
       ; static
       ; delegated
+      ; elf_init
       ; code
       ; depth
       ; gas
@@ -50,9 +52,11 @@ module Message = struct
       Unsigned.UInt32.(
         of_int64
           Uint64.(
-            let s = if msg.static then Flags.static else zero in
-            let d = if msg.delegated then Flags.delegated else zero in
-            logor s d ) ) ;
+            let f = zero in
+            let f = if msg.static then logor f Flags.static else f in
+            let f = if msg.delegated then logor f Flags.delegated else f in
+            let f = if msg.elf_init then logor f Flags.elf_init else f in
+            f ) ) ;
     setf repr depth msg.depth ;
     setf repr gas msg.gas ;
     setf repr recipient (Address.to_c msg.recipient) ;

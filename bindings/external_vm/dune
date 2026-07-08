@@ -1,0 +1,4 @@
+(library
+ (name external_vm)
+ (libraries monad_lib common c_evmc ctypes ctypes-foreign)
+ (modules external_vm))

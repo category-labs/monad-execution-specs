@@ -4,6 +4,8 @@ open Byte_string
 open Host
 open Lens.Infix
 
+open Rvcode
+
 module Error = struct
   type invalid_block =
     | Nonempty_ommers
@@ -44,23 +46,25 @@ module Error = struct
   let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
 end
 
-module Make (Params : sig
-  include Chain.Monad.PARAMS
-  val trace : bool
-end) =
-struct
+(* The execution pipeline is parameterized over the VM so that an external
+   EVMC-compatible VM can be plugged in (see [bindings/external_vm]) in place of the built-in
+   interpreter. The functor type matches the one [Host.Instantiate] expects. *)
+module Make_with_vm (Params : Chain.Monad.PARAMS) (Evm : Evmc.VM) = struct
   let invalid_block block reason = Error Error.(Invalid_block {block; reason})
   let invalid_transaction block transaction reason =
     Error Error.(Invalid_transaction {block; transaction; reason})
   type 'a or_error = ('a, Error.t) result
 
-  module VmParams = struct
+  module Default_vm = Vm.Make (struct
     include Params
+    let trace = false
     let debug_tstore = false
-  end
-  module Instantiation = Host.Instantiate (Params) (Vm.Make (VmParams))
-  module Host = Instantiation.Host
-  module Vm = Vm.Make (VmParams) (Host)
+  end)
+  let max_memory_usage = Default_vm.Memory.max_memory_usage
+  let max_init_code_size = Default_vm.max_init_code_size
+
+  module Host = Host.Make (Params) (Evm)
+  module Vm = Evm
 
   let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
     let kind, current_target, data, code, code_address =
@@ -78,10 +82,11 @@ struct
       ; code_address
       ; static = false
       ; delegated = Delegation.is_valid_delegation code
+      ; elf_init = false
       ; input_data = data
       ; depth = 0l
       ; create2_salt = B32.zeros
-      ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
+      ; memory_capacity = Uint.to_uint32 max_memory_usage }
 
   let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
     (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her
@@ -176,7 +181,7 @@ struct
       (* Initcode size *)
       let$ () =
         match Transaction.call_or_create tx with
-        | Create {initcode} when Bytes.length initcode > Vm.max_init_code_size ->
+        | Create {initcode} when Bytes.length initcode > max_init_code_size ->
             invalid_transaction block tx Initcode_too_long
         | _ -> return ()
       in
@@ -394,6 +399,7 @@ struct
           ; kind = Call
           ; static = false
           ; delegated = false
+          ; elf_init = false
           ; depth = 0l
           ; gas = Gas.(to_uint64 system_transaction_gas)
           ; value = U256.zero
@@ -402,7 +408,7 @@ struct
           ; create2_salt = B32.zeros
           ; code_address = addr
           ; code
-          ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
+          ; memory_capacity = Uint.to_uint32 max_memory_usage }
       in
       let transaction_state =
         TransactionState.
@@ -522,3 +528,14 @@ struct
     in
     return {block_state.world_state with history = finalized_block :: world_state.history}
 end
+
+module Make (Params : sig
+  include Chain.Monad.PARAMS
+  val trace : bool
+end) =
+  Make_with_vm
+    (Params)
+    (Vm.Make (struct
+      include Params
+      let debug_tstore = false
+    end))

@@ -247,4 +247,5 @@ module B20 = struct
   let to_bytes32 (addr : t) : B32.t =
     B32.init (fun i -> if Stdlib.(i < 32 - 20) then '\x00' else addr.$(i - 32 + 20))
 end
+module B16 = Fixed (Traits.Byte_width.Bytes16)
 module B8 = Fixed (Traits.Byte_width.Bytes8)

@@ -87,6 +87,7 @@ module Message = struct
     { kind : CallKind.t
     ; static : bool
     ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGAECALL opcode *)
+    ; elf_init : bool (* Set to true when a message is an init_contract call to an ELF blob. TODO: clean. *)
     ; depth : Int32.t
     ; gas : Uint64.t
     ; recipient : Address.t
@@ -180,28 +181,6 @@ end
 (** The type of EVMC VMs over monad M, broadly based on
     {{:https://evmc.ethereum.org/structevmc__vm.html}[evmc_vm]}, minus the ancilliary introspection
     operations. *)
-module Vm (H : sig
-  type t
-end) =
-struct
-  module type SIG = sig
-    val execute : Message.t -> Bytes.t -> H.t -> Result.t * H.t
-  end
-end
-
-(** Helper module to instantiate a host and VM over the same monad.  *)
-module Instantiate
-    (T : sig
-      type t
-    end)
-    (HostF : functor (Vm : Vm(T).SIG) -> HOST with type t = T.t)
-    (VmF : functor (H : HOST with type t = T.t) -> Vm(T).SIG) : sig
-  module Host : HOST with type t = T.t
-  module Vm : Vm(T).SIG
-end = struct
-  module V = Vm
-
-  module rec Host : (HOST with type t = T.t) = HostF (Vm)
-
-  and Vm : V(T).SIG = VmF (Host)
+module type VM = sig
+  val execute : 't. (module HOST with type t = 't) -> Message.t -> Bytes.t -> 't -> Result.t * 't
 end

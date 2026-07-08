@@ -120,7 +120,7 @@ end
 
 let process_block
     (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : Host.WorldState.t) (block : Block.t) =
-  let module Execution = Execution.Make (struct
+  let module Params = struct
     let chain_id = config.chain_id
     let revision =
       let rev =
@@ -131,7 +131,9 @@ let process_block
       in
       rev |> Chain.Monad.Revision.is_active |> Option.get
     let trace = trace
-  end) in
+    let debug_tstore = false
+  end in
+  let module Execution = Execution.Make_with_vm (Params) (Kvm.Override (Vm.Make (Params))) in
   Execution.process_block ~verify state block
 
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =

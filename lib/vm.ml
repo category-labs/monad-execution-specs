@@ -1,264 +1,278 @@
 open Numeric
 open Byte_string
 
-module Make
-    (Params : sig
-      include Chain.Monad.PARAMS
-      val trace : bool
-      val debug_tstore : bool (* VM fuzzer support *)
-    end)
-    (Host : Evmc.HOST) =
-struct
-  module Memory : sig
-    type t
-    val empty : memory_capacity:Uint.t -> t
+module ExecutionEnvironment = struct
+  open Chain.Ethereum
 
-    val max_memory_usage : Uint.t
-
-    val read_block_at : U256.t -> U256.t -> t -> Bytes.t
-    val read_word_at : U256.t -> t -> U256.t
-
-    val write_block_at : U256.t -> Bytes.t -> t -> t
-    val write_word_at : U256.t -> U256.t -> t -> t
-    val write_byte_at : U256.t -> char -> t -> t
-
-    val active_words : t -> Uint.t (* μ_i *)
-
-    val extend_to : start:U256.t -> size_bytes:U256.t -> t -> t option
-
-    val available_memory_size : t -> Uint.t
-
-    (* For debugging purposes *)
-    val dump : t -> unit
-  end = struct
-    (* Memory is represented as an int-indexed map of 32-byte words. In principle, Ethereum memory should
-       support up to 256-bit byte indexing, but in practice memory expansion costs and gas limits make
-       it impossible to go beyond an int.
-       MIP-3 further adds a hard 8MB limit on memory size. *)
-    module M = Map.Make (Int)
-    type t =
-      { contents : B32.t M.t (* Corresponds to μ_m *)
-      ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *)
-      ; memory_capacity : Uint.t (* Total memory capacity in bytes. *) }
-
-    let max_memory_usage =
-      match Params.revision with
-      | `Eight -> Uint.zero
-      | `Nine ->
-          (* MIP-3. *)
-          Uint.of_int (8 * 1024 * 1024)
-
-    (** Check that the index start + size - 1 does not exceed the active bytes. This should never fail, since
-        memory must be extended by a call to {!extend_to} beforehand.
-        Since [active_bytes] is constrained by gas (and has a hard cap starting at MONAD_NINE), this check also
-        ensures that both [start] and [size_bytes] will fit into a native [int].
-     *)
-    let active_bytes_overflow_check mem start size_bytes =
-      assert (Uint.(mem.active_bytes >= U256.to_uint start + U256.to_uint size_bytes))
-
-    let alignment_mask = 32 - 1
-
-    let is_aligned (addr : int) = addr land alignment_mask = 0
-
-    let align (addr : int) = (addr land lnot alignment_mask, addr land alignment_mask)
-
-    let read_aligned (addr : int) (mem : t) : B32.t =
-      assert (is_aligned addr) ;
-      Option.value ~default:B32.zeros (M.find_opt addr mem.contents)
-
-    let write_aligned (addr : int) (v : B32.t) (mem : t) : t =
-      assert (is_aligned addr) ;
-      {mem with contents = M.add addr v mem.contents}
-
-    let read_block_at start size (mem : t) =
-      if U256.(size = zero) then Bytes.empty
-      else (
-        active_bytes_overflow_check mem start size ;
-        let start = U256.to_int start in
-        let size = U256.to_int size in
-        let start, offset = align start in
-        let n_words = (offset + size + 31) / 32 in
-        let words =
-          List.init n_words (fun w_index -> B32.to_bytes (read_aligned (start + (w_index * 32)) mem))
-        in
-        let block = Bytes.(concat empty words) in
-        Bytes.sub block offset size )
-
-    let read_word_at pos (mem : t) : U256.t =
-      let pos' = U256.to_int pos in
-      if is_aligned pos' then
-        (* Aligned reads are cheaper. *)
-        U256.of_repr (read_aligned pos' mem)
-      else read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
-
-    let write_block_at (start : U256.t) (bytes : Bytes.t) (mem : t) =
-      if Bytes.(bytes = empty) then mem
-      else
-        let size = Bytes.length bytes in
-        active_bytes_overflow_check mem start (U256.of_int size) ;
-        let start = U256.to_int start in
-        let start, offset = align start in
-        (* Whole aligned words touched, including the trailing word the misalignment spills into. *)
-        let n_words = (offset + size + 31) / 32 in
-        let suffix_len = (n_words * 32) - offset - size in
-        (* The write fully overwrites every interior word, so only the two boundary words must be
-           read first: the [offset]-byte prefix of the first word and the [suffix_len]-byte tail of
-           the last word are preserved; everything between comes from [bytes]. *)
-        let prefix =
-          if offset = 0 then Bytes.empty else Bytes.sub (B32.to_bytes (read_aligned start mem)) 0 offset
-        in
-        let suffix =
-          if suffix_len = 0 then Bytes.empty
-          else
-            let last = B32.to_bytes (read_aligned (start + ((n_words - 1) * 32)) mem) in
-            Bytes.sub last (32 - suffix_len) suffix_len
-        in
-        (* [buffer] is exactly [n_words] aligned words laid end to end. *)
-        let buffer = Bytes.concat Bytes.empty [prefix; bytes; suffix] in
-        List.fold_left
-          (fun mem w_index -> write_aligned (start + (w_index * 32)) (B32.sub buffer (w_index * 32)) mem)
-          mem (List.init n_words Fun.id)
-
-    let write_word_at (pos : U256.t) (w : U256.t) (mem : t) : t =
-      let pos' = U256.to_int pos in
-      if is_aligned pos' then write_aligned pos' (U256.to_repr w) mem
-      else write_block_at pos (U256.to_repr_bytes w) mem
-
-    let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
-
-    let empty ~memory_capacity =
-      assert (Uint.(memory_capacity <= max_memory_usage || max_memory_usage = ~$0)) ;
-      {contents = M.empty; active_bytes = Uint.zero; memory_capacity}
-
-    let active_words mem = Uint.(bytes_to_whole_words mem.active_bytes)
-
-    let available_memory_size =
-      match Params.revision with
-      | `Eight -> fun _mem -> max_memory_usage
-      | `Nine -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
-
-    let extend_to_monad_eight ~start ~size_bytes mem =
-      if U256.(size_bytes = zero) then Some mem
-      else
-        (* Round up to whole words. *)
-        let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
-        let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
-        Some {mem with active_bytes}
-
-    let extend_to_monad_nine ~start ~size_bytes mem =
-      if U256.(size_bytes = zero) then Some mem
-      else
-        (* Round up to whole words. *)
-        let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
-        let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
-        (* MIP-3: enforce the per-call budget, not the global 8 MB ceiling. *)
-        if Uint.(active_bytes <= mem.memory_capacity) then Some {mem with active_bytes} else None
-
-    let extend_to =
-      match Params.revision with `Eight -> extend_to_monad_eight | `Nine -> extend_to_monad_nine
-
-    let dump mem =
-      (* Write one word at a time *)
-      let rec loop pos =
-        if Uint.(pos < mem.active_bytes) then (
-          Format.printf "%s: %s\n" (Uint.to_hex_string pos)
-            (Bytes.to_hex_string (read_block_at (U256.of_uint_exn pos) U256.(~$32) mem)) ;
-          loop Uint.(pos + ~$32) )
-      in
-      loop Uint.zero
-  end
-
-  module MachineState = struct
-    (* YP 9.4.1 *)
-    type t =
-      { gas : Uint.t (* μ_g *)
-      ; pc : U256.t (* μ_pc *)
-      ; memory : Memory.t (* μ_m, μ_i *)
-      ; stack : U256.t list (* μ_s *)
-      ; stack_depth : int
-      ; output_buffer : Bytes.t (* μ_o *)
-      ; gas_refund : Integer.t
-            (* A_r *)
-            (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
-               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
-               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
-      ; host : Host.t }
-    [@@deriving lens {submodule = true; prefix = true}]
-    include TLens
-
-    let initial ~host ~gas ~memory_capacity =
-      { gas
-      ; pc = U256.zero
-      ; memory = Memory.empty ~memory_capacity
-      ; stack = []
-      ; stack_depth = 0
-      ; output_buffer = Bytes.empty
-      ; gas_refund = Integer.zero
-      ; host }
-  end
-
-  module ExecutionEnvironment = struct
-    open Chain.Ethereum
-
-    module ExecutionBlockHeader = struct
-      (* The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
+  module ExecutionBlockHeader = struct
+    (* The Yellow Paper has an Ethereum block header as part of the execution (I_H), but the EVMC context
          does not give us the full block header information, only those fields required for executing EVM
          bytecode. Otherwise, this is as YP 4.4 with the addition of the chain ID β, which is an ambient
          parameter in the Yellow Paper but is integrated as part of the block environment in the Ethereum
          executable spec. *)
-      type t =
-        { coinbase : Address.t (* H_c *)
-        ; number : U256.t (* H_i *)
-        ; timestamp : U256.t (* H_s *)
-        ; gas_limit : U256.t (* H_l *)
-        ; prev_randao : U256.t (* H_a *)
-        ; base_fee : U256.t (* H_f *)
-        ; chain_id : U256.t (* β *) }
-      [@@deriving lens {submodule = true; prefix = true}]
-      include TLens
-
-      let of_tx_context (ctx : Evmc.TxContext.t) : t =
-        { coinbase = ctx.block_coinbase
-        ; number = U256.of_uint64 ctx.block_number
-        ; timestamp = U256.of_uint64 ctx.block_timestamp
-        ; gas_limit = U256.of_uint64 ctx.block_gas_limit
-        ; prev_randao = ctx.block_prev_randao
-        ; base_fee = ctx.block_base_fee
-        ; chain_id = ctx.chain_id }
-    end
-    include ExecutionBlockHeader
-
-    (* YP 9.3 *)
     type t =
-      { address : Address.t (* I_a *)
-      ; origin : Address.t (* I_o *)
-      ; price : U256.t (* I_p *)
-      ; data : Bytes.t (* I_d *)
-      ; sender : Address.t (* I_s *)
-      ; value : U256.t (* I_v *)
-      ; bytecode : Bytes.t (* I_b *)
-      ; header : ExecutionBlockHeader.t (* I_H *)
-      ; depth : int (* I_e *)
-      ; write_permission : bool (* I_w *)
-      ; blob_versioned_hashes : B32.t list (* EIP-4844 *)
-      ; blob_base_fee : U256.t (* EIP-7516 *) }
+      { coinbase : Address.t (* H_c *)
+      ; number : U256.t (* H_i *)
+      ; timestamp : U256.t (* H_s *)
+      ; gas_limit : U256.t (* H_l *)
+      ; prev_randao : U256.t (* H_a *)
+      ; base_fee : U256.t (* H_f *)
+      ; chain_id : U256.t (* β *) }
     [@@deriving lens {submodule = true; prefix = true}]
     include TLens
 
-    let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
-      { address = msg.recipient
-      ; origin = ctx.tx_origin
-      ; price = ctx.tx_gas_price
-      ; data = msg.input_data
-      ; sender = msg.sender
-      ; value = msg.value
-      ; bytecode = code
-      ; header = ExecutionBlockHeader.of_tx_context ctx
-      ; depth = Int32.to_int msg.depth
-      ; write_permission = not msg.static
-      ; blob_versioned_hashes = ctx.blob_hashes
-      ; blob_base_fee = ctx.blob_base_fee }
+    let of_tx_context (ctx : Evmc.TxContext.t) : t =
+      { coinbase = ctx.block_coinbase
+      ; number = U256.of_uint64 ctx.block_number
+      ; timestamp = U256.of_uint64 ctx.block_timestamp
+      ; gas_limit = U256.of_uint64 ctx.block_gas_limit
+      ; prev_randao = ctx.block_prev_randao
+      ; base_fee = ctx.block_base_fee
+      ; chain_id = ctx.chain_id }
   end
+  include ExecutionBlockHeader
+
+  (* YP 9.3 *)
+  type t =
+    { address : Address.t (* I_a *)
+    ; origin : Address.t (* I_o *)
+    ; price : U256.t (* I_p *)
+    ; data : Bytes.t (* I_d *)
+    ; sender : Address.t (* I_s *)
+    ; value : U256.t (* I_v *)
+    ; bytecode : Bytes.t (* I_b *)
+    ; header : ExecutionBlockHeader.t (* I_H *)
+    ; depth : int (* I_e *)
+    ; write_permission : bool (* I_w *)
+    ; blob_versioned_hashes : B32.t list (* EIP-4844 *)
+    ; blob_base_fee : U256.t (* EIP-7516 *) }
+  [@@deriving lens {submodule = true; prefix = true}]
+  include TLens
+
+  let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
+    { address = msg.recipient
+    ; origin = ctx.tx_origin
+    ; price = ctx.tx_gas_price
+    ; data = msg.input_data
+    ; sender = msg.sender
+    ; value = msg.value
+    ; bytecode = code
+    ; header = ExecutionBlockHeader.of_tx_context ctx
+    ; depth = Int32.to_int msg.depth
+    ; write_permission = not msg.static
+    ; blob_versioned_hashes = ctx.blob_hashes
+    ; blob_base_fee = ctx.blob_base_fee }
+end
+
+module Memory (Params : Chain.Monad.PARAMS) : sig
+  type t
+  val empty : memory_capacity:Uint.t -> t
+
+  val max_memory_usage : Uint.t
+
+  val read_block_at : U256.t -> U256.t -> t -> Bytes.t
+  val read_word_at : U256.t -> t -> U256.t
+
+  val write_block_at : U256.t -> Bytes.t -> t -> t
+  val write_word_at : U256.t -> U256.t -> t -> t
+  val write_byte_at : U256.t -> char -> t -> t
+
+  val active_words : t -> Uint.t (* μ_i *)
+
+  val extend_to : start:U256.t -> size_bytes:U256.t -> t -> t option
+
+  val available_memory_size : t -> Uint.t
+
+  (* For debugging purposes *)
+  val dump : t -> unit
+end = struct
+  (* Memory is represented as an int-indexed map of 32-byte words. In principle, Ethereum memory should
+       support up to 256-bit byte indexing, but in practice memory expansion costs and gas limits make
+       it impossible to go beyond an int.
+       MIP-3 further adds a hard 8MB limit on memory size. *)
+  module M = Map.Make (Int)
+  type t =
+    { contents : B32.t M.t (* Corresponds to μ_m *)
+    ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *)
+    ; memory_capacity : Uint.t (* Total memory capacity in bytes. *) }
+
+  let max_memory_usage =
+    match Params.revision with
+    | `Eight -> Uint.zero
+    | `Nine ->
+        (* MIP-3. *)
+        Uint.of_int (8 * 1024 * 1024)
+
+  (** Check that the index start + size - 1 does not exceed the active bytes. This should never fail, since
+        memory must be extended by a call to {!extend_to} beforehand.
+        Since [active_bytes] is constrained by gas (and has a hard cap starting at MONAD_NINE), this check also
+        ensures that both [start] and [size_bytes] will fit into a native [int].
+     *)
+  let active_bytes_overflow_check mem start size_bytes =
+    assert (Uint.(mem.active_bytes >= U256.to_uint start + U256.to_uint size_bytes))
+
+  let alignment_mask = 32 - 1
+
+  let is_aligned (addr : int) = addr land alignment_mask = 0
+
+  let align (addr : int) = (addr land lnot alignment_mask, addr land alignment_mask)
+
+  let read_aligned (addr : int) (mem : t) : B32.t =
+    assert (is_aligned addr) ;
+    Option.value ~default:B32.zeros (M.find_opt addr mem.contents)
+
+  let write_aligned (addr : int) (v : B32.t) (mem : t) : t =
+    assert (is_aligned addr) ;
+    {mem with contents = M.add addr v mem.contents}
+
+  let read_block_at start size (mem : t) =
+    if U256.(size = zero) then Bytes.empty
+    else (
+      active_bytes_overflow_check mem start size ;
+      let start = U256.to_int start in
+      let size = U256.to_int size in
+      let start, offset = align start in
+      let n_words = (offset + size + 31) / 32 in
+      let words =
+        List.init n_words (fun w_index -> B32.to_bytes (read_aligned (start + (w_index * 32)) mem))
+      in
+      let block = Bytes.(concat empty words) in
+      Bytes.sub block offset size )
+
+  let read_word_at pos (mem : t) : U256.t =
+    let pos' = U256.to_int pos in
+    if is_aligned pos' then
+      (* Aligned reads are cheaper. *)
+      U256.of_repr (read_aligned pos' mem)
+    else read_block_at pos U256.(~$32) mem |> U256.Repr.of_bytes_exn |> U256.of_repr
+
+  let write_block_at (start : U256.t) (bytes : Bytes.t) (mem : t) =
+    if Bytes.(bytes = empty) then mem
+    else
+      let size = Bytes.length bytes in
+      active_bytes_overflow_check mem start (U256.of_int size) ;
+      let start = U256.to_int start in
+      let start, offset = align start in
+      (* Whole aligned words touched, including the trailing word the misalignment spills into. *)
+      let n_words = (offset + size + 31) / 32 in
+      let suffix_len = (n_words * 32) - offset - size in
+      (* The write fully overwrites every interior word, so only the two boundary words must be
+           read first: the [offset]-byte prefix of the first word and the [suffix_len]-byte tail of
+           the last word are preserved; everything between comes from [bytes]. *)
+      let prefix =
+        if offset = 0 then Bytes.empty else Bytes.sub (B32.to_bytes (read_aligned start mem)) 0 offset
+      in
+      let suffix =
+        if suffix_len = 0 then Bytes.empty
+        else
+          let last = B32.to_bytes (read_aligned (start + ((n_words - 1) * 32)) mem) in
+          Bytes.sub last (32 - suffix_len) suffix_len
+      in
+      (* [buffer] is exactly [n_words] aligned words laid end to end. *)
+      let buffer = Bytes.concat Bytes.empty [prefix; bytes; suffix] in
+      List.fold_left
+        (fun mem w_index -> write_aligned (start + (w_index * 32)) (B32.sub buffer (w_index * 32)) mem)
+        mem (List.init n_words Fun.id)
+
+  let write_word_at (pos : U256.t) (w : U256.t) (mem : t) : t =
+    let pos' = U256.to_int pos in
+    if is_aligned pos' then write_aligned pos' (U256.to_repr w) mem
+    else write_block_at pos (U256.to_repr_bytes w) mem
+
+  let write_byte_at pos b (mem : t) = write_block_at pos (Bytes.make 1 b) mem
+
+  let empty ~memory_capacity =
+    assert (memory_capacity <= max_memory_usage) ;
+    {contents = M.empty; active_bytes = Uint.zero; memory_capacity}
+
+  let active_words mem = Uint.(bytes_to_whole_words mem.active_bytes)
+
+  let available_memory_size =
+    match Params.revision with
+    | `Eight -> fun _mem -> max_memory_usage
+    | `Nine -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
+
+  let extend_to_monad_eight ~start ~size_bytes mem =
+    if U256.(size_bytes = zero) then Some mem
+    else
+      (* Round up to whole words. *)
+      let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
+      let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
+      Some {mem with active_bytes}
+
+  let extend_to_monad_nine ~start ~size_bytes mem =
+    if U256.(size_bytes = zero) then Some mem
+    else
+      (* Round up to whole words. *)
+      let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
+      let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
+      (* MIP-3: enforce the per-call budget, not the global 8 MB ceiling. *)
+      if Uint.(active_bytes <= mem.memory_capacity) then Some {mem with active_bytes} else None
+
+  let extend_to = match Params.revision with `Eight -> extend_to_monad_eight | `Nine -> extend_to_monad_nine
+
+  let dump mem =
+    (* Write one word at a time *)
+    let rec loop pos =
+      if Uint.(pos < mem.active_bytes) then (
+        Format.printf "%s: %s\n" (Uint.to_hex_string pos)
+          (Bytes.to_hex_string (read_block_at (U256.of_uint_exn pos) U256.(~$32) mem)) ;
+        loop Uint.(pos + ~$32) )
+    in
+    loop Uint.zero
+end
+
+module MachineState
+    (Params : Chain.Monad.PARAMS)
+    (Host : sig
+      type t
+    end) =
+struct
+  module Memory = Memory (Params)
+
+  (* YP 9.4.1 *)
+  type t =
+    { gas : Uint.t (* μ_g *)
+    ; pc : U256.t (* μ_pc *)
+    ; memory : Memory.t (* μ_m, μ_i *)
+    ; stack : U256.t list (* μ_s *)
+    ; stack_depth : int
+    ; output_buffer : Bytes.t (* μ_o *)
+    ; gas_refund : Integer.t
+          (* A_r *)
+          (* Gas refund is not part of machine state as per YP, but EVMC boundaries are split oddly: though
+               most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
+               EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
+    ; host : Host.t }
+  [@@deriving lens {submodule = true; prefix = true}]
+  include TLens
+
+  let initial ~host ~gas ~memory_capacity =
+    { gas
+    ; pc = U256.zero
+    ; memory = Memory.empty ~memory_capacity
+    ; stack = []
+    ; stack_depth = 0
+    ; output_buffer = Bytes.empty
+    ; gas_refund = Integer.zero
+    ; host }
+end
+
+module Address = Chain.Ethereum.Address
+
+module Make (Params : sig
+  include Chain.Monad.PARAMS
+  val trace : bool
+  val debug_tstore : bool (* VM fuzzer support *)
+end) =
+struct
+  let trace ?(print = Params.trace) msg =
+    if print then (
+      Format.print_string (msg ()) ;
+      Format.print_flush () )
+    else ()
+
+  module Memory = Memory (Params)
 
   let max_stack_depth = 1024
 
@@ -266,162 +280,156 @@ struct
   let max_code_size = 128 * 1024
   let max_init_code_size = 2 * max_code_size
 
-  let trace ?(print = Params.trace) msg =
-    if print then (
-      Format.print_string (msg ()) ;
-      Format.print_flush () )
-    else ()
-
-  module Address = Chain.Ethereum.Address
-
-  module M = struct
-    include Monad.Result_state (struct
-      type state = MachineState.t
-      type error = Evmc.Result.StatusCode.t
-    end)
-
-    module HostAPI = struct
-      module Base = Host
-
-      let host_trace ?print msg = trace ?print (fun () -> Format.sprintf "[OCaml] Host call: %s\n" (msg ()))
-
-      let lift (fn : Host.t -> 'a * Host.t) : 'a t =
-       fun state ->
-        let result, host = fn state.host in
-        (Ok result, {state with host})
-
-      (* TODO: trace other API calls. *)
-      let account_exists addr =
-        host_trace (fun () -> Format.sprintf "account_exists %s" (Address.to_short_hex_string addr)) ;
-        lift (Base.account_exists addr)
-
-      let get_storage addr key =
-        host_trace (fun () ->
-            Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
-              (B32.to_short_hex_string key) ) ;
-        lift (Base.get_storage addr key)
-
-      let set_storage addr key v =
-        host_trace (fun () ->
-            Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
-              (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
-        lift (Base.set_storage addr key v)
-
-      let get_balance addr =
-        host_trace (fun () -> Format.sprintf "get_balance %s" (Address.to_short_hex_string addr)) ;
-        lift (Base.get_balance addr)
-
-      let access_account addr =
-        host_trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
-        lift (Base.access_account addr)
-
-      let access_storage addr key =
-        host_trace (fun () ->
-            Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
-              (B32.to_short_hex_string key) ) ;
-        lift (Base.access_storage addr key)
-
-      let get_code_size addr =
-        host_trace (fun () -> Format.sprintf "get_code_size %s" (Address.to_short_hex_string addr)) ;
-        lift (Base.get_code_size addr)
-
-      let get_code_hash addr =
-        host_trace (fun () -> Format.sprintf "get_code_hash %s" (Address.to_short_hex_string addr)) ;
-        lift (Base.get_code_hash addr)
-
-      let copy_code addr ~offset ~size =
-        host_trace (fun () ->
-            Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
-        lift (Base.copy_code addr ~offset ~size)
-
-      let get_block_hash id =
-        host_trace (fun () -> Format.sprintf "get_block_hash %Ld" id) ;
-        lift (Base.get_block_hash id)
-
-      let call (msg : Evmc.Message.t) =
-        host_trace (fun () ->
-            Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
-        let$ result = lift (Base.call msg) in
-        trace (fun () ->
-            Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
-        trace (fun () -> Format.sprintf "\tOutput buffer %s\n" (Bytes.to_hex_string result.output_data)) ;
-        return result
-
-      let selfdestruct ~address ~beneficiary =
-        host_trace (fun () ->
-            Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
-              (Address.to_short_hex_string address)
-              (Address.to_short_hex_string beneficiary) ) ;
-        lift (Base.selfdestruct ~address ~beneficiary)
-
-      let emit_log addr ~data ~topics =
-        host_trace (fun () ->
-            Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr)
-              (Bytes.to_short_hex_string data)
-              (List.fold_left
-                 (fun acc topic -> Format.sprintf "%s, %s" acc (B32.to_short_hex_string topic))
-                 "" topics ) ) ;
-        lift (Base.emit_log addr ~data ~topics)
-
-      let get_transient_storage addr key =
-        host_trace (fun () ->
-            Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
-              (B32.to_short_hex_string key) ) ;
-        lift (Base.get_transient_storage addr key)
-
-      let set_transient_storage addr key v =
-        host_trace (fun () ->
-            Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
-              (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
-        lift (Base.set_transient_storage addr key v)
-    end
-  end
-  open M
-
-  (* Frequently used helpers are written in direct style for performance. *)
-  let spend (amount : Gas.t) : unit M.t =
-   fun s ->
-    if Gas.(s.gas < amount) then (Error Out_of_gas, s) else (Ok (), {s with gas = Gas.(s.gas - amount)})
-
-  let push (x : U256.t) : unit M.t =
-   fun s ->
-    if s.stack_depth >= max_stack_depth then (Error Stack_overflow, s)
-    else (Ok (), {s with stack = x :: s.stack; stack_depth = s.stack_depth + 1})
-  let pop : U256.t M.t =
-   fun s ->
-    match s.stack with
-    | x0 :: tl -> (Ok x0, {s with stack = tl; stack_depth = s.stack_depth - 1})
-    | _ -> (Error Stack_underflow, s)
-
-  let pop2 : (U256.t * U256.t) M.t =
-   fun s ->
-    match s.stack with
-    | x0 :: x1 :: tl -> (Ok (x0, x1), {s with stack = tl; stack_depth = s.stack_depth - 2})
-    | _ -> (Error Stack_underflow, s)
-
-  let pop3 : (U256.t * U256.t * U256.t) M.t =
-   fun s ->
-    match s.stack with
-    | x0 :: x1 :: x2 :: tl -> (Ok (x0, x1, x2), {s with stack = tl; stack_depth = s.stack_depth - 3})
-    | _ -> (Error Stack_underflow, s)
-
-  let update_pc_and_continue (f : U256.t -> U256.t) : bool M.t =
-   fun s ->
-    let s = {s with pc = f s.pc} in
-    (Ok true, s)
-
-  let increase_pc_and_continue : bool M.t = update_pc_and_continue U256.(( + ) one)
-
-  let finish_execution ~return_output : bool M.t =
-    let$ () = when_ (not return_output) (MachineState.output_buffer := Bytes.empty) in
-    return false
-
-  type opcode_impl = bool M.t
-
-  module Executor (C : sig
-    val execution_environment : ExecutionEnvironment.t
-  end) =
+  module Executor
+      (Host : Evmc.HOST)
+      (C : sig
+        val execution_environment : ExecutionEnvironment.t
+      end) =
   struct
+    module MachineState = MachineState (Params) (Host)
+    open MachineState
+    module M = struct
+      include Monad.Result_state (struct
+        type state = t
+        type error = Evmc.Result.StatusCode.t
+      end)
+      open Chain.Ethereum
+
+      module HostAPI = struct
+        module Base = Host
+
+        let host_trace ?print _msg = ignore print ; ()
+
+        let lift (fn : Host.t -> 'a * Host.t) : 'a t =
+         fun state ->
+          let result, host = fn state.host in
+          (Ok result, {state with host})
+
+        (* TODO: trace other API calls. *)
+        let account_exists addr =
+          host_trace (fun () -> Format.sprintf "account_exists %s" (Address.to_short_hex_string addr)) ;
+          lift (Base.account_exists addr)
+
+        let get_storage addr key =
+          host_trace (fun () ->
+              Format.sprintf "get_storage %s %s" (Address.to_short_hex_string addr)
+                (B32.to_short_hex_string key) ) ;
+          lift (Base.get_storage addr key)
+
+        let set_storage addr key v =
+          host_trace (fun () ->
+              Format.sprintf "set_storage %s %s %s" (Address.to_short_hex_string addr)
+                (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
+          lift (Base.set_storage addr key v)
+
+        let get_balance addr =
+          host_trace (fun () -> Format.sprintf "get_balance %s" (Address.to_short_hex_string addr)) ;
+          lift (Base.get_balance addr)
+
+        let access_account addr =
+          host_trace (fun () -> Format.sprintf "access_account %s" (Address.to_short_hex_string addr)) ;
+          lift (Base.access_account addr)
+
+        let access_storage addr key =
+          host_trace (fun () ->
+              Format.sprintf "access_storage %s %s" (Address.to_short_hex_string addr)
+                (B32.to_short_hex_string key) ) ;
+          lift (Base.access_storage addr key)
+
+        let get_code_size addr =
+          host_trace (fun () -> Format.sprintf "get_code_size %s" (Address.to_short_hex_string addr)) ;
+          lift (Base.get_code_size addr)
+
+        let get_code_hash addr =
+          host_trace (fun () -> Format.sprintf "get_code_hash %s" (Address.to_short_hex_string addr)) ;
+          lift (Base.get_code_hash addr)
+
+        let copy_code addr ~offset ~size =
+          host_trace (fun () ->
+              Format.sprintf "copy_code %s %d %d" (Address.to_short_hex_string addr) offset size ) ;
+          lift (Base.copy_code addr ~offset ~size)
+
+        let get_block_hash id =
+          host_trace (fun () -> Format.sprintf "get_block_hash %Ld" id) ;
+          lift (Base.get_block_hash id)
+
+        let call (msg : Evmc.Message.t) =
+          host_trace (fun () ->
+              Format.sprintf "call to %s (gas = %Ld)" (Address.to_short_hex_string msg.recipient) msg.gas ) ;
+          let$ result = lift (Base.call msg) in
+          return result
+
+        let selfdestruct ~address ~beneficiary =
+          host_trace (fun () ->
+              Format.sprintf "selfdestruct ~address:%s ~beneficiary:%s"
+                (Address.to_short_hex_string address)
+                (Address.to_short_hex_string beneficiary) ) ;
+          lift (Base.selfdestruct ~address ~beneficiary)
+
+        let emit_log addr ~data ~topics =
+          host_trace (fun () ->
+              Format.sprintf "emit_log %s %s [%s]" (Address.to_short_hex_string addr)
+                (Bytes.to_short_hex_string data)
+                (List.fold_left
+                   (fun acc topic -> Format.sprintf "%s, %s" acc (B32.to_short_hex_string topic))
+                   "" topics ) ) ;
+          lift (Base.emit_log addr ~data ~topics)
+
+        let get_transient_storage addr key =
+          host_trace (fun () ->
+              Format.sprintf "get_transient_storage %s %s" (Address.to_short_hex_string addr)
+                (B32.to_short_hex_string key) ) ;
+          lift (Base.get_transient_storage addr key)
+
+        let set_transient_storage addr key v =
+          host_trace (fun () ->
+              Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
+                (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
+          lift (Base.set_transient_storage addr key v)
+      end
+    end
+    open M
+
+    (* Frequently used helpers are written in direct style for performance. *)
+    let spend (amount : Gas.t) : unit M.t =
+     fun s ->
+      if Gas.(s.gas < amount) then (Error Out_of_gas, s) else (Ok (), {s with gas = Gas.(s.gas - amount)})
+
+    let push (x : U256.t) : unit M.t =
+     fun s ->
+      if s.stack_depth >= max_stack_depth then (Error Stack_overflow, s)
+      else (Ok (), {s with stack = x :: s.stack; stack_depth = s.stack_depth + 1})
+    let pop : U256.t M.t =
+     fun s ->
+      match s.stack with
+      | x0 :: tl -> (Ok x0, {s with stack = tl; stack_depth = s.stack_depth - 1})
+      | _ -> (Error Stack_underflow, s)
+
+    let pop2 : (U256.t * U256.t) M.t =
+     fun s ->
+      match s.stack with
+      | x0 :: x1 :: tl -> (Ok (x0, x1), {s with stack = tl; stack_depth = s.stack_depth - 2})
+      | _ -> (Error Stack_underflow, s)
+
+    let pop3 : (U256.t * U256.t * U256.t) M.t =
+     fun s ->
+      match s.stack with
+      | x0 :: x1 :: x2 :: tl -> (Ok (x0, x1, x2), {s with stack = tl; stack_depth = s.stack_depth - 3})
+      | _ -> (Error Stack_underflow, s)
+
+    let update_pc_and_continue (f : U256.t -> U256.t) : bool M.t =
+     fun s ->
+      let s = {s with pc = f s.pc} in
+      (Ok true, s)
+
+    let increase_pc_and_continue : bool M.t = update_pc_and_continue U256.(( + ) one)
+
+    let finish_execution ~return_output : bool M.t =
+      let$ () = when_ (not return_output) (MachineState.output_buffer := Bytes.empty) in
+      return false
+
+    type opcode_impl = bool M.t
+
     open C
 
     open MachineState
@@ -1487,6 +1495,7 @@ struct
               { kind
               ; delegated
               ; static
+              ; elf_init = false
               ; depth = Int32.of_int new_depth
               ; gas = U256.to_uint64 call_gas
               ; recipient
@@ -1557,6 +1566,7 @@ struct
               { kind
               ; delegated = false
               ; static = false
+              ; elf_init = false
               ; depth = Int32.of_int new_depth
               ; gas = Uint.to_int64 create_message_gas
               ; recipient = Address.zero
@@ -1988,19 +1998,25 @@ struct
       match result with Ok continue -> if continue then run s else (Ok (), s) | Error err -> (Error err, s)
   end
 
-  let execute (msg : Evmc.Message.t) (code : Bytes.t) : Host.t -> Evmc.Result.t * Host.t =
+  let execute (type t) (host : (module Evmc.HOST with type t = t)) (msg : Evmc.Message.t) (code : Bytes.t) :
+      t -> Evmc.Result.t * t =
+    let open Chain.Ethereum in
     trace (fun () -> "Start execution\n") ;
     trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
+    let (module Host) = host in
     let open Host in
     let open Monad.State (Host) in
     let$ tx_context = get_tx_context in
     let$ host = get in
-    let module Exe = Executor (struct
-      let execution_environment = ExecutionEnvironment.make tx_context msg code
-    end) in
+    let module Exe =
+      Executor
+        (Host)
+        (struct
+          let execution_environment = ExecutionEnvironment.make tx_context msg code
+        end) in
     let gas = Gas.of_uint64 msg.gas in
     let memory_capacity = Uint.of_uint32 msg.memory_capacity in
-    let state = MachineState.initial ~host ~gas ~memory_capacity in
+    let state = Exe.MachineState.initial ~host ~gas ~memory_capacity in
     let res, state = Exe.run state in
     trace (fun () -> "Finished execution\n") ;
     (* Propagate host updates back to the caller. *)

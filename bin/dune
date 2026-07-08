@@ -2,10 +2,17 @@
  (name evmrun)
  (public_name evmrun)
  (modes byte exe)
- (libraries monad_lib))
+ (libraries monad_lib kvm)
+ (modules evmrun))
 
 (executable
  (name execrun)
  (public_name execrun)
  (modes byte exe)
- (libraries monad_lib))
+ (libraries monad_lib kvm)
+ (modules execrun))
+
+(library
+ (name kvm)
+ (libraries monad_lib external_vm)
+ (modules kvm))

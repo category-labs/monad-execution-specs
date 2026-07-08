@@ -116,10 +116,15 @@ module Params = struct
 end
 
 module Evm = struct
-  module Evm0 = Host.Instantiate (Params) (Vm.Make (Params))
-
   (* Unfold one level of recursion to get access to the full signature of Vm *)
-  module Vm = Vm.Make (Params) (Evm0.Host)
+  module Vm = struct
+    include Vm.Make (Params)
+    module MachineState = Vm.MachineState (Params) (Host.TransactionState)
+    module M = Monad.Result_state (struct
+      type state = MachineState.t
+      type error = Evmc.Result.StatusCode.t
+    end)
+  end
   module Host = Host.Make (Params) (Vm)
 end
 
@@ -137,16 +142,20 @@ let test_message
     let open Monad.State (Host.TransactionState) in
     let$ tx_context = get_tx_context in
     let$ host = get in
-    let module Exe = Evm.Vm.Executor (struct
-      let execution_environment = Evm.Vm.ExecutionEnvironment.make tx_context msg msg.code
-    end) in
+    let module Exe =
+      Evm.Vm.Executor
+        (Evm.Host)
+        (struct
+          let execution_environment = Vm.ExecutionEnvironment.make tx_context msg msg.code
+        end) in
     let gas = Gas.of_uint64 msg.gas in
     let memory_capacity = Uint.of_uint32 msg.memory_capacity in
     let state = Evm.Vm.MachineState.initial ~host ~gas ~memory_capacity in
     let res, state =
       Evm.Vm.M.(
         let$ () = prepare_vm in
-        let$ () = Exe.run in
+        (* TODO: please do not forget to remove this. *)
+        let$ () = Obj.magic Exe.run in
         match check_vm_state with None -> return () | Some check -> check )
         state
     in
@@ -188,6 +197,7 @@ let bytecode_to_call_message code =
       { kind = CallKind.Call
       ; delegated = false
       ; static = false
+      ; elf_init = false
       ; depth = 0l
       ; gas = 100_000_000L
       ; recipient = Address.zero

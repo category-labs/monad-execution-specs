@@ -91,6 +91,7 @@ module Params = struct
   let revision = !revision
   let trace = !trace
 end
+
 module Execution = Execution.Make (Params)
 
 let () =
@@ -99,7 +100,7 @@ let () =
     let block_state = Host.BlockState.make world_state block in
     let transaction_state = Host.TransactionState.make block_state Address.zero tx in
     let msg = {(Execution.prepare_message sender gas_limit tx) with code = bytecode; input_data = calldata} in
-    Execution.Vm.execute msg bytecode transaction_state
+    Execution.Vm.execute (module Execution.Host) msg bytecode transaction_state
   in
   if !gc_stats then Gc.print_stat Out_channel.stdout ;
 
