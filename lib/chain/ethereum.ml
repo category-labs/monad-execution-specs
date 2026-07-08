@@ -408,8 +408,12 @@ module Transaction = struct
     let msg_hash = signing_hash chain_id tx in
     Option.(
       let signature = signature chain_id tx in
+      (* YP (312) *)
       let$ () = ensure U256.(zero < signature.r && signature.r < Crypto.secp256k1n) in
-      let$ () = ensure U256.(zero < signature.s && signature.s < Crypto.secp256k1n / ~$2) in
+      (* YP (313) *)
+      let$ () = ensure U256.(zero < signature.s && signature.s <= Crypto.secp256k1n / ~$2) in
+      (* YP (314) *)
+      let$ () = ensure U8.(signature.y_parity = zero || signature.y_parity = one) in
       Crypto.ecrecover signature msg_hash )
 
   let access_list tx =
