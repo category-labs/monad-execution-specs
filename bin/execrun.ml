@@ -189,7 +189,7 @@ let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
     let blocks =
       to_list fixture_json.$("blocks")
       |> List.map (fun (b : Yojson.Safe.t) ->
-          let block = match Block.of_yojson b with Ok b -> b | Error err -> failwith err in
+          let block = match  failwith "" (*Block.of_yojson b*) with Ok b -> b | Error err -> failwith err in
           let b = b.$("rlp") <- Bytes.to_yojson (Rlp.encode (Block.to_rlp block)) in
           let header_with_hash = b.$("blockHeader").$("hash") <- B32.to_yojson (Block.hash block) in
           b.$("blockHeader") <- header_with_hash )

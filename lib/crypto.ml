@@ -5,9 +5,14 @@ open Byte_string
 
 (** [keccak_256 bytes] computes the Keccak-256 digest of a byte array. *)
 let keccak_256 (input : Bytes.t) : B32.t =
+  let hash = Cryptokit.Hash.keccak 256 in
+  hash # add_string input ;
+  Byte_string.B32.of_bytes_exn (hash # result)
+(*
   let bytes = Digestif.KECCAK_256.(to_raw_string (digest_string input)) in
   (* Never fails as Keccak-256 is guaranteed to produce 32 bytes. *)
   Byte_string.B32.of_bytes_exn bytes
+ *)
 
 (** The Keccak-256 encoding of the empty byte array. *)
 let keccak_256_empty = keccak_256 Bytes.empty
@@ -55,6 +60,12 @@ let ecrecover {r; s; y_parity} (msg_hash : B32.t) : B20.t option =
       let public_key = Bytes.init 64 public_key_i in
       return (B20.of_bytes32_truncating (keccak_256 public_key)) ) )
 
-let sha_256 (bs : Bytes.t) : B32.t = B32.of_bytes_exn Digestif.SHA256.(to_raw_string (digest_string bs))
+let sha_256 (bs : Bytes.t) : B32.t =
+  let hash = Cryptokit.Hash.sha256 () in
+  hash # add_string bs ;
+  B32.of_bytes_exn (hash # result)
 
-let ripemd_160 (bs : Bytes.t) : B20.t = B20.of_bytes_exn Digestif.RMD160.(to_raw_string (digest_string bs))
+let ripemd_160 (bs : Bytes.t) : B20.t =
+  let hash = Cryptokit.Hash.ripemd160 () in
+  hash # add_string bs ;
+  B20.of_bytes_exn (hash # result)

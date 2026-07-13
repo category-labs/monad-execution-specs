@@ -10,7 +10,7 @@
     (ocaml (= 5.4.0))
     ocaml-option-flambda
     (zarith (= 1.14))
-    (digestif (= 1.3.0))
+    cryptokit
     (secp256k1-internal (= 0.4.0))
     (alcotest (= 1.9.1))
     (qcheck-core (= 0.27))

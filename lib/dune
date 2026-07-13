@@ -13,6 +13,6 @@
  (public_name monad-spec.monad_lib)
  (libraries
   zarith
-  digestif
+  cryptokit
   secp256k1-internal
   yojson))
