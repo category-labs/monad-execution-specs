@@ -32,9 +32,6 @@ module Address = struct
 
   (* Encoding/decoding address options, used to handle the recipient of a transaction. *)
   type t_opt = t option
-  let t_opt_to_yojson (addr : t option) = match addr with Some addr -> to_yojson addr | None -> `String ""
-  let t_opt_of_yojson (json : Yojson.Safe.t) =
-    match json with `String "" -> Ok None | _ -> Result.map Option.some (of_yojson json)
 
   let t_opt_to_rlp (addr : t option) = match addr with None -> Rlp.Bytes "" | Some addr -> to_rlp addr
 end
@@ -95,7 +92,6 @@ end
 module Transaction = struct
   module Access = struct
     type t = {address : Address.t (* E_a *); storage_keys : B32.t list (* E_s *) [@key "storageKeys"]}
-    [@@deriving yojson]
 
     let to_rlp {address; storage_keys} =
       Rlp.List [Address.to_rlp address; Rlp.List (List.map Rlp.of_bytes32 storage_keys)]
@@ -109,7 +105,6 @@ module Transaction = struct
       ; y_parity : U8.t [@key "v"]
       ; r : U256.t
       ; s : U256.t }
-    [@@deriving yojson {strict = false}]
 
     let to_rlp {chain_id; nonce; address; y_parity; r; s} =
       Rlp.List
@@ -140,11 +135,10 @@ module Transaction = struct
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
     ; to_ : Address.t_opt
-          (* T_t *) [@of_yojson Address.t_opt_of_yojson] [@to_yojson Address.t_opt_to_yojson] [@key "to"]
+          (* T_t *)
     ; data : Bytes.t (* Either T_d or T_i *)
     ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
     ; v : U256.t (* T_w *) }
-  [@@deriving yojson {strict = false}]
 
   type access_list_tx =
     { nonce : U64.t (* T_n *)
@@ -158,7 +152,6 @@ module Transaction = struct
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U8.t (* T_y *) [@key "v"] }
-  [@@deriving yojson {strict = false}]
 
   type fee_market_tx =
     { nonce : U64.t (* T_n *)
@@ -173,7 +166,6 @@ module Transaction = struct
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U8.t (* T_y *) [@key "v"] }
-  [@@deriving yojson {strict = false}]
 
   (** EIP-7702 transaction. *)
   type set_code_tx =
@@ -190,7 +182,6 @@ module Transaction = struct
     ; authorization_list : Authorization.t list [@key "authorizationList"]
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U8.t (* T_y *) [@key "v"] }
-  [@@deriving yojson {strict = false}]
 
   type t =
     | Legacy of legacy_tx
@@ -434,42 +425,6 @@ module Transaction = struct
     let data = data tx in
     match to_ with None -> Create {initcode = data} | Some to_ -> Call {data; to_}
 
-  let kind_tag_to_yojson (tag : kind_tag) : Yojson.Safe.t =
-    let bytestring = Format.sprintf "0x%s" (Bytes.to_hex_string (kind_tag_to_bytes tag)) in
-    `String bytestring
-  let kind_tag_of_yojson (json : Yojson.Safe.t) : (kind_tag, string) result =
-    Result.(
-      match U64.(to_int <$> of_yojson json) with
-      | Ok i when i >= 0 && i < 256 -> (
-        match byte_to_kind_tag (Char.unsafe_chr i) with
-        | Some tag -> return tag
-        | None -> fail "Ethereum.Transaction.kind_tag" )
-      | _ -> fail "Ethereum.Transaction.kind_tag" )
-
-  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
-    Result.(
-      (* Ethereum text fixtures encode numeric values as hex strings, but yojson assumes primitive number types
-         are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
-         match on it. *)
-      match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
-      | Ok None | Ok (Some 0) -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
-      | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
-      | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
-      | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
-      | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
-
-  let to_yojson (tx : t) : Yojson.Safe.t =
-    let untagged_tx =
-      match tx with
-      | Legacy tx -> [%to_yojson: legacy_tx] tx
-      | AccessList tx -> [%to_yojson: access_list_tx] tx
-      | FeeMarket tx -> [%to_yojson: fee_market_tx] tx
-      | SetCode tx -> [%to_yojson: set_code_tx] tx
-    in
-    (* For non-legacy transactions, add the transaction type back in. *)
-    match kind_tag tx with
-    | `Legacy -> untagged_tx
-    | tag -> `Assoc (("type", kind_tag_to_yojson tag) :: Yojson.Safe.Util.to_assoc untagged_tx)
 end
 
 module Withdrawal = struct
@@ -479,7 +434,6 @@ module Withdrawal = struct
     ; validator_index : U64.t (* W_v *) [@key "validatorIndex"]
     ; recipient : Address.t (* W_r *) [@key "address"]
     ; amount : U256.t (* W_a *) [@key "amount"] }
-  [@@deriving yojson]
 
   (* YP (21) *)
   let to_rlp {global_index; validator_index; recipient; amount} =
@@ -514,7 +468,6 @@ module Block = struct
       ; excess_blob_gas : U64.t (* EIP-4844 *) [@key "excessBlobGas"]
       ; parent_beacon_block_root : B32.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
       ; requests_hash : B32.t (* EIP-7685 *) [@key "requestsHash"] }
-    [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens]
 
     (* YP 4.4.3 (40) *)
     let to_rlp h =
@@ -575,7 +528,6 @@ module Block = struct
     ; transactions : Transaction.t list (* B_T *) [@key "transactions"]
     ; ommers : Header.t list (* B_U *) [@key "uncleHeaders"]
     ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] }
-  [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens]
 
   let empty = {header = empty; transactions = []; ommers = []; withdrawals = []}
 
@@ -600,7 +552,6 @@ end
 module Log = struct
   (* YP 4.4.1 (28) *)
   type t = {address : Address.t (* O_a *); topics : B32.t list (* O_t *); data : Bytes.t (* O_d *)}
-  [@@deriving yojson]
 
   (* YP (30) *)
   let to_bloom (log : t) : Bloom.t =
@@ -625,7 +576,6 @@ module Receipt = struct
     ; cumulative_gas_used : Uint.t (* R_u *) [@key "cumulativeGasUsed"]
     ; bloom : Bloom.t (* R_b *) [@key "logsBloom"]
     ; logs : Log.t list (* R_l *) }
-  [@@deriving yojson]
 
   (* YP (25) *)
   let to_rlp {tx_type; succeeded; cumulative_gas_used; bloom; logs} =
@@ -649,8 +599,14 @@ module Account = struct
     ; balance : U256.t (* σ[a]_b *)
     ; storage : B32.t B32.Map.t (* σ[a]_s *)
     ; code : Bytes.t (* σ[a]_c *) }
-  [@@deriving lens {submodule = true; prefix = true}, yojson]
-  include TLens
+
+  module Lens = struct
+  let nonce = Lens.{ get = (fun s -> s.nonce); set = (fun v s -> { s with nonce = v}) }
+  let balance = Lens.{ get = (fun s -> s.balance); set = (fun v s -> { s with balance = v}) }
+  let storage = Lens.{ get = (fun s -> s.storage); set = (fun v s -> { s with storage = v}) }
+  let code = Lens.{ get = (fun s -> s.code); set = (fun v s -> { s with code = v}) }
+  end
+  include Lens
 
   (* Structural equality on accounts. Necessary because OCaml's polymorphic compare is broken for maps. *)
   let equal acc_1 acc_2 =

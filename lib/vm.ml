@@ -183,8 +183,14 @@ struct
                most of the information in the Accrued Substate (accessed accounts, logs) is tracked by the
                EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
       ; host : Host.t }
-    [@@deriving lens {submodule = true; prefix = true}]
-    include TLens
+      let gas = Lens.{ get = (fun s -> s.gas); set = (fun v s -> { s with    gas = v}) }
+      let pc = Lens.{ get = (fun s -> s.pc); set = (fun v s -> { s with pc = v}) }
+      let memory = Lens.{ get = (fun s -> s.memory); set = (fun v s -> { s with memory = v}) }
+      let stack = Lens.{ get = (fun s -> s.stack); set = (fun v s -> { s with stack = v}) }
+      let stack_depth = Lens.{ get = (fun s -> s.stack_depth); set = (fun v s -> { s with stack_depth = v}) }
+      let output_buffer = Lens.{ get = (fun s -> s.output_buffer); set = (fun v s -> { s with output_buffer = v}) }
+      let gas_refund = Lens.{ get = (fun s -> s.gas_refund); set = (fun v s -> { s with gas_refund = v}) }
+      let host = Lens.{ get = (fun s -> s.host); set = (fun v s -> { s with host = v}) }
 
     let initial ~host ~gas ~memory_capacity =
       { gas
@@ -214,8 +220,13 @@ struct
         ; prev_randao : U256.t (* H_a *)
         ; base_fee : U256.t (* H_f *)
         ; chain_id : U256.t (* β *) }
-      [@@deriving lens {submodule = true; prefix = true}]
-      include TLens
+        let coinbase = Lens.{ get = (fun s -> s.coinbase); set = (fun v s -> { s with coinbase = v}) }
+        let number = Lens.{ get = (fun s -> s.number); set = (fun v s -> { s with number = v}) }
+        let timestamp = Lens.{ get = (fun s -> s.timestamp); set = (fun v s -> { s with timestamp = v}) }
+        let gas_limit = Lens.{ get = (fun s -> s.gas_limit); set = (fun v s -> { s with gas_limit = v}) }
+        let prev_randao = Lens.{ get = (fun s -> s.prev_randao); set = (fun v s -> { s with prev_randao = v}) }
+        let base_fee = Lens.{ get = (fun s -> s.base_fee); set = (fun v s -> { s with base_fee = v}) }
+        let chain_id = Lens.{ get = (fun s -> s.chain_id); set = (fun v s -> { s with chain_id = v}) }
 
       let of_tx_context (ctx : Evmc.TxContext.t) : t =
         { coinbase = ctx.block_coinbase
@@ -242,8 +253,18 @@ struct
       ; write_permission : bool (* I_w *)
       ; blob_versioned_hashes : B32.t list (* EIP-4844 *)
       ; blob_base_fee : U256.t (* EIP-7516 *) }
-    [@@deriving lens {submodule = true; prefix = true}]
-    include TLens
+      let address = Lens.{ get = (fun s -> s.address); set = (fun v s -> { s with address = v}) }
+      let origin = Lens.{ get = (fun s -> s.origin); set = (fun v s -> { s with origin = v}) }
+      let price = Lens.{ get = (fun s -> s.price); set = (fun v s -> { s with price = v}) }
+      let data = Lens.{ get = (fun s -> s.data); set = (fun v s -> { s with data = v}) }
+      let sender = Lens.{ get = (fun s -> s.sender); set = (fun v s -> { s with sender = v}) }
+      let value = Lens.{ get = (fun s -> s.value); set = (fun v s -> { s with value = v}) }
+      let bytecode = Lens.{ get = (fun s -> s.bytecode); set = (fun v s -> { s with bytecode = v}) }
+      let header = Lens.{ get = (fun s -> s.header); set = (fun v s -> { s with header = v}) }
+      let depth = Lens.{ get = (fun s -> s.depth); set = (fun v s -> { s with depth = v}) }
+      let write_permission = Lens.{ get = (fun s -> s.write_permission); set = (fun v s -> { s with write_permission = v}) }
+      let blob_versioned_hashes = Lens.{ get = (fun s -> s.blob_versioned_hashes); set = (fun v s -> { s with blob_versioned_hashes = v}) }
+      let blob_base_fee = Lens.{ get = (fun s -> s.blob_base_fee); set = (fun v s -> { s with blob_base_fee = v}) }
 
     let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
       { address = msg.recipient

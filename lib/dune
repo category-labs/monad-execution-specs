@@ -13,10 +13,6 @@
  (public_name monad-spec.monad_lib)
  (libraries
   zarith
-  lens
   digestif
   secp256k1-internal
-  yojson
-  ppx_deriving_yojson.runtime)
- (preprocess
-  (pps lens.ppx_deriving ppx_deriving_yojson)))
+  yojson))

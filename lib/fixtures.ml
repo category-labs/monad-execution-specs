@@ -98,23 +98,23 @@ module BlockchainTest = struct
     | `Null ->
         (* Parse as normal block. *)
         Result.(
-          let$ block = Block.of_yojson json in
+        let$ block = failwith ""(*Block.of_yojson json*) in
           return {block; expect_exception = None} )
-    | exn ->
+    | _exn ->
         (* Parse as exception-raising block. *)
         Result.(
-          let$ exn = [%of_yojson: string] exn in
+        let$ exn = failwith ""(*[%of_yojson: string] exn*) in
           let$ _rlp = Bytes.of_yojson json.$("rlp") in
-          let$ block = Block.of_yojson json.$("rlp_decoded") in
+          let$ block = (*Block.of_yojson json.$("rlp_decoded")*) failwith "" in
           return {block; expect_exception = Some exn} )
   let test_case_block_to_yojson {block; expect_exception} =
     match expect_exception with
-    | None -> Block.to_yojson block
-    | Some exn ->
+    | None -> (*Block.to_yojson block*) failwith ""
+    | Some _exn ->
         `Assoc
           [ ("rlp", Bytes.to_yojson (Rlp.encode (Block.to_rlp block)))
-          ; ("rlp_decoded", Block.to_yojson block)
-          ; ("expectException", [%to_yojson: string] exn) ]
+          ; ("rlp_decoded", failwith "" (*Block.to_yojson block*))
+            ; ("expectException", failwith "" (*[%to_yojson: string] exn*)) ]
 
   type test_case =
     { info : info [@key "_info"]
@@ -142,8 +142,8 @@ module BlockchainTest = struct
     Result.(
       match test_cases with
       | `Assoc kv ->
-          List.filter_mapM kv ~f:(fun (name, v) ->
-              match test_case_of_yojson v with
+          List.filter_mapM kv ~f:(fun (name, _v) ->
+              match failwith "" (*test_case_of_yojson v *) with
               | Ok test_case -> (
                 (* According to the EEST format spec, test_case.network is deprecated and the authoritative
                    source is test_case.config.network. If present, we expect it to be identical to the network
@@ -156,7 +156,7 @@ module BlockchainTest = struct
       | _ -> fail "Fixtures.BlockchainTest.t" )
 
   let to_yojson (test_cases : t) : Yojson.Safe.t =
-    `Assoc (List.map (fun (k, v) -> (k, test_case_to_yojson v)) test_cases)
+    `Assoc (List.map (fun (k, _v) -> (k, failwith ""(*test_case_to_yojson v*))) test_cases)
 end
 
 module TrieTest = struct
@@ -202,7 +202,7 @@ module TrieTest = struct
   let of_yojson ~hash_keys (entries : Yojson.Safe.t) : (t, string) result =
     Result.(
       let of_kv (name, entry) =
-        let$ hex_encoded = [%of_yojson: bool option] entry.$("hexEncoded") in
+        let$ hex_encoded = (*[%of_yojson: bool option] entry.$("hexEncoded")*) failwith "" in
         let$ test_case = test_case_of_yojson ~hex_encoded:(hex_encoded = Some true) ~hash_keys entry in
         return (name, test_case)
       in

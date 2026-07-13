@@ -41,7 +41,9 @@ module Error = struct
     | Invalid_transaction of {block : Block.t; transaction : Transaction.t; reason : invalid_transaction}
   [@@deriving to_yojson]
 
-  let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
+  let to_string = function
+    | Invalid_block _ -> "invalid block"
+    | Invalid_transaction _ -> "invalid transaction"
 end
 
 module Make (Params : sig

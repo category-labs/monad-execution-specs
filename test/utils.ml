@@ -48,7 +48,7 @@ module QCheck2 = struct
 
     let rec depth = function Rlp.Bytes _ -> 0 | Rlp.List ls -> 1 + List.(fold_left max 0 (map depth ls))
     let string ~nonempty : Bytes.t t =
-      let size = if nonempty then ( + ) 1 <$> small_nat else small_nat in
+      let size = if nonempty then ( + ) 1 <$> nat_small else nat_small in
       string_size size
 
     let rlp ~nonempty : Rlp.t t =
@@ -57,8 +57,8 @@ module QCheck2 = struct
           let bytes_case = (fun bs -> Rlp.Bytes bs) <$> string ~nonempty in
           if depth > 2 then bytes_case
           else
-            frequency
-              [(3 + (2 * depth), bytes_case); (1, (fun l -> Rlp.List l) <$> small_list (self (depth + 1)))] )
+            oneof_weighted
+              [(3 + (2 * depth), bytes_case); (1, (fun l -> Rlp.List l) <$> list_small (self (depth + 1)))] )
         0
   end
 end
@@ -98,7 +98,7 @@ let status_code =
 let account =
   ( module struct
     include Chain.Ethereum.Account
-    let pp = Fmt.of_to_string (fun acc -> Yojson.Safe.pretty_to_string (Account.to_yojson acc))
+    let pp = Fmt.of_to_string (fun _acc -> "<ACCOUNT>")
   end : Alcotest.TESTABLE
     with type t = Chain.Ethereum.Account.t )
 

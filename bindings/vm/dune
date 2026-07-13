@@ -31,7 +31,5 @@
  ; Suppress unused variable errors in generated stubs (OCaml)
  (flags
   (:standard -g -linkall -w -27))
- (preprocess
-  (pps lens.ppx_deriving ppx_deriving_yojson))
  (modes
   (native shared_object)))

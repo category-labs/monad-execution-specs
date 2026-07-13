@@ -152,7 +152,7 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   assert (B32.(Host.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
-  |> Result.get_ok'
+  |> Result.get_ok
 
 let check_test_result (name, fixtures, post_state) =
   let success = check_postconditions post_state fixtures.Fixtures.BlockchainTest.post in
@@ -183,7 +183,7 @@ let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
   let open Yojson.Safe.Util in
   let open Fixtures in
   (* TODO: this is a hack to add necessary extra fields *)
-  let fixture_json = Fixtures.BlockchainTest.test_case_to_yojson fixture in
+  let fixture_json = failwith ""(*Fixtures.BlockchainTest.test_case_to_yojson fixture*) in
   let fixture_json =
     (* Add its own RLP encoding and hash to each block. *)
     let blocks =

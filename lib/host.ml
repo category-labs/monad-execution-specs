@@ -20,9 +20,10 @@ module WorldState = struct
         {!Reserve_balance.execution_consensus_delay} every time the account submits a transaction or appears
         in a valid delegation. *)
     }
-  [@@deriving lens {submodule = true; prefix = true}]
+    let history = Lens.{ get = (fun s -> s.history); set = (fun v s -> { s with history = v}) }
+    let accounts = Lens.{ get = (fun s -> s.accounts); set = (fun v s -> { s with accounts = v}) }
+    let next_emptying_transaction_block = Lens.{ get = (fun s -> s.next_emptying_transaction_block); set = (fun v s -> { s with next_emptying_transaction_block = v}) }
 
-  include TLens
 
   let empty = {history = []; accounts = Address.Map.empty; next_emptying_transaction_block = Address.Map.empty}
 
@@ -56,12 +57,6 @@ module WorldState = struct
     in
     mpt.root_hash
 
-  let dump_accounts ws =
-    Address.Map.iter
-      (fun addr acc ->
-        Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
-          (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) )
-      ws.accounts
 end
 
 module BlockState = struct
@@ -74,9 +69,13 @@ module BlockState = struct
     ; transactions_processed : (Transaction.t * Receipt.t) list
     ; withdrawals_processed : Withdrawal.t list
     ; requests : Bytes.t list (* EIP-7685 execution layer requests *) }
-  [@@deriving lens {submodule = true; prefix = true}]
+    let world_state = Lens.{ get = (fun s -> s.world_state); set = (fun v s -> { s with world_state = v}) }
+    let current_block = Lens.{ get = (fun s -> s.current_block); set = (fun v s -> { s with current_block = v}) }
+    let gas_used = Lens.{ get = (fun s -> s.gas_used); set = (fun v s -> { s with gas_used = v}) }
+    let transactions_processed = Lens.{ get = (fun s -> s.transactions_processed); set = (fun v s -> { s with transactions_processed = v}) }
+    let withdrawals_processed = Lens.{ get = (fun s -> s.withdrawals_processed); set = (fun v s -> { s with withdrawals_processed = v}) }
+    let requests = Lens.{ get = (fun s -> s.requests); set = (fun v s -> { s with requests = v}) }
 
-  include TLens
   let make (world_state : WorldState.t) (current_block : Block.t) =
     { world_state
     ; current_block
@@ -181,8 +180,19 @@ module TransactionState = struct
     ; accessed_addresses : Address.Set.t  (** A_a *)
     ; accessed_keys : StorageKey.Set.t  (** A_K *) }
   [@@deriving lens {submodule = true; prefix = true}]
+    let initial_world_state = Lens.{ get = (fun s -> s.initial_world_state); set = (fun v s -> { s with initial_world_state = v}) }
+    let world_state = Lens.{ get = (fun s -> s.world_state); set = (fun v s -> { s with world_state = v}) }
+    let current_block = Lens.{ get = (fun s -> s.current_block); set = (fun v s -> { s with current_block = v}) }
+    let transient_storage = Lens.{ get = (fun s -> s.transient_storage); set = (fun v s -> { s with transient_storage = v}) }
+    let accounts_created_in_current_transaction = Lens.{ get = (fun s -> s.accounts_created_in_current_transaction); set = (fun v s -> { s with accounts_created_in_current_transaction = v}) }
+    let tx_origin = Lens.{ get = (fun s -> s.tx_origin); set = (fun v s -> { s with tx_origin = v}) }
+    let tx_gas_price = Lens.{ get = (fun s -> s.tx_gas_price); set = (fun v s -> { s with tx_gas_price = v}) }
+    let self_destruct = Lens.{ get = (fun s -> s.self_destruct); set = (fun v s -> { s with self_destruct = v}) }
+    let logs = Lens.{ get = (fun s -> s.logs); set = (fun v s -> { s with logs = v}) }
+    let refund = Lens.{ get = (fun s -> s.refund); set = (fun v s -> { s with refund = v}) }
+    let accessed_addresses = Lens.{ get = (fun s -> s.accessed_addresses); set = (fun v s -> { s with accessed_addresses = v}) }
+    let accessed_keys = Lens.{ get = (fun s -> s.accessed_keys); set = (fun v s -> { s with accessed_keys = v}) }
 
-  include TLens
 
   let pre_compiled_contract_addresses = Address.Map.keys Precompiles.precompiles
 
@@ -269,16 +279,10 @@ module Make
       val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
     end) =
 struct
-  open Account.TLens
+  open Account.Lens
   open WorldState
   include TransactionState
   open M
-
-  let dump_account addr =
-    let$ acc = !(account addr) in
-    Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
-      (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) ;
-    return ()
 
   let transfer_ether sender recipient amount =
     let$ sender_balance = !(account sender |-- balance) in
@@ -381,7 +385,7 @@ struct
       update_field accessed_keys (StorageKey.Set.add (addr, key)) )
 
   let process_call (from_tx : Transaction.t option) (msg : Evmc.Message.t) =
-    assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
+    assert (msg.kind = Evmc.Message.CallKind.Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
     let$ transfer_ok =
       if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
     in
