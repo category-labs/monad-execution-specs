@@ -28,7 +28,11 @@ module Override (Base : Evmc.VM) : Evmc.VM = struct
       (type t) (host : (module Evmc.HOST with type t = t)) (msg : Evmc.Message.t) (code : Bytes.t) (state : t)
       =
     match get_execution_token msg.code_address code with
-    | Some token -> Kvm.execute host msg (B16.to_bytes token) state
+    | Some token ->
+        Format.eprintf "Invoking KVM call\n" ;
+        let result, state = Kvm.execute host msg (B16.to_bytes token) state in
+        Format.eprintf "KVM create result: %s\n" (Yojson.Safe.pretty_to_string (Evmc.Result.to_yojson result)) ;
+        (result, state)
     | None -> (Evmc.Result.(failure StatusCode.Internal_error), state)
 
   let create
@@ -44,9 +48,12 @@ module Override (Base : Evmc.VM) : Evmc.VM = struct
         let init_contract_msg =
           {msg with kind = Call; elf_init = true; input_data = code_sections.init_blob}
         in
+        Format.eprintf "Invoking KVM create\n" ;
         let result, state = Kvm.execute host init_contract_msg (B16.to_bytes token) state in
-        (* Return the db blob in the format that's expected by EVM creation calls. *)
-        let result = {result with output_data = code_sections.db_blob} in
+        Format.eprintf "KVM create result: %s\n" (Yojson.Safe.pretty_to_string (Evmc.Result.to_yojson result)) ;
+        (* Return the db blob in the format that's expected by EVM creation calls. Note that kvm returns
+           gas_left = -1 *)
+        let result = {result with output_data = code_sections.db_blob; gas_left = msg.gas} in
         (result, state)
 
   let execute (type t) (host : (module Evmc.HOST with type t = t)) (msg : Evmc.Message.t) (code : Bytes.t) =

@@ -97,9 +97,17 @@ open Yojson.Safe.Util
 
 let ( .${} ) obj field = List.assoc field (to_assoc obj)
 let ( .${}<- ) obj field value : Yojson.Safe.t =
-  to_assoc obj
-  |> List.remove_assoc field
-  |> fun fields -> (field, value) :: fields |> fun fields -> `Assoc fields
+  let obj = to_assoc obj in
+  let obj =
+    let rec loop fields =
+      match fields with
+      | [] -> [(field, value)]
+      | (field', _value') :: fields when field = field' -> (field, value) :: fields
+      | (field', value') :: fields -> (field', value') :: loop fields
+    in
+    loop obj
+  in
+  `Assoc obj
 
 (*
 let ( .$() ) arr i = List.nth (to_list arr) i
@@ -119,12 +127,12 @@ let load_pre_state (pre_state : Yojson.Safe.t) : state =
   |> List.map (fun (address, acc) ->
       let address = Address.of_hex_string address in
       let wallet =
-        match 
-        List.assoc_opt address Wallet.known_wallets with
+        match List.assoc_opt address Wallet.known_wallets with
         | Some wallet -> wallet
-        | None -> failwith (Format.sprintf "Address %s does not correspond to a known private key\n"
-                            (Address.to_hex_string address)
-                    )
+        | None ->
+            failwith
+              (Format.sprintf "Address %s does not correspond to a known private key\n"
+                 (Address.to_hex_string address) )
       in
       let nonce = U256.of_yojson_exn acc.${"nonce"} in
       (address, {wallet; nonce}) )

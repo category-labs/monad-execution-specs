@@ -183,10 +183,9 @@ let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state :
   {fixtures with post; blocks; info; genesis_rlp; last_blockhash}
 
 let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
-  let open Yojson.Safe.Util in
-  let open Fixtures in
   (* TODO: this is a hack to add necessary extra fields *)
   let fixture_json = Fixtures.BlockchainTest.test_case_to_yojson fixture in
+  (*
   let fixture_json =
     (* Add its own RLP encoding and hash to each block. *)
     let blocks =
@@ -207,6 +206,7 @@ let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
     |> (fun f -> f.$("blocks") <- `List blocks)
     |> fun f -> f.$("genesisBlockHeader") <- genesis_block_header
   in
+  *)
   fixture_json
 
 let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) list) =

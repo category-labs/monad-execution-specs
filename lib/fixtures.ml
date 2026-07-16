@@ -81,8 +81,16 @@ module BlockchainTest = struct
     ; source : string option [@default None]
     ; source_hash : U256.t option [@key "sourceHash"] [@default None] }
   [@@deriving yojson {strict = false}]
-  let default_info = { filling_rpc_server = None; filling_tool_version = None; fixture_format = "";
-                     hash = U256.zero; lllc_version = None; repo = None; solidity = None; source =None; source_hash =None }
+  let default_info =
+    { filling_rpc_server = None
+    ; filling_tool_version = None
+    ; fixture_format = ""
+    ; hash = U256.zero
+    ; lllc_version = None
+    ; repo = None
+    ; solidity = None
+    ; source = None
+    ; source_hash = None }
 
   type blob_schedule =
     {base_fee_update_fraction : Uint.t [@key "baseFeeUpdateFraction"]; max : Uint.t; target : Uint.t}
@@ -92,10 +100,7 @@ module BlockchainTest = struct
     ; chain_id : Uint.t [@key "chainid"]
     ; network : revision }
   [@@deriving yojson]
-  let default_config =
-    { blob_schedule = []
-    ; chain_id = Chain.Monad.Testnet.chain_id
-    ; network = Single `Nine}
+  let default_config = {blob_schedule = []; chain_id = Chain.Monad.Testnet.chain_id; network = Single `Nine}
 
   (* Test case blocks come in a different format when the test case expects an exception to be raised. *)
   type test_case_block = {block : Block.t; expect_exception : string option}

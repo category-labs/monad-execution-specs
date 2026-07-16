@@ -16,3 +16,7 @@ end)
 let max_uint = 0xffffffffffffffffL
 
 module Hashtbl = Stdlib.Hashtbl.Make (Stdlib.Int64)
+
+let to_yojson (i : t) : Yojson.Safe.t = `Int (to_int i)
+let of_yojson (i : Yojson.Safe.t) : (t, string) result =
+  match i with `Int i -> Ok (of_int i) | _ -> Error "Uint64.t"

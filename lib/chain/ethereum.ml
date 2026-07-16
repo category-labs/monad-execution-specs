@@ -134,39 +134,39 @@ module Transaction = struct
 
   module Data_or_blob = struct
     type t = Bytes.t
-  (* Parse a string as either hex-encoded binary data, or a path to an ELF blob. *)
-  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
-    match json with
-    | `String data ->
-        let elf_blob_prefix = "ELF:" in
-        let kvm_prefix = Bytes.of_hex_string "ae0001" in
-        let is_elf_blob_path (data : string) : (string * string) option =
-          if String.starts_with ~prefix:elf_blob_prefix data then
-            let data = String.(sub data (length elf_blob_prefix) (length data - length elf_blob_prefix)) in
-            Some
-              ( match String.find_substring ~substring:"," data with
-              | Some sep_i ->
-                  ( String.sub data 0 sep_i
-                  , Bytes.of_hex_string (String.sub data (sep_i + 1) (String.length data - sep_i - 1)) )
-              | None -> (data, Bytes.empty) )
-          else None
-        in
-        Ok
-          ( match is_elf_blob_path data with
-          | None -> Bytes.of_hex_string data
-          | Some (blob_path, data) ->
-              let blob_data = In_channel.(with_open_bin blob_path input_all) in
-              let blob_size = Bytes.length blob_data in
-              let blob_size_encoded =
-                (* LE-encoded blob size as a byte array. *)
-                let bs = Stdlib.Bytes.create 4 in
-                Stdlib.Bytes.set_int32_le bs 0 (Int32.of_int blob_size) ;
-                Stdlib.Bytes.to_string bs
-              in
-              Bytes.(concat empty [kvm_prefix; blob_size_encoded; blob_data; data]) )
-    | _ -> Error "Chain.Ethereum.Transaction.data_of_yojson"
-  let to_yojson (bs : Bytes.t) =
-    if Bytes.length bs > 1024 * 16 then `String "<...>" else Bytes.to_yojson bs
+
+    (* Parse a string as either hex-encoded binary data, or a path to an ELF blob. *)
+    let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+      match json with
+      | `String data ->
+          let elf_blob_prefix = "ELF:" in
+          let kvm_prefix = Bytes.of_hex_string "ae0001" in
+          let is_elf_blob_path (data : string) : (string * string) option =
+            if String.starts_with ~prefix:elf_blob_prefix data then
+              let data = String.(sub data (length elf_blob_prefix) (length data - length elf_blob_prefix)) in
+              Some
+                ( match String.find_substring ~substring:"," data with
+                | Some sep_i ->
+                    ( String.sub data 0 sep_i
+                    , Bytes.of_hex_string (String.sub data (sep_i + 1) (String.length data - sep_i - 1)) )
+                | None -> (data, Bytes.empty) )
+            else None
+          in
+          Ok
+            ( match is_elf_blob_path data with
+            | None -> Bytes.of_hex_string data
+            | Some (blob_path, data) ->
+                let blob_data = In_channel.(with_open_bin blob_path input_all) in
+                let blob_size = Bytes.length blob_data in
+                let blob_size_encoded =
+                  (* LE-encoded blob size as a byte array. *)
+                  let bs = Stdlib.Bytes.create 4 in
+                  Stdlib.Bytes.set_int32_le bs 0 (Int32.of_int blob_size) ;
+                  Stdlib.Bytes.to_string bs
+                in
+                Bytes.(concat empty [kvm_prefix; blob_size_encoded; blob_data; data]) )
+      | _ -> Error "Chain.Ethereum.Transaction.data_of_yojson"
+    let to_yojson (bs : Bytes.t) = if Bytes.length bs > 1024 * 16 then `String "<...>" else Bytes.to_yojson bs
   end
 
   (* YP 4.2 *)
@@ -488,12 +488,12 @@ module Transaction = struct
       (* Ethereum text fixtures encode numeric values as hex strings, but yojson assumes primitive number types
          are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
          match on it. *)
-        match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
-        | Ok None | Ok (Some 0) -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
-        | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
-        | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
-        | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
-        | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
+      match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
+      | Ok None | Ok (Some 0) -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
+      | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
+      | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
+      | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
+      | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
 
   let to_yojson (tx : t) : Yojson.Safe.t =
     let untagged_tx =

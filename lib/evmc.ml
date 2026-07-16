@@ -33,6 +33,7 @@ module Result = struct
       | Out_of_memory
       (* TODO *)
       | Create_from_delegated_eoa
+    [@@deriving yojson]
 
     let to_string = function
       | Success -> "Success"
@@ -67,6 +68,7 @@ module Result = struct
     ; gas_refund : Int64.t
     ; output_data : Bytes.t
     ; create_address : Address.t }
+  [@@deriving yojson]
 
   let failure error_code =
     assert (StatusCode.(error_code <> Success && error_code <> Revert)) ;
@@ -79,7 +81,7 @@ end
 
 module Message = struct
   module CallKind = struct
-    type t = Call | DelegateCall | CallCode | Create | Create2
+    type t = Call | DelegateCall | CallCode | Create | Create2 [@@deriving yojson]
   end
 
   (** Equivalent to {{:https://evmc.ethereum.org/structevmc__message.html}[evmc_message]}. *)
@@ -98,6 +100,7 @@ module Message = struct
     ; code_address : Address.t
     ; code : Bytes.t
     ; memory_capacity : Int32.t }
+  [@@deriving yojson]
 end
 
 module TxInitcode = struct
