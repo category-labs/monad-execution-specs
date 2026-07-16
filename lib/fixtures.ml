@@ -81,6 +81,8 @@ module BlockchainTest = struct
     ; source : string option [@default None]
     ; source_hash : U256.t option [@key "sourceHash"] [@default None] }
   [@@deriving yojson {strict = false}]
+  let default_info = { filling_rpc_server = None; filling_tool_version = None; fixture_format = "";
+                     hash = U256.zero; lllc_version = None; repo = None; solidity = None; source =None; source_hash =None }
 
   type blob_schedule =
     {base_fee_update_fraction : Uint.t [@key "baseFeeUpdateFraction"]; max : Uint.t; target : Uint.t}
@@ -90,6 +92,10 @@ module BlockchainTest = struct
     ; chain_id : Uint.t [@key "chainid"]
     ; network : revision }
   [@@deriving yojson]
+  let default_config =
+    { blob_schedule = []
+    ; chain_id = Chain.Monad.Testnet.chain_id
+    ; network = Single `Nine}
 
   (* Test case blocks come in a different format when the test case expects an exception to be raised. *)
   type test_case_block = {block : Block.t; expect_exception : string option}
@@ -117,15 +123,15 @@ module BlockchainTest = struct
           ; ("expectException", [%to_yojson: string] exn) ]
 
   type test_case =
-    { info : info [@key "_info"]
+    { info : info [@key "_info"] [@default default_info]
     ; network : revision option [@key "network"] [@default None] (* To be deprecated. *)
     ; blocks : test_case_block list
-    ; config : config
+    ; config : config [@default default_config]
     ; genesis_block_header : Block.Header.t [@key "genesisBlockHeader"]
-    ; genesis_rlp : Bytes.t [@key "genesisRLP"]
-    ; last_blockhash : U256.t [@key "lastblockhash"]
+    ; genesis_rlp : Bytes.t [@key "genesisRLP"] [@default Bytes.empty]
+    ; last_blockhash : U256.t [@key "lastblockhash"] [@default U256.zero]
     ; pre : Account.t Address.Map.t
-    ; post : Account.t Address.Map.t [@key "postState"]
+    ; post : Account.t Address.Map.t [@key "postState"] [@default Address.Map.empty]
     ; seal_engine : string option [@key "sealEngine"] [@default None] (* Deprecated. *) }
   [@@deriving yojson]
 

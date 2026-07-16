@@ -12,6 +12,13 @@
  (libraries monad_lib kvm)
  (modules execrun))
 
+(executable
+ (name resign)
+ (public_name resign)
+ (modes byte exe)
+ (libraries monad_lib)
+ (modules resign))
+
 (library
  (name kvm)
  (libraries monad_lib external_vm)

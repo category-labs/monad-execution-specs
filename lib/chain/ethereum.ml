@@ -132,6 +132,43 @@ module Transaction = struct
         Crypto.ecrecover {y_parity; r; s} auth_hash )
   end
 
+  module Data_or_blob = struct
+    type t = Bytes.t
+  (* Parse a string as either hex-encoded binary data, or a path to an ELF blob. *)
+  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
+    match json with
+    | `String data ->
+        let elf_blob_prefix = "ELF:" in
+        let kvm_prefix = Bytes.of_hex_string "ae0001" in
+        let is_elf_blob_path (data : string) : (string * string) option =
+          if String.starts_with ~prefix:elf_blob_prefix data then
+            let data = String.(sub data (length elf_blob_prefix) (length data - length elf_blob_prefix)) in
+            Some
+              ( match String.find_substring ~substring:"," data with
+              | Some sep_i ->
+                  ( String.sub data 0 sep_i
+                  , Bytes.of_hex_string (String.sub data (sep_i + 1) (String.length data - sep_i - 1)) )
+              | None -> (data, Bytes.empty) )
+          else None
+        in
+        Ok
+          ( match is_elf_blob_path data with
+          | None -> Bytes.of_hex_string data
+          | Some (blob_path, data) ->
+              let blob_data = In_channel.(with_open_bin blob_path input_all) in
+              let blob_size = Bytes.length blob_data in
+              let blob_size_encoded =
+                (* LE-encoded blob size as a byte array. *)
+                let bs = Stdlib.Bytes.create 4 in
+                Stdlib.Bytes.set_int32_le bs 0 (Int32.of_int blob_size) ;
+                Stdlib.Bytes.to_string bs
+              in
+              Bytes.(concat empty [kvm_prefix; blob_size_encoded; blob_data; data]) )
+    | _ -> Error "Chain.Ethereum.Transaction.data_of_yojson"
+  let to_yojson (bs : Bytes.t) =
+    if Bytes.length bs > 1024 * 16 then `String "<...>" else Bytes.to_yojson bs
+  end
+
   (* YP 4.2 *)
   type legacy_tx =
     { nonce : U64.t (* T_n *)
@@ -141,7 +178,7 @@ module Transaction = struct
     ; s : U256.t (* T_s *)
     ; to_ : Address.t_opt
           (* T_t *) [@of_yojson Address.t_opt_of_yojson] [@to_yojson Address.t_opt_to_yojson] [@key "to"]
-    ; data : Bytes.t (* Either T_d or T_i *)
+    ; data : Data_or_blob.t (* Either T_d or T_i *)
     ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
     ; v : U256.t (* T_w *) }
   [@@deriving yojson {strict = false}]
@@ -153,7 +190,7 @@ module Transaction = struct
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
     ; to_ : Address.t_opt (* T_t *) [@key "to"]
-    ; data : Bytes.t (* Either T_d or T_i *)
+    ; data : Data_or_blob.t (* Either T_d or T_i *)
     ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
@@ -167,7 +204,7 @@ module Transaction = struct
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
     ; to_ : Address.t_opt (* T_t *) [@key "to"]
-    ; data : Bytes.t (* Either T_d or T_i *)
+    ; data : Data_or_blob.t (* Either T_d or T_i *)
     ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
     ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
@@ -183,7 +220,7 @@ module Transaction = struct
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
     ; to_ : Address.t_opt (* T_t *) [@key "to"]
-    ; data : Bytes.t (* Either T_d or T_i *)
+    ; data : Data_or_blob.t (* Either T_d or T_i *)
     ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
     ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
@@ -451,50 +488,12 @@ module Transaction = struct
       (* Ethereum text fixtures encode numeric values as hex strings, but yojson assumes primitive number types
          are encoded directly as numbers, so we read the input as a U64.t, then unpack it into an int to pattern
          match on it. *)
-      match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
-      | Ok None | Ok (Some 0) -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
-      | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
-      | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
-      | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
-      | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
-
-  (* TODO: this is a temporary hack. Do a second pass over the transaction to check for ELF payloads. *)
-  let of_yojson (json : Yojson.Safe.t) : (t, string) result =
-    let elf_blob_prefix = "ELF:" in
-    let kvm_prefix = Bytes.of_hex_string "ae0001" in
-    let is_elf_blob_path (data : string) : (string * string) option =
-      if String.starts_with ~prefix:elf_blob_prefix data then
-        let data = String.(sub data (length elf_blob_prefix) (length data - length elf_blob_prefix)) in
-        Some
-          ( match String.find_substring ~substring:"," data with
-          | Some sep_i ->
-              ( String.sub data 0 sep_i
-              , Bytes.of_hex_string (String.sub data sep_i (String.length data - sep_i)) )
-          | None -> (data, Bytes.empty) )
-      else None
-    in
-    let load_elf_blob (data : string) : string =
-      match is_elf_blob_path data with
-      | None -> data
-      | Some (blob_path, data) ->
-          let blob_data = In_channel.(with_open_bin blob_path input_all) in
-          let blob_size = Bytes.length blob_data in
-          let blob_size_encoded =
-            (* LE-encoded blob size as a byte array. *)
-            let bs = Stdlib.Bytes.create 4 in
-            Stdlib.Bytes.set_int32_le bs 0 (Int32.of_int blob_size) ;
-            Stdlib.Bytes.to_string bs
-          in
-          Bytes.(concat empty [kvm_prefix; blob_size_encoded; blob_data; data])
-    in
-    Result.(
-      let$ tx = of_yojson json in
-      return
-        ( match tx with
-        | Legacy tx -> Legacy {tx with data = load_elf_blob tx.data}
-        | AccessList tx -> AccessList {tx with data = load_elf_blob tx.data}
-        | FeeMarket tx -> FeeMarket {tx with data = load_elf_blob tx.data}
-        | SetCode tx -> SetCode {tx with data = load_elf_blob tx.data} ) )
+        match Option.map U64.to_int <$> [%of_yojson: U64.t option] (Yojson.Safe.Util.member "type" json) with
+        | Ok None | Ok (Some 0) -> [%of_yojson: legacy_tx] json >>= fun tx -> return (Legacy tx)
+        | Ok (Some 1) -> [%of_yojson: access_list_tx] json >>= fun tx -> return (AccessList tx)
+        | Ok (Some 2) -> [%of_yojson: fee_market_tx] json >>= fun tx -> return (FeeMarket tx)
+        | Ok (Some 4) -> [%of_yojson: set_code_tx] json >>= fun tx -> return (SetCode tx)
+        | Ok _ | Error _ -> fail "Ethereum.Transaction.t" )
 
   let to_yojson (tx : t) : Yojson.Safe.t =
     let untagged_tx =
@@ -551,7 +550,7 @@ module Block = struct
       ; blob_gas_used : U64.t (* EIP-4844 *) [@key "blobGasUsed"]
       ; excess_blob_gas : U64.t (* EIP-4844 *) [@key "excessBlobGas"]
       ; parent_beacon_block_root : B32.t (* EIP-4788 *) [@key "parentBeaconBlockRoot"]
-      ; requests_hash : B32.t (* EIP-7685 *) [@key "requestsHash"] }
+      ; requests_hash : B32.t (* EIP-7685 *) [@key "requestsHash"] [@default Crypto.sha_256 Bytes.empty] }
     [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens]
 
     (* YP 4.4.3 (40) *)
@@ -611,8 +610,8 @@ module Block = struct
   type t =
     { header : Header.t (* B_H *) [@key "blockHeader"]
     ; transactions : Transaction.t list (* B_T *) [@key "transactions"]
-    ; ommers : Header.t list (* B_U *) [@key "uncleHeaders"]
-    ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] }
+    ; ommers : Header.t list (* B_U *) [@key "uncleHeaders"] [@default []]
+    ; withdrawals : Withdrawal.t list (* B_W *) [@key "withdrawals"] [@default []] }
   [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens]
 
   let empty = {header = empty; transactions = []; ommers = []; withdrawals = []}
