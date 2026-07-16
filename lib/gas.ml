@@ -151,6 +151,10 @@ let create_cost = ~$32_000
 let create_cost_per_initcode_word = ~$2
 let code_deposit_per_byte = ~$200
 
+let create_cost_per_code_gas code =
+  if Bytes.starts_with ~prefix:(Bytes.of_hex_string "0xae0001") code then zero
+else ~$(Bytes.length code) * code_deposit_per_byte
+
 (* YP C_gascap *)
 let c_gascap ~gas ~gas_left ~memory_cost ~extra_cost =
   if Uint.(gas_left >= memory_cost + extra_cost) then

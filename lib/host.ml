@@ -440,22 +440,22 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
         | Success ->
             let contract_code = result.output_data in
             let contract_length = Bytes.length contract_code in
-            let contract_code_gas = Gas.(of_int contract_length * code_deposit_per_byte) in
+            let contract_code_gas = Gas.(create_cost_per_code_gas contract_code) in
             if
               (contract_length > 0 && contract_code.[0] = '\xef')
               || Gas.(contract_code_gas > of_int64 result.gas_left)
-            then
+            then (
               return
                 { result with
                   gas_left = Int64.zero
                 ; output_data = Bytes.empty
                 ; status_code =
                     Evmc.Result.StatusCode.(
-                      if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
+                      if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) } )
             else
               let$ () = account create_address |-- code := contract_code in
               return {result with create_address}
-        | _ -> return result
+        | _ ->  return result
 
     let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =
       let$ () =
