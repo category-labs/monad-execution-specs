@@ -3,6 +3,9 @@ open Chain.Ethereum
 open Numeric
 open Byte_string
 
+let failwith fmt =
+  Format.kfprintf (fun ppf -> Format.pp_print_newline ppf () ; exit 1) Format.err_formatter fmt
+
 let input_file = ref None
 let output_file = ref None
 let chain_id = ref Chain.Monad.Testnet.chain_id
@@ -126,16 +129,16 @@ let load_pre_state (pre_state : Yojson.Safe.t) : state =
   to_assoc pre_state
   |> List.map (fun (address, acc) ->
       let address = Address.of_hex_string address in
-      let wallet =
-        match List.assoc_opt address Wallet.known_wallets with
-        | Some wallet -> wallet
-        | None ->
-            failwith
-              (Format.sprintf "Address %s does not correspond to a known private key\n"
-                 (Address.to_hex_string address) )
-      in
-      let nonce = U256.of_yojson_exn acc.${"nonce"} in
-      (address, {wallet; nonce}) )
+      match List.assoc_opt address Wallet.known_wallets with
+      | None ->
+          Format.eprintf
+            "Address %s does not correspond to a known private key; it won't be able to submit transactions\n"
+            (Address.to_hex_string address) ;
+          None
+      | Some wallet ->
+          let nonce = U256.of_yojson_exn acc.${"nonce"} in
+          Some (address, {wallet; nonce}) )
+  |> List.filter_map Fun.id
   |> Address.Map.of_list
 
 let rewire_transaction (tx : Yojson.Safe.t) (state : state) =
@@ -143,7 +146,9 @@ let rewire_transaction (tx : Yojson.Safe.t) (state : state) =
   let {wallet; nonce} =
     match Address.Map.find_opt sender state with
     | Some acc -> acc
-    | None -> failwith (Format.sprintf "Cannot find the state for %s\n" (Address.to_hex_string sender))
+    | None ->
+        failwith "Cannot find the state for sender %s (private key not known?)\n"
+          (Address.to_hex_string sender)
   in
 
   (* Update the transaction's nonce and increment it in the state. *)

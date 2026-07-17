@@ -265,6 +265,8 @@ end
 
 module type SELF = Evmc.HOST with type t = TransactionState.t
 
+let trace = ref false
+
 module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
   module rec Self : sig
     include SELF
@@ -277,6 +279,36 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
     include TransactionState
     open M
 
+    (* Throwaway tracing: log every host API call and its arguments to stderr.
+       Wrapping the eprintf in a state-monad thunk ensures the log fires when the
+       computation actually runs, matching the order the VM issues host calls. *)
+    let trace_call (msg : string) : unit t =
+      if trace.contents then (fun s -> Format.eprintf "[host] %s\n%!" msg ; ((), s)) else fun s -> ((), s)
+
+    let show_addr = Address.to_hex_string
+    let show_b32 = B32.to_hex_string
+    let show_u256 v = U256.to_hex_string v
+    let show_uint64 v = Printf.sprintf "0x%Lx" v
+    let show_bytes b =
+      if Bytes.starts_with ~prefix:(Bytes.of_hex_string "0xae0001") b then "<ELF BLOB>"
+      else Format.sprintf "0x%s" (Bytes.to_hex_string b)
+    let show_topics topics =
+      let items = List.map show_b32 topics in
+      "[" ^ String.concat "," items ^ "]"
+    let show_call_kind : Evmc.Message.CallKind.t -> string = function
+      | Call -> "Call"
+      | DelegateCall -> "DelegateCall"
+      | CallCode -> "CallCode"
+      | Create -> "Create"
+      | Create2 -> "Create2"
+    let show_message (m : Evmc.Message.t) =
+      Format.sprintf
+        "{kind=%s; static=%b; delegated=%b; depth=%ld; gas=%s; sender=%s; recipient=%s; code_address=%s; \
+         value=%s; input_data=%s; create2_salt=%s}"
+        (show_call_kind m.kind) m.static m.delegated m.depth (show_uint64 m.gas) (show_addr m.sender)
+        (show_addr m.recipient) (show_addr m.code_address) (show_u256 m.value) (show_bytes m.input_data)
+        (show_b32 m.create2_salt)
+
     let transfer_ether sender recipient amount =
       let$ sender_balance = !(account sender |-- balance) in
       if U256.(sender_balance >= amount) then
@@ -285,12 +317,19 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
         return true
       else return false
 
-    let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
+    let account_exists addr =
+      let$ () = trace_call (Format.sprintf "account_exists addr=%s" (show_addr addr)) in
+      Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
     let get_storage addr key =
+      let$ () = trace_call (Format.sprintf "get_storage addr=%s key=%s" (show_addr addr) (show_b32 key)) in
       !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
 
     let set_storage addr key v =
+      let$ () =
+        trace_call
+          (Format.sprintf "set_storage addr=%s key=%s v=%s" (show_addr addr) (show_b32 key) (show_b32 v))
+      in
       let$ o =
         !( initial_world_state
          |-- WorldState.account addr
@@ -323,21 +362,32 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
         | () when x o && y c && x v -> ModifiedRestored
         | () -> Assigned )
 
-    let get_balance addr = !(account addr |-- balance)
+    let get_balance addr =
+      let$ () = trace_call (Format.sprintf "get_balance addr=%s" (show_addr addr)) in
+      !(account addr |-- balance)
 
     let get_code_size addr =
+      let$ () = trace_call (Format.sprintf "get_code_size addr=%s" (show_addr addr)) in
       let$ code = !(account addr |-- code) in
       return (Uint64.of_int (Bytes.length code))
 
     let get_code_hash addr =
+      let$ () = trace_call (Format.sprintf "get_code_hash addr=%s" (show_addr addr)) in
       let$ account = !(account addr) in
       return (if Account.is_empty account then None else Some (Crypto.keccak_256 account.code))
 
     let copy_code addr ~offset ~size =
+      let$ () =
+        trace_call (Format.sprintf "copy_code addr=%s offset=%d size=%d" (show_addr addr) offset size)
+      in
       let$ code = !(account addr |-- code) in
       return (Bytes.sub_with_zero_padding code offset size)
 
     let selfdestruct ~address ~beneficiary =
+      let$ () =
+        trace_call
+          (Format.sprintf "selfdestruct address=%s beneficiary=%s" (show_addr address) (show_addr beneficiary))
+      in
       let$ account_balance = !(account address |-- balance) in
       let$ transfer_ok = transfer_ether address beneficiary account_balance in
       assert transfer_ok ;
@@ -444,18 +494,18 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
             if
               (contract_length > 0 && contract_code.[0] = '\xef')
               || Gas.(contract_code_gas > of_int64 result.gas_left)
-            then (
+            then
               return
                 { result with
                   gas_left = Int64.zero
                 ; output_data = Bytes.empty
                 ; status_code =
                     Evmc.Result.StatusCode.(
-                      if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) } )
+                      if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
             else
               let$ () = account create_address |-- code := contract_code in
               return {result with create_address}
-        | _ ->  return result
+        | _ -> return result
 
     let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =
       let$ () =
@@ -505,10 +555,14 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
       let$ () = when_ (result.status_code <> Success) (put initial_state) in
       return result
 
-    let call (msg : Evmc.Message.t) = call_impl ~from_tx:None msg
+    let call (msg : Evmc.Message.t) =
+      let$ () = trace_call (Format.sprintf "call msg=%s" (show_message msg)) in
+      call_impl ~from_tx:None msg
 
     (* Call from a transaction sent by an EOA, as opposed to a system transaction or a CALL opcode. *)
-    let call_from_eoa (tx : Transaction.t) (msg : Evmc.Message.t) = call_impl ~from_tx:(Some tx) msg
+    let call_from_eoa (tx : Transaction.t) (msg : Evmc.Message.t) =
+      let$ () = trace_call (Format.sprintf "call_from_eoa msg=%s" (show_message msg)) in
+      call_impl ~from_tx:(Some tx) msg
 
     let get_tx_context (state : TransactionState.t) =
       ( Evmc.TxContext.
@@ -533,6 +587,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
       , state )
 
     let get_block_hash (i : Uint64.t) =
+      let$ () = trace_call (Format.sprintf "get_block_hash i=%s" (show_uint64 i)) in
       let$ state = get in
       state.world_state.history
       |> List.find_opt (fun (block : Block.t) -> Uint.(block.header.number = of_uint64 i))
@@ -540,10 +595,16 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
       |> return
 
     let emit_log address ~(data : Bytes.t) ~(topics : B32.t list) =
+      let$ () =
+        trace_call
+          (Format.sprintf "emit_log address=%s data=%s topics=%s" (show_addr address) (show_bytes data)
+             (show_topics topics) )
+      in
       let log : Log.t = {address; topics; data} in
       update_field logs (fun logs -> log :: logs)
 
     let access_account addr : [`Warm | `Cold] t =
+      let$ () = trace_call (Format.sprintf "access_account addr=%s" (show_addr addr)) in
       let$ accessed = !accessed_addresses in
       if Option.is_some (Address.Set.find_opt addr accessed) then return `Warm
       else
@@ -551,6 +612,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
         return `Cold
 
     let access_storage addr key =
+      let$ () = trace_call (Format.sprintf "access_storage addr=%s key=%s" (show_addr addr) (show_b32 key)) in
       let$ accessed = !accessed_keys in
       if Option.is_some (StorageKey.Set.find_opt (addr, key) accessed) then return `Warm
       else
@@ -564,9 +626,19 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.VM) = struct
       |-- B32.Map.at key
       |-- Option.get_or_default B32.zeros
 
-    let get_transient_storage addr key = !(transient_storage addr key)
+    let get_transient_storage addr key =
+      let$ () =
+        trace_call (Format.sprintf "get_transient_storage addr=%s key=%s" (show_addr addr) (show_b32 key))
+      in
+      !(transient_storage addr key)
 
-    let set_transient_storage addr key value = transient_storage addr key := value
+    let set_transient_storage addr key value =
+      let$ () =
+        trace_call
+          (Format.sprintf "set_transient_storage addr=%s key=%s value=%s" (show_addr addr) (show_b32 key)
+             (show_b32 value) )
+      in
+      transient_storage addr key := value
   end
 
   include Self

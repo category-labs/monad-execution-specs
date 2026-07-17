@@ -31,7 +31,7 @@ module Override (Base : Evmc.VM) : Evmc.VM = struct
     | Some token ->
         Format.eprintf "Invoking KVM call\n" ;
         let result, state = Kvm.execute host msg (B16.to_bytes token) state in
-        Format.eprintf "KVM create result: %s\n" (Yojson.Safe.pretty_to_string (Evmc.Result.to_yojson result)) ;
+        Format.eprintf "KVM call result: %s\n" (Yojson.Safe.pretty_to_string (Evmc.Result.to_yojson result)) ;
         (result, state)
     | None -> (Evmc.Result.(failure StatusCode.Internal_error), state)
 

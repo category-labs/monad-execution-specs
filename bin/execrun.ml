@@ -35,6 +35,7 @@ let () =
       usage_str )
 
 let trace = !trace
+let () = Host.trace.contents <- trace
 let execution_mode = !execution_mode
 
 let fixtures_file =

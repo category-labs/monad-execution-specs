@@ -266,12 +266,6 @@ module Make (Params : sig
   val debug_tstore : bool (* VM fuzzer support *)
 end) =
 struct
-  let trace ?(print = Params.trace) msg =
-    if print then (
-      Format.print_string (msg ()) ;
-      Format.print_flush () )
-    else ()
-
   module Memory = Memory (Params)
 
   let max_stack_depth = 1024
@@ -1980,9 +1974,15 @@ struct
         Format.print_flush () )
       else fun _ -> ()
 
+    let trace ?(print = Params.trace) msg =
+      if print then (
+        Format.print_string (String.make (4 * execution_environment.depth) ' ') ;
+        Format.print_string (msg ()) ;
+        Format.print_flush () )
+      else ()
+
     let rec run (s : MachineState.t) =
       (* The dispatch loop runs on each opcode so it's written in direct style for performance. *)
-      trace_state s ;
       let pc = s.pc in
       let opcode =
         (* YP (157) *)
@@ -1992,21 +1992,29 @@ struct
         | _ -> Opcode.Stop
       in
       trace (fun () ->
-          let info = Opcode.info opcode in
-          Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
+          Format.sprintf "{\"pc\":%d,\"opName\":%s\",\"gas\":\"%s\",\"depth\":%d}\n" (U256.to_int pc)
+            (Opcode.info opcode).name (Gas.to_hex_string s.gas) execution_environment.depth ) ;
       let result, s = execute_opcode opcode s in
       match result with Ok continue -> if continue then run s else (Ok (), s) | Error err -> (Error err, s)
   end
 
+  let trace depth ?(print = Params.trace) msg =
+    if print then (
+      Format.print_string (String.make (4 * depth) ' ') ;
+      Format.print_string (msg ()) ;
+      Format.print_flush () )
+    else ()
+
   let execute (type t) (host : (module Evmc.HOST with type t = t)) (msg : Evmc.Message.t) (code : Bytes.t) :
       t -> Evmc.Result.t * t =
     let open Chain.Ethereum in
-    trace (fun () -> "Start execution\n") ;
-    trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
     let (module Host) = host in
     let open Host in
     let open Monad.State (Host) in
     let$ tx_context = get_tx_context in
+    let depth = Int32.to_int msg.depth in
+    trace depth (fun () -> "Start execution\n") ;
+    trace depth (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
     let$ host = get in
     let module Exe =
       Executor
@@ -2018,13 +2026,13 @@ struct
     let memory_capacity = Uint.of_uint32 msg.memory_capacity in
     let state = Exe.MachineState.initial ~host ~gas ~memory_capacity in
     let res, state = Exe.run state in
-    trace (fun () -> "Finished execution\n") ;
+    trace depth (fun () -> "Finished execution\n") ;
     (* Propagate host updates back to the caller. *)
     let$ () = put state.host in
     return
       ( match res with
       | Ok () ->
-          trace (fun () ->
+          trace depth (fun () ->
               Format.sprintf "Execution OK, returning [[%s]]\n" (Bytes.to_hex_string state.output_buffer) ) ;
           Evmc.Result.
             { status_code = Success
@@ -2033,7 +2041,8 @@ struct
             ; output_data = state.output_buffer
             ; create_address = Address.zero }
       | Error err -> (
-          trace (fun () -> Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err)) ;
+          trace depth (fun () ->
+              Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err) ) ;
           match err with
           | Success -> assert false
           | Revert ->
