@@ -1,7 +1,7 @@
 open Chain.Ethereum
 open Numeric
 open Byte_string
-open Host
+open State
 open Lens.Infix
 
 module Error = struct
@@ -62,22 +62,25 @@ struct
   module Host = Instantiation.Host
   module Vm = Vm.Make (VmParams) (Host)
 
-  let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
-    let kind, current_target, data, code, code_address =
+  let precompile_addresses = Address.Map.keys (Precompiles.precompiles Params.revision)
+
+  let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) (world_state : WorldState.t) =
+    let kind, current_target, data, code_address =
       match Transaction.call_or_create tx with
-      | Call {to_; data} -> (Evmc.Message.CallKind.Call, to_, data, Bytes.empty, to_)
-      | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, initcode, Bytes.empty, Address.zero)
+      | Call {to_; data} -> (Evmc.Message.CallKind.Call, to_, data, to_)
+      | Create {initcode} -> (Evmc.Message.CallKind.Create, Address.zero, initcode, Address.zero)
     in
+    let delegated = Delegation.is_valid_delegation world_state.^(WorldState.account code_address).code in
     Evmc.Message.
       { kind
       ; sender
       ; recipient = current_target
       ; value = Transaction.value tx
       ; gas = Gas.to_int64 gas
-      ; code
+      ; code = Bytes.empty (* Pending removal once evmc.ml matches Monad's EVMC. *)
       ; code_address
       ; static = false
-      ; delegated = Delegation.is_valid_delegation code
+      ; delegated
       ; input_data = data
       ; depth = 0l
       ; create2_salt = B32.zeros
@@ -268,10 +271,12 @@ struct
 
       (* Note that the access set is initialized after authorizations are processed. In particular, if the
          recipient changes delegation, it is the new delegation that is warmed up. *)
-      let transaction_state = TransactionState.initialize_access_sets tx transaction_state in
+      let transaction_state =
+        TransactionState.initialize_access_sets tx ~precompile_addresses transaction_state
+      in
 
       let available_gas = Gas.(Transaction.gas_limit tx - intrinsic_gas) in
-      let message = prepare_message sender available_gas tx in
+      let message = prepare_message sender available_gas tx transaction_state.world_state in
       let result, transaction_state = Host.call_from_eoa tx message transaction_state in
 
       (* Bump the emptying transaction counter of the sender after execution finishes. This accounts
@@ -413,6 +418,7 @@ struct
           ; accounts_created_in_current_transaction = Address.Set.empty
           ; tx_origin = system_sender_address
           ; tx_gas_price = Uint.zero
+          ; tx_gas_limit = Uint.zero
           ; self_destruct = Address.Set.empty
           ; logs = []
           ; refund = U256.zero
