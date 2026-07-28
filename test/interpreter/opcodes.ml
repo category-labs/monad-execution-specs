@@ -13,19 +13,7 @@ let test_keccak (input : Bytes.t) (output : U256.t) =
   let msg =
     bytecode_to_call_message (Program.keccak (Lit U256.zero) (Lit (U256.of_int (Bytes.length input))))
   in
-  ignore
-    (test_message
-       ~prepare_vm:
-         Evm.Vm.M.(
-           let$ mem = !Evm.Vm.MachineState.memory in
-           let mem =
-             mem
-             |> Evm.Vm.Memory.extend_to ~start:U256.zero ~size_bytes:U256.(~$(Bytes.length input))
-             |> Option.get
-             |> Evm.Vm.Memory.write_block_at U256.zero input
-           in
-           Evm.Vm.MachineState.memory := mem )
-       ~check_vm_state:(expect_stack [output]) msg )
+  ignore (test_message ~initial_memory:input ~expect_output_stack:[output] msg)
 
 let test_cases_keccak test_cases =
   ( "Keccak"

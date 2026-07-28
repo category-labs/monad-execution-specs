@@ -44,23 +44,14 @@ module Error = struct
   let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
 end
 
-module Make (Params : sig
-  include Chain.Monad.PARAMS
-  val trace : bool
-end) =
-struct
+module Make_with_vm (Params : Chain.Monad.PARAMS) (Evm : Vm.VM) = struct
   let invalid_block block reason = Error Error.(Invalid_block {block; reason})
   let invalid_transaction block transaction reason =
     Error Error.(Invalid_transaction {block; transaction; reason})
   type 'a or_error = ('a, Error.t) result
 
-  module VmParams = struct
-    include Params
-    let debug_tstore = false
-  end
-  module Instantiation = Host.Instantiate (Params) (Vm.Make (VmParams))
-  module Host = Instantiation.Host
-  module Vm = Vm.Make (VmParams) (Host)
+  module Constants = Vm.Constants (Params)
+  include Host.Instantiate (Params) (Evm (Params))
 
   let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
     let kind, current_target, data, code, code_address =
@@ -81,7 +72,7 @@ struct
       ; input_data = data
       ; depth = 0l
       ; create2_salt = B32.zeros
-      ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
+      ; memory_capacity = Uint.to_uint32 Constants.max_memory_usage }
 
   let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
     (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her
@@ -176,7 +167,7 @@ struct
       (* Initcode size *)
       let$ () =
         match Transaction.call_or_create tx with
-        | Create {initcode} when Bytes.length initcode > Vm.max_init_code_size ->
+        | Create {initcode} when Bytes.length initcode > Constants.max_init_code_size ->
             invalid_transaction block tx Initcode_too_long
         | _ -> return ()
       in
@@ -402,7 +393,7 @@ struct
           ; create2_salt = B32.zeros
           ; code_address = addr
           ; code
-          ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
+          ; memory_capacity = Uint.to_uint32 Constants.max_memory_usage }
       in
       let transaction_state =
         TransactionState.
@@ -522,3 +513,5 @@ struct
     in
     return {block_state.world_state with history = finalized_block :: world_state.history}
 end
+
+module Make (P : Chain.Monad.PARAMS) = Make_with_vm (P) (Vm.Make)

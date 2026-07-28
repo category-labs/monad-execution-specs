@@ -9,7 +9,6 @@ open Host
 module ChainParams = struct
   let chain_id = Mainnet.chain_id
   let revision = `Eight
-  let trace = false
 end
 
 module Wallet = struct
