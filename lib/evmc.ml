@@ -33,6 +33,7 @@ module Result = struct
       | Out_of_memory
       (* TODO *)
       | Create_from_delegated_eoa
+    [@@deriving yojson]
 
     let to_string = function
       | Success -> "Success"
@@ -86,7 +87,7 @@ module Message = struct
   type t =
     { kind : CallKind.t
     ; static : bool
-    ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGAECALL opcode *)
+    ; delegated : bool (* Represents EIP-7702 delegated calls, not the DELEGATECALL opcode *)
     ; depth : Int32.t
     ; gas : Uint64.t
     ; recipient : Address.t

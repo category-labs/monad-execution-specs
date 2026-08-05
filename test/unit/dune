@@ -12,3 +12,15 @@
  (name mpt)
  (modules mpt)
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest yojson))
+
+(test
+ (name solidity)
+ (modules solidity)
+ (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest yojson))
+
+(test
+ (name staking)
+ (modules staking)
+ (deps
+  (source_tree staking_tests))
+ (libraries monad_lib test_utils secp256k1-internal alcotest))

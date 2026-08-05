@@ -19,7 +19,7 @@ end)
 (* Pricings are as per Monad §4.2. *)
 
 let add_address = Address.of_hex_string "0x06"
-let add (msg : Evmc.Message.t) : Evmc.Result.t =
+let add (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = spend_gas Gas.(of_int 300) in
@@ -30,7 +30,7 @@ let add (msg : Evmc.Message.t) : Evmc.Result.t =
        return (delta_1_inv C_1.(p_0 + p_1)) ) )
 
 let mul_address = Address.of_hex_string "0x07"
-let mul (msg : Evmc.Message.t) : Evmc.Result.t =
+let mul (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = spend_gas Gas.(of_int 30_000) in
@@ -41,7 +41,7 @@ let mul (msg : Evmc.Message.t) : Evmc.Result.t =
        return (delta_1_inv C_1.(n * p_0)) ) )
 
 let pairing_check_address = Address.of_hex_string "0x08"
-let pairing_check (msg : Evmc.Message.t) : Evmc.Result.t =
+let pairing_check (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let n = Bytes.length msg.input_data in

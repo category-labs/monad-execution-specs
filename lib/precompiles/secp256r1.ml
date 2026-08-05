@@ -8,7 +8,7 @@ open Utils
 open Ec.Secp256r1
 
 let address = Address.of_hex_string "0x0100"
-let verify (msg : Evmc.Message.t) : Evmc.Result.t =
+let verify (msg : Evmc.Message.t) : precompile_result =
   Precompile.(
     run msg
       (let$ () = spend_gas Gas.(of_int 6_900) in

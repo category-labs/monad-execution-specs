@@ -18,9 +18,14 @@ module Byte_width = struct
     let byte_width : [> `Fixed of int] = `Fixed 64
   end
 
-  (* 384 bits, used for reading compressed BLS G1 points *)
+  (* 384 bits, used to represent BLS public keys. *)
   module Bytes48 = struct
     let byte_width : [> `Fixed of int] = `Fixed 48
+  end
+
+  (* 264 bits, used to represent compressed secp256k1 public keys. *)
+  module Bytes33 = struct
+    let byte_width : [> `Fixed of int] = `Fixed 33
   end
 
   (* 256 bits *)
@@ -38,7 +43,7 @@ module Byte_width = struct
     let byte_width : [> `Fixed of int] = `Fixed 8
   end
 
-  (* 32 bits *)
+  (* 32 bits, used for Solidity method selectors *)
   module Bytes4 = struct
     let byte_width : [> `Fixed of int] = `Fixed 4
   end

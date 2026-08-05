@@ -1,0 +1,15 @@
+(version 1.0.0)
+
+(build
+ (all_platforms
+  ((action (run dune build -j %{jobs} -p %{pkg-self:name} @install)))))
+
+(depends
+ (all_platforms
+  (ocaml dune bls12-381)))
+
+(source
+ (fetch
+  (url
+   https://gitlab.com/nomadic-labs/cryptography/ocaml-bls12-381-signature/-/archive/1.0.0/ocaml-bls12-381-signature-1.0.0.tar.bz2)
+  (checksum md5=f98a01a1bba2579ef09f50e2d439e897)))

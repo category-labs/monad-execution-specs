@@ -2,6 +2,7 @@ open Monad_lib
 open Chain.Ethereum
 open Numeric
 open Byte_string
+open State
 
 let fixtures_file = ref None
 let test_kind = ref None
@@ -57,31 +58,23 @@ let check_account_state (address : Address.t) (actual : Account.t) (expected : A
     if U64.(actual.nonce <> expected.nonce) then
       Format.printf "\tNonce: %s\n\tExpected: %s\n" (U64.to_string actual.nonce)
         (U64.to_string expected.nonce) ;
-    if not B32.Map.(equal B32.equal actual.storage expected.storage) then (
+    if Storage.(actual.storage <> expected.storage) then (
       Format.printf "\tStorage differs\n" ;
-      let actual_keys = B32.Map.keys actual.storage in
-      let expected_keys = B32.Map.keys expected.storage in
+      let actual_keys = Storage.keys actual.storage in
+      let expected_keys = Storage.keys expected.storage in
       B32.Set.(
         iter
           (fun key ->
             let key_s = B32.to_short_hex_string key in
-            let v_actual = B32.Map.find_opt key actual.storage in
-            let v_expected = B32.Map.find_opt key expected.storage in
-            match (v_actual, v_expected) with
-            | Some v_actual, Some v_expected when B32.(v_actual <> v_expected) ->
-                Format.printf "\t\tactual(%s): %s\n" key_s (B32.to_hex_string v_actual) ;
-                Format.printf "\t\texpected(%s): %s\n" key_s (B32.to_hex_string v_expected)
-            | None, Some v_expected ->
-                Format.printf "\t\tactual(%s): <EMPTY>\n" key_s ;
-                Format.printf "\t\texpected(%s): %s\n" key_s (B32.to_hex_string v_expected)
-            | Some v_actual, None ->
-                Format.printf "\t\tactual(%s): %s\n" key_s (B32.to_hex_string v_actual) ;
-                Format.printf "\t\texpected(%s): <EMPTY>\n" key_s
-            | _, _ -> () )
+            let v_actual = Storage.find key actual.storage in
+            let v_expected = Storage.find key expected.storage in
+            if B32.(v_actual <> v_expected) then (
+              Format.printf "\t\tactual(%s): %s\n" key_s (B32.to_hex_string v_actual) ;
+              Format.printf "\t\texpected(%s): %s\n" key_s (B32.to_hex_string v_expected) ) )
           (union actual_keys expected_keys) ) ) ;
     false )
 
-let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.Map.t) : bool =
+let check_postconditions (state : WorldState.t) (post : Account.t Address.Map.t) : bool =
   let check_account_existence_and_state addr =
     let actual = Address.Map.find_opt addr state.accounts in
     let expected = Address.Map.find_opt addr post in
@@ -102,12 +95,12 @@ let check_postconditions (state : Host.WorldState.t) (post : Account.t Address.M
       ok && acc )
     all_addresses true
 
-let load_preconditions pre (state : Host.WorldState.t) =
-  let open Host.WorldState in
+let load_preconditions pre (state : WorldState.t) =
+  let open WorldState in
   let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
   {state with accounts}
 
-let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
+let load_genesis_block (genesis_block_header : Block.Header.t) (state : WorldState.t) =
   { state with
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
 
@@ -119,7 +112,7 @@ module Test_failure = struct
 end
 
 let process_block
-    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : Host.WorldState.t) (block : Block.t) =
+    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : WorldState.t) (block : Block.t) =
   let module Execution = Execution.Make (struct
     let chain_id = config.chain_id
     let revision =
@@ -145,11 +138,11 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
     | Ok _, Some err -> Error (Test_failure.Expected_error err)
     | Error err, None -> Error (Test_failure.Expected_ok err)
   in
-  Host.WorldState.empty
+  WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  assert (B32.(Host.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
+  assert (B32.(WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
   |> Result.get_ok'
@@ -161,7 +154,7 @@ let check_test_result (name, fixtures, post_state) =
 
 let check_test_results results = List.for_all check_test_result results
 
-let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : Host.WorldState.t) =
+let update_fixtures (fixtures : Fixtures.BlockchainTest.test_case) (post_state : WorldState.t) =
   let post = post_state.accounts in
   (* TODO: allow for blocks that expect a failure. *)
   let blocks =
@@ -207,7 +200,7 @@ let test_case_to_yojson (fixture : Fixtures.BlockchainTest.test_case) =
   fixture_json
 
 let run_blockchain_tests (tests : (string * Fixtures.BlockchainTest.test_case) list) =
-  let test_results : (string * Fixtures.BlockchainTest.test_case * Host.WorldState.t) list =
+  let test_results : (string * Fixtures.BlockchainTest.test_case * WorldState.t) list =
     List.map (fun (test_name, fixtures) -> (test_name, fixtures, run_blockchain_test fixtures)) tests
   in
   match execution_mode with

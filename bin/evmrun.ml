@@ -3,6 +3,7 @@ open Numeric
 open Byte_string
 open Chain.Ethereum
 open Chain.Monad
+open State
 
 let usage_str =
   "Usage: evmrun <options> (--bytecode_file FILE | --bytecode HEX) (--calldata_file FILE | --calldata HEX)"
@@ -95,9 +96,9 @@ module Execution = Execution.Make (Params)
 
 let () =
   let result, _state =
-    let world_state = Host.WorldState.empty in
-    let block_state = Host.BlockState.make world_state block in
-    let transaction_state = Host.TransactionState.make block_state Address.zero tx in
+    let world_state = WorldState.empty in
+    let block_state = BlockState.make world_state block in
+    let transaction_state = TransactionState.make block_state Address.zero tx in
     let msg = {(Execution.prepare_message sender gas_limit tx) with code = bytecode; input_data = calldata} in
     Execution.Vm.execute msg bytecode transaction_state
   in

@@ -1,6 +1,8 @@
 (** Definitions for Monad-specific types. *)
 open Numeric
 
+open Byte_string
+
 module Revision = struct
   type t = [`Zero | `One | `Two | `Three | `Four | `Five | `Six | `Seven | `Eight | `Nine | `Next]
   let all_revisions : t list = [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Next]
@@ -98,3 +100,5 @@ end
 
 let wei_per_mon = U256.(~$1_000_000_000_000_000_000)
 let mon_to_wei mon = U256.(mon * wei_per_mon)
+
+let system_sender = B20.of_hex_string "0x6f49a8F621353f12378d0046E7d7e4b9B249DC9e"
