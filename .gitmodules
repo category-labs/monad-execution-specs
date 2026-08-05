@@ -1,6 +1,8 @@
 [submodule "third_party/tests"]
 	path = third_party/tests
 	url = https://github.com/ethereum/tests.git
+	shallow = true
 [submodule "third_party/evmc"]
 	path = third_party/evmc
 	url = https://github.com/category-labs/evmc.git
+	shallow = true
