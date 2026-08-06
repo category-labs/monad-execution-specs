@@ -123,6 +123,7 @@ module Bytes = struct
   end
 end
 
+(* Fixed(struct let byte_width = `Fixed n end) represents 𝔹ₙ in YP (45). *)
 module Fixed (Byte_width : sig
   val byte_width : [> `Fixed of int]
 end) =

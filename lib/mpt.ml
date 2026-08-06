@@ -5,6 +5,7 @@ module Nibbles = struct
   include Byte_string.Bytes
   open Stdlib
 
+  (* YP (205) *)
   let of_bytes (bs : t) =
     init
       (2 * length bs)
@@ -39,13 +40,13 @@ module Nibbles = struct
     |> function None -> true | Some _ -> false
 
   (** [hex_prefix_encode n flag] encodes a sequence of nibbles plus an extra flag into a sequence of bytes,
-             following the definition of HP in YP (200) *)
+      following the definition of HP in YP (200) *)
   let hex_prefix_encode (ns : t) (flag : bool) : t =
     let odd = length ns mod 2 = 1 in
     let header =
-      (if odd then odd_mask else 0x00)
-      lor (if flag then flag_mask else 0x00)
-      lor if odd then Char.code ns.[0] else 0x00
+      (* 16×f(t) as in YP (201) *)
+      let enc_flag = if flag then flag_mask else 0x00 in
+      if odd then enc_flag + odd_mask + Char.code ns.[0] else enc_flag
     in
     let shift = if odd then 1 else 0 in
     init
@@ -55,7 +56,7 @@ module Nibbles = struct
         | i ->
             let upper_nibble = Char.code ns.[((i - 1) * 2) + shift] in
             let lower_nibble = Char.code ns.[((i - 1) * 2) + 1 + shift] in
-            Char.unsafe_chr Int.(shift_left upper_nibble 4 lor lower_nibble) )
+            Char.unsafe_chr ((16 * upper_nibble) + lower_nibble) )
 
   let hex_prefix_decode (bs : t) : t * bool =
     let header = Char.code bs.[0] in
@@ -271,10 +272,15 @@ let of_patricia trie =
   in
   {root_hash; inv_hashes}
 
-(** {!of_seq} builds an MPT representing the mapping given by the key-value pairs in the input sequence. *)
+(** {!of_seq} builds an MPT representing the mapping given by the key-value pairs in the input sequence.
+    This corresponds to the MPT composition function defined in YP (206), YP (207), YP (208), factored through
+    a successive trie → Patricia trie → MPT construction. *)
 let of_seq (entries : (Bytes.t * Bytes.t) Seq.t) =
+  (* The input entries here corresponds to J in YP (202), YP (203) *)
   entries
-  |> Seq.map (fun (k, v) -> (Nibbles.of_bytes k, Rlp.Bytes v))
+  |> Seq.map (fun (k, v) ->
+      (* YP (204) *)
+      (Nibbles.of_bytes k, Rlp.Bytes v) )
   |> Trie.of_seq
   |> PatriciaTrie.of_trie
   |> of_patricia

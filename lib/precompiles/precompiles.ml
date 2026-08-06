@@ -6,13 +6,18 @@ open Utils
 
 let ecrecover_address = Address.of_hex_string "0x01"
 let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
+  (* YP (210) *)
   Precompile.(
     run msg
-      ((* Monad §4.2. *)
+      ((* Monad §4.2. Obsoletes YP (211) *)
        let$ () = spend_gas Gas.(of_int 6_000) in
+       (* YP (218) *)
        let$ h = b32 in
+       (* YP (219) *)
        let$ v = u256 in
+       (* YP (220) *)
        let$ r = u256 in
+       (* YP (221) *)
        let$ s = u256 in
 
        Option.(
@@ -24,6 +29,7 @@ let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
          let$ () = ensure U256.(r > zero && r < Crypto.secp256k1n) in
          let$ () = ensure U256.(s > zero && s < Crypto.secp256k1n) in
 
+         (* YP (213), YP (214), YP (215) *)
          let$ addr = Crypto.ecrecover {r; s; y_parity} h in
          return (B32.to_bytes (Address.to_bytes32 addr)) )
        |> Option.value ~default:Bytes.empty
@@ -31,53 +37,77 @@ let ecrecover (msg : Evmc.Message.t) : Evmc.Result.t =
 
 let sha256_address = Address.of_hex_string "0x02"
 let sha256 (msg : Evmc.Message.t) : Evmc.Result.t =
+  (* YP (222) *)
   Precompile.(
     run msg
-      (let$ () = spend_gas Gas.(~$60 + (~$12 * bytes_to_whole_words ~$(Bytes.length msg.input_data))) in
+      ((* YP (223) *)
+       let gas = Gas.(~$60 + (~$12 * bytes_to_whole_words ~$(Bytes.length msg.input_data))) in
+       let$ () = spend_gas gas in
+       (* YP (224) *)
        return (B32.to_bytes (Crypto.sha_256 msg.input_data)) ) )
 
 let ripemd160_address = Address.of_hex_string "0x03"
 let ripemd160 (msg : Evmc.Message.t) : Evmc.Result.t =
+  (* YP (225) *)
   Precompile.(
     run msg
-      (let$ () = spend_gas Gas.(~$600 + (~$120 * bytes_to_whole_words ~$(Bytes.length msg.input_data))) in
+      ((* YP (226) *)
+       let gas = Gas.(~$600 + (~$120 * bytes_to_whole_words ~$(Bytes.length msg.input_data))) in
+       let$ () = spend_gas gas in
+       (* YP (227), YP (228) *)
        return (B32.to_bytes (B20.to_bytes32 (Crypto.ripemd_160 msg.input_data))) ) )
 
 let identity_address = Address.of_hex_string "0x04"
 let identity (msg : Evmc.Message.t) : Evmc.Result.t =
+  (* YP (231) *)
   Precompile.(
     run msg
-      (let$ () = spend_gas Gas.(~$15 + (~$3 * bytes_to_whole_words ~$(Bytes.length msg.input_data))) in
+      ((* YP (232) *)
+       let gas = Gas.(~$15 + (~$3 * bytes_to_whole_words ~$(Bytes.length msg.input_data))) in
+       let$ () = spend_gas gas in
+       (* YP (233) *)
        return msg.input_data ) )
 
 let blake2f_address = Address.of_hex_string "0x09"
 let blake2f (msg : Evmc.Message.t) : Evmc.Result.t =
+  (* YP (292) *)
   Precompile.(
     run msg
-      (let$ () = ensure (Bytes.length msg.input_data = 213) in
+      ((* YP (293) check on ‖I_d‖ *)
+       let$ () = ensure (Bytes.length msg.input_data = 213) in
+       (* YP (297) *)
        let$ r = u32 in
 
-       (* Monad §4.2: blake2f cost is 2x the rounds. *)
+       (* YP (294), adjusted for Monad §4.2: blake2f cost is 2x the rounds. *)
        let$ () = spend_gas Gas.(~$2 * U32.(to_uint r)) in
 
        (* r must fit in an int since we were able to afford the gas. *)
        let$ r = Option.or_fail (U32.to_int_opt r) in
 
+       (* YP (298), YP (299), YP (300) *)
        let$ h = Iarray.of_list <$> list 8 uint64_le in
+       (* YP (301), YP (302), YP (303) *)
        let$ m = Iarray.of_list <$> list 16 uint64_le in
 
+       (* YP (304) *)
        let$ t_low = uint64_le in
+       (* YP (305) *)
        let$ t_high = uint64_le in
 
+       (* YP (306) *)
        let$ f =
          byte >>= function '\x00' -> return false | '\x01' -> return true | _ -> precompile_failure
        in
 
-       Iarray.to_list (Crypto.blake2f ~rounds:r ~h ~m ~t0:t_low ~t1:t_high ~final_block:f)
-       |> List.map (fun i -> U64.of_uint64 i |> U64.to_repr |> B8.reverse |> B8.to_bytes)
-       |> Bytes.(concat empty)
-       |> return ) )
+       (* YP (296) *)
+       let result = Crypto.blake2f ~rounds:r ~h ~m ~t0:t_low ~t1:t_high ~final_block:f in
 
+       let le_8 (i : Uint64.t) = U64.of_uint64 i |> U64.to_repr |> B8.reverse |> B8.to_bytes in
+
+       (* YP (295) *)
+       Iarray.to_list result |> List.map le_8 |> Bytes.(concat empty) |> return ) )
+
+(* π in YP (142) corresponds to the set of keys of this map. *)
 let precompiles (revision : Chain.Monad.Revision.active) : precompile Address.Map.t =
   let module Modexp = Modexp.Make (struct
     let revision = revision

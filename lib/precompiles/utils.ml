@@ -24,7 +24,7 @@ module Precompile = struct
 
   (* Helpers for reading input data. If the message's input length is exceeded, all of the reader operations
      in this module proceed as if the input was followed by infinitely many trailing zeros, as required in
-     YP (217), YP (246), YP (285). *)
+     YP (216), YP (217), YP (246), YP (285). *)
   let byte : char t =
     let$ i = advance 1 in
     let$ bs = input_data in
@@ -52,9 +52,11 @@ module Precompile = struct
     val of_repr : Repr.t -> t
   end
 
+  (* Read a big-endian k-byte number from calldata. YP (307) *)
   let numeric_reader (type num) (module N : NUMERIC with type t = num) : num t =
     N.of_repr <$> byte_reader (module N.Repr)
 
+  (* Read a little-endian k-byte number from calldata. YP (308) *)
   let numeric_reader_le (type num) (module N : NUMERIC with type t = num) : num t =
     let$ repr_be = byte_reader (module N.Repr) in
     let repr_le = N.Repr.reverse repr_be in
@@ -108,6 +110,7 @@ module Precompile = struct
 
   (** Run a Bytes.t computation on an input message, returning an Evmc.Result.t *)
   let run (msg : Evmc.Message.t) (impl : Bytes.t t) : Evmc.Result.t =
+    (* YP (209) *)
     match impl (msg, 0) with
     | Ok output, (msg', _) ->
         Evmc.Result.
@@ -117,6 +120,7 @@ module Precompile = struct
           ; output_data = output
           ; create_address = Address.zero }
     | Error err, _ ->
+        (* Failure return path for precompiles that can fail, as per YP (269), YP (280), YP (287), YP (293) *)
         assert (err <> Evmc.Result.StatusCode.Success) ;
         Evmc.Result.failure err
 end

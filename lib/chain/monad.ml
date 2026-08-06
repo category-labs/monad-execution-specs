@@ -80,6 +80,7 @@ module Testnet = struct
 end
 
 module Mainnet = struct
+  (* Obsoletes YP (5) *)
   let chain_id = Uint.(~$143)
 
   let timestamp_to_revision (timestamp : U256.t) : Revision.t =
