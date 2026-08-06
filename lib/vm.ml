@@ -137,6 +137,7 @@ struct
       | `Eight -> fun _mem -> max_memory_usage
       | `Nine -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
 
+    (* YP (330) *)
     let extend_to_monad_eight ~start ~size_bytes mem =
       if U256.(size_bytes = zero) then Some mem
       else
@@ -145,6 +146,7 @@ struct
         let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
         Some {mem with active_bytes}
 
+    (* YP (330), accounting for the MIP-3 memory limit. *)
     let extend_to_monad_nine ~start ~size_bytes mem =
       if U256.(size_bytes = zero) then Some mem
       else
@@ -246,16 +248,16 @@ struct
     include TLens
 
     let make (ctx : Evmc.TxContext.t) (msg : Evmc.Message.t) (code : Bytes.t) : t =
-      { address = msg.recipient
-      ; origin = ctx.tx_origin
-      ; price = ctx.tx_gas_price
-      ; data = msg.input_data
-      ; sender = msg.sender
-      ; value = msg.value
-      ; bytecode = code
+      { address = msg.recipient (* YP (104), YP (132) *)
+      ; origin = ctx.tx_origin (* YP (105), YP (133) *)
+      ; price = ctx.tx_gas_price (* YP (106), YP (134) *)
+      ; data = msg.input_data (* YP (107), YP (135). On a creation message, msg.input_data is empty. *)
+      ; sender = msg.sender (* YP (108), YP (136) *)
+      ; value = msg.value (* YP (109), YP (137) *)
+      ; bytecode = code (* YP (110), YP (141) *)
       ; header = ExecutionBlockHeader.of_tx_context ctx
-      ; depth = Int32.to_int msg.depth
-      ; write_permission = not msg.static
+      ; depth = Int32.to_int msg.depth (* YP (111), YP (138) *)
+      ; write_permission = not msg.static (* YP (112), YP (139) *)
       ; blob_versioned_hashes = ctx.blob_hashes
       ; blob_base_fee = ctx.blob_base_fee }
   end
@@ -286,7 +288,6 @@ struct
         let result, host = fn state.host in
         (Ok result, {state with host})
 
-      (* TODO: trace other API calls. *)
       let account_exists addr =
         host_trace (fun () -> Format.sprintf "account_exists %s" (Address.to_short_hex_string addr)) ;
         lift (Base.account_exists addr)
@@ -377,14 +378,17 @@ struct
   (* Frequently used helpers are written in direct style for performance. *)
   let spend (amount : Gas.t) : unit M.t =
    fun s ->
+    (* YP (155), YP (156), YP (158), disjunct 1, YP (168) *)
     if Gas.(s.gas < amount) then (Error Out_of_gas, s) else (Ok (), {s with gas = Gas.(s.gas - amount)})
 
   let push (x : U256.t) : unit M.t =
    fun s ->
+    (* YP (158), disjunct 7 *)
     if s.stack_depth >= max_stack_depth then (Error Stack_overflow, s)
     else (Ok (), {s with stack = x :: s.stack; stack_depth = s.stack_depth + 1})
   let pop : U256.t M.t =
    fun s ->
+    (* YP (158), disjunct 3 *)
     match s.stack with
     | x0 :: tl -> (Ok x0, {s with stack = tl; stack_depth = s.stack_depth - 1})
     | _ -> (Error Stack_underflow, s)
@@ -402,6 +406,7 @@ struct
     | _ -> (Error Stack_underflow, s)
 
   let update_pc_and_continue (f : U256.t -> U256.t) : bool M.t =
+   (* YP (169) (update only, calculation is specified at the call site) *)
    fun s ->
     let s = {s with pc = f s.pc} in
     (Ok true, s)
@@ -409,6 +414,7 @@ struct
   let increase_pc_and_continue : bool M.t = update_pc_and_continue U256.(( + ) one)
 
   let finish_execution ~return_output : bool M.t =
+    (* YP (163), cases RETURN, STOP, SELFDESTRUCT *)
     let$ () = when_ (not return_output) (MachineState.output_buffer := Bytes.empty) in
     return false
 
@@ -423,24 +429,29 @@ struct
     open MachineState
     open ExecutionEnvironment
 
+    (* YP (160) *)
     let jump_destinations : U256.Set.t =
+      (* YP (161) *)
       let rec loop i valid_destinations =
         if i >= Bytes.length execution_environment.bytecode then valid_destinations
         else
-          match execution_environment.bytecode.[i] with
-          | '\x5b' -> loop (i + 1) U256.(Set.add ~$i valid_destinations)
-          | '\x60' .. '\x7f' as opcode ->
-              let push_bytes = Char.code opcode - 0x60 + 1 in
-              loop (i + 1 + push_bytes) valid_destinations
-          | _ -> loop (i + 1) valid_destinations
+          let w = execution_environment.bytecode.[i] in
+          let valid_destinations =
+            if w = '\x5b' then U256.(Set.add ~$i valid_destinations) else valid_destinations
+          in
+          (* YP (162) *)
+          let i = match w with '\x60' .. '\x7f' -> i + Char.code w - 0x60 + 2 | _ -> i + 1 in
+          loop i valid_destinations
       in
       loop 0 U256.Set.empty
 
     let check_write_permissions =
+      (* YP (158) disjunct 8. YP (159) is defined implicitly by the callsites of this function. *)
       let can_write = execution_environment.write_permission in
       if can_write then return () else fail Static_mode_violation
 
     let check_jump_destination (destination : U256.t) =
+      (* YP (158) disjuncts 4, 5 *)
       if U256.Set.mem destination jump_destinations then return () else fail Bad_jump_destination
 
     let self : Address.t = execution_environment.address
@@ -468,7 +479,9 @@ struct
           return ()
 
     (* General undefined opcode *)
-    let undefined : opcode_impl = fail Undefined_instruction
+    let undefined : opcode_impl =
+      (* YP (158), disjunct 2 *)
+      fail Undefined_instruction
 
     (* Designated invalid opcode 0xfe *)
     let invalid : opcode_impl = fail Invalid_instruction
@@ -1040,7 +1053,6 @@ struct
       increase_pc_and_continue
 
     let returndatasize =
-      (* TODO: this needs a legit implementation. *)
       fetch_environment_variable_opcode_impl' (U256.of_int <$> (Bytes.length <$> !output_buffer))
 
     let returndatacopy =
@@ -1051,7 +1063,7 @@ struct
       let$ data = !output_buffer in
       (* Unlike similar opcodes, returndatacopy fails on out-of-bounds memory access. We check this before
        extending the memory and spending gas. *)
-      (* YP (158) *)
+      (* YP (158), disjunct 6 *)
       let$ src_start, size =
         match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
         | None, _ | _, None -> fail Invalid_memory_access
@@ -1286,6 +1298,7 @@ struct
       (* Gas *)
       (* Protection against reentrancy attacks, see EIP-2200 *)
       let$ current_gas = !gas in
+      (* YP (158), disjunct 9 *)
       let$ () = when_ Gas.(current_gas <= call_stipend) (fail Out_of_gas) in
 
       (* Operation *)
@@ -1382,6 +1395,7 @@ struct
       (* PC *)
       increase_pc_and_continue
 
+    (* EIP-1153 *)
     let tload =
       (* Stack *)
       let$ key = pop in
@@ -1396,6 +1410,7 @@ struct
       (* PC *)
       increase_pc_and_continue
 
+    (* EIP-1153 *)
     let tstore =
       (* Stack *)
       let$ key, value = pop2 in
@@ -1831,6 +1846,7 @@ struct
       in
 
       (* Operation *)
+      (* YP (163), case REVERT *)
       let$ result = Memory.read_block_at start size_bytes <$> !memory in
       let$ () = output_buffer := result in
 
@@ -1865,7 +1881,11 @@ struct
       (* PC *)
       finish_execution ~return_output:false
 
+    (* YP (164), YP (332) *)
     let execute_opcode (opcode : Opcode.t) =
+      (* The conditions in YP (165), YP (166), YP (167) are implicitly enforced by each opcode. *)
+      (* The baseline equations YP (170), YP (171), YP (172) and YP (173) are selectively applied
+         depending on the specific opcode. *)
       let impl =
         match opcode with
         (* Arithmetic *)
@@ -1990,7 +2010,7 @@ struct
       trace_state s ;
       let pc = s.pc in
       let opcode =
-        (* YP (157) *)
+        (* YP (157), YP (327)  *)
         match U256.to_int_opt pc with
         | Some pc when pc < Bytes.length execution_environment.bytecode ->
             Opcode.of_byte execution_environment.bytecode.[pc]
@@ -2000,9 +2020,20 @@ struct
           let info = Opcode.info opcode in
           Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
       let result, s = execute_opcode opcode s in
-      match result with Ok continue -> if continue then run s else (Ok (), s) | Error err -> (Error err, s)
+      match result with
+      | Ok continue ->
+          if continue then
+            (* YP (152) case 4 *)
+            run s
+          else
+            (* YP (152) case 3 *)
+            (Ok (), s)
+      | Error err ->
+          (* YP (152), cases 1 and 2 *)
+          (Error err, s)
   end
 
+  (* YP (143), YP (144) *)
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Host.t -> Evmc.Result.t * Host.t =
     trace (fun () -> "Start execution\n") ;
     trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;
@@ -2015,7 +2046,9 @@ struct
     end) in
     let gas = Gas.of_uint64 msg.gas in
     let memory_capacity = Uint.of_uint32 msg.memory_capacity in
+    (* YP (146), YP (147), YP (148), YP (149), YP (150), YP (151) *)
     let state = MachineState.initial ~host ~gas ~memory_capacity in
+    (* YP (145) *)
     let res, state = Exe.run state in
     trace (fun () -> "Finished execution\n") ;
     (* Propagate host updates back to the caller. *)
@@ -2025,11 +2058,12 @@ struct
       | Ok () ->
           trace (fun () ->
               Format.sprintf "Execution OK, returning [[%s]]\n" (Bytes.to_hex_string state.output_buffer) ) ;
+          (* YP (152) case 3 *)
           Evmc.Result.
             { status_code = Success
             ; gas_left = Uint.to_uint64 state.gas
             ; gas_refund = Integer.to_int64 state.gas_refund
-            ; output_data = state.output_buffer
+            ; output_data = (* YP (153), YP (154) implicit *) state.output_buffer
             ; create_address = Address.zero }
       | Error err -> (
           trace (fun () -> Format.sprintf "Execution ERROR: %s\n" (Evmc.Result.StatusCode.to_string err)) ;
@@ -2037,12 +2071,14 @@ struct
           | Success -> assert false
           | Revert ->
               (* If a contract finishes with a REVERT instruction, remaining gas is refunded and the output
-               buffer is returned, see YP (152) *)
+                 buffer is returned, see YP (152) case 2 *)
               Evmc.Result.
                 { status_code = err
                 ; gas_left = Uint.to_uint64 state.gas
                 ; gas_refund = 0L
                 ; output_data = state.output_buffer
                 ; create_address = Address.zero }
-          | _ -> Evmc.Result.failure err ) )
+          | _ ->
+              (* YP (152) case 1 *)
+              Evmc.Result.failure err ) )
 end

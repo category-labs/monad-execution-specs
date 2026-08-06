@@ -1,5 +1,6 @@
 open Byte_string
 
+(* YP (190), YP (191), YP (192) *)
 type t = Bytes of Bytes.t | List of t list
 
 let of_bytes (bs : Bytes.t) = Bytes bs
@@ -10,20 +11,26 @@ let rec to_string x =
   | Bytes bs -> Format.sprintf "Bytes(\"%s\")" (Bytes.to_hex_string bs)
   | List elts -> List.map to_string elts |> String.concat ", " |> Format.sprintf "List(%s)"
 
-let equal x y = x = y
+let equal (x : t) (y : t) = x = y
 
+(** Encode an integer as a big-endian byte array of minimal length. YP (195) *)
+let be (x : int) =
+  let x = Z.of_int x in
+  let x_bytes = (Z.numbits x + 7) / 8 in
+  let x_le = Z.to_bits x in
+  let byte_i i = x_le.[x_bytes - i - 1] in
+  Bytes.init x_bytes byte_i
+
+(* Covers YP (194) cases 2, 3 and YP (197) cases 1, 2. YP (196) is implemented here as string concatenation. *)
 let encode_payload payload ~long_payload_prefix ~short_payload_prefix =
   let len = Bytes.length payload in
   let header =
-    if len <= 55 then Bytes.of_char (Char.chr (short_payload_prefix + len))
+    if len <= 55 then
+      (* Case ‖x‖ < 56 *)
+      Bytes.of_char (Char.chr (short_payload_prefix + len))
     else
-      let len = Z.of_int len in
-      let len_bytes = (Z.numbits len + 7) / 8 in
-      let len_bytes =
-        let len_le = Z.to_bits len in
-        let byte_i i = len_le.[len_bytes - i - 1] in
-        Bytes.init len_bytes byte_i
-      in
+      (* Case ‖x‖ < 2⁶⁴, in practice the bound is lower due to OCaml's size limitations. *)
+      let len_bytes = be len in
       let len_bytes_len = Bytes.length len_bytes in
       Bytes.(of_char (Char.chr (long_payload_prefix + len_bytes_len)) ^ len_bytes)
   in
@@ -35,12 +42,14 @@ let short_list_prefix = 0xc0
 let long_list_prefix = 0xf7
 
 (* TODO: OCaml's maximum string length is much smaller than 2^64, so we should switch to Bigarray *)
+(* YP (193) *)
 let rec encode (obj : t) : Bytes.t =
   match obj with
   | Bytes bs when Bytes.length bs = 1 && Char.code bs.[0] < short_bytes_prefix -> bs
   | Bytes bs ->
       encode_payload bs ~short_payload_prefix:short_bytes_prefix ~long_payload_prefix:long_bytes_prefix
   | List ls ->
+      (* YP (198) *)
       let bs = Bytes.concat Bytes.empty (List.map encode ls) in
       encode_payload bs ~short_payload_prefix:short_list_prefix ~long_payload_prefix:long_list_prefix
 

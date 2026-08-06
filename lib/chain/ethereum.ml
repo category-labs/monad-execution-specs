@@ -19,16 +19,18 @@ module Address = struct
 
   (* YP (95) *)
   let of_contract_creation ~(sender : t) ~(nonce : U64.t) ~(create2 : create2_params option) =
-    of_bytes32_truncating
-      (Crypto.keccak_256
-         ( match create2 with
-         | None -> Rlp.(encode (List [to_rlp sender; U64.(to_rlp (nonce - one))]))
-         | Some {salt; initcode} ->
-             Bytes.(
-               of_char '\xff'
-               ^ B20.to_bytes sender
-               ^ B32.to_bytes salt
-               ^ B32.to_bytes (Crypto.keccak_256 initcode) ) ) )
+    (* YP (96) *)
+    let lin =
+      match create2 with
+      | None -> Rlp.(encode (List [to_rlp sender; U64.(to_rlp (nonce - one))]))
+      | Some {salt; initcode} ->
+          Bytes.(
+            of_char '\xff'
+            ^ B20.to_bytes sender
+            ^ B32.to_bytes salt
+            ^ B32.to_bytes (Crypto.keccak_256 initcode) )
+    in
+    of_bytes32_truncating (Crypto.keccak_256 lin)
 
   (* Encoding/decoding address options, used to handle the recipient of a transaction. *)
   type t_opt = t option
@@ -132,7 +134,7 @@ module Transaction = struct
         Crypto.ecrecover {y_parity; r; s} auth_hash )
   end
 
-  (* YP 4.2 *)
+  (* YP (18), YP (20) *)
   type legacy_tx =
     { nonce : U64.t (* T_n *)
     ; gas_limit : Uint.t (* T_g *) [@key "gasLimit"]
@@ -226,6 +228,7 @@ module Transaction = struct
     match tx with
     | Legacy {nonce; _} | AccessList {nonce; _} | FeeMarket {nonce; _} | SetCode {nonce; _} -> nonce
 
+  (* YP (17), but we do not distinguish between initcode and data fields. *)
   let data tx =
     match tx with Legacy {data; _} | AccessList {data; _} | FeeMarket {data; _} | SetCode {data; _} -> data
 
@@ -244,10 +247,13 @@ module Transaction = struct
     | Legacy _ -> None
 
   let signature chain_id tx =
+    (* r, s below are as in YP (321), YP (322) *)
     match tx with
     | AccessList {r; s; y_parity; _} | FeeMarket {r; s; y_parity; _} | SetCode {r; s; y_parity; _} ->
+        (* YP (324), case 3 *)
         Crypto.{r; s; y_parity}
     | Legacy {r; s; v; _} ->
+        (* YP (324), cases 1, 2 *)
         let y_parity =
           if U256.(v = ~$27) then U8.zero
           else if U256.(v = ~$28) then U8.one
@@ -330,6 +336,7 @@ module Transaction = struct
     | `Legacy -> Rlp.encode (to_rlp tx)
     | tag -> kind_tag_to_bytes tag ^ Rlp.encode (to_rlp tx)
 
+  (* YP (317), YP (318) *)
   let signing_hash chain_id tx =
     let bytes =
       match tx with
@@ -404,6 +411,7 @@ module Transaction = struct
     in
     Crypto.keccak_256 bytes
 
+  (* YP (323) *)
   let sender (chain_id : Uint.t) (tx : t) : Address.t option =
     let msg_hash = signing_hash chain_id tx in
     Option.(
@@ -473,25 +481,24 @@ module Transaction = struct
 end
 
 module Withdrawal = struct
-  (* YP 4.3 *)
+  (* YP (22) *)
   type t =
     { global_index : U64.t (* W_g *) [@key "index"]
     ; validator_index : U64.t (* W_v *) [@key "validatorIndex"]
     ; recipient : Address.t (* W_r *) [@key "address"]
-    ; amount : U256.t (* W_a *) [@key "amount"] }
+    ; amount : U64.t (* W_a *) [@key "amount"] }
   [@@deriving yojson]
 
   (* YP (21) *)
   let to_rlp {global_index; validator_index; recipient; amount} =
-    Rlp.List
-      [U64.to_rlp global_index; U64.to_rlp validator_index; Address.to_rlp recipient; U256.to_rlp amount]
+    Rlp.List [U64.to_rlp global_index; U64.to_rlp validator_index; Address.to_rlp recipient; U64.to_rlp amount]
 
   let encode (withdrawal : t) = Rlp.encode (to_rlp withdrawal)
 end
 
 module Block = struct
   module Header = struct
-    (* YP 4.4 *)
+    (* YP (44) *)
     type t =
       { parent_hash : B32.t (* H_p *) [@key "parentHash"]
       ; ommers_hash : B32.t (* H_o *) [@key "uncleHash"]
@@ -516,7 +523,7 @@ module Block = struct
       ; requests_hash : B32.t (* EIP-7685 *) [@key "requestsHash"] }
     [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens]
 
-    (* YP 4.4.3 (40) *)
+    (* YP (40) *)
     let to_rlp h =
       Rlp.List
         [ Rlp.of_bytes32 h.parent_hash
@@ -569,7 +576,7 @@ module Block = struct
   (* Bring block header lenses into scope for convenience. *)
   include Header
 
-  (* YP 4.4 (23) *)
+  (* YP (3), YP (23) *)
   type t =
     { header : Header.t (* B_H *) [@key "blockHeader"]
     ; transactions : Transaction.t list (* B_T *) [@key "transactions"]
@@ -579,7 +586,7 @@ module Block = struct
 
   let empty = {header = empty; transactions = []; ommers = []; withdrawals = []}
 
-  (* YP 4.4.3 (41) *)
+  (* YP (41) *)
   let to_rlp b =
     (* YP (42) *)
     (* Note the difference with Transaction.to_rlp and Transaction.encode *)
@@ -588,6 +595,7 @@ module Block = struct
       | `Legacy -> Transaction.to_rlp tx
       | _ -> Rlp.Bytes (Transaction.encode tx)
     in
+    (* YP (43) is List.map below *)
     Rlp.List
       [ Header.to_rlp b.header
       ; Rlp.List (List.map transaction_to_rlp b.transactions)
@@ -598,7 +606,7 @@ module Block = struct
 end
 
 module Log = struct
-  (* YP 4.4.1 (28) *)
+  (* YP (28), YP (29) *)
   type t = {address : Address.t (* O_a *); topics : B32.t list (* O_t *); data : Bytes.t (* O_d *)}
   [@@deriving yojson]
 
@@ -618,10 +626,10 @@ module Log = struct
 end
 
 module Receipt = struct
-  (* YP 4.4.1. *)
+  (* YP (24), YP (26), YP (27). *)
   type t =
     { tx_type : Transaction.kind_tag (* R_x *)
-    ; succeeded : bool (* R_z *)
+    ; succeeded : bool (* R_z, note that in the Yellow Paper this only takes values 0 or 1. *)
     ; cumulative_gas_used : Uint.t (* R_u *) [@key "cumulativeGasUsed"]
     ; bloom : Bloom.t (* R_b *) [@key "logsBloom"]
     ; logs : Log.t list (* R_l *) }
@@ -644,6 +652,7 @@ module Receipt = struct
 end
 
 module Account = struct
+  (* YP (13), but storage and code are stored directly. *)
   type t =
     { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t (* σ[a]_b *)
@@ -669,13 +678,15 @@ module Account = struct
 
   let to_rlp {nonce; balance; storage; code} =
     let storage_root =
+      (* Unlike in the Yellow Paper, accounts contain their entire storage. The relationship in YP (7) is
+         used here in reverse to calculate the storage root from the storage KV pairs. *)
       let mpt =
         storage
         |> B32.Map.to_seq
         |> Seq.map (fun (k, v) ->
+            (* YP (8), YP (9) *)
             let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
             let v = Rlp.encode U256.(to_rlp (of_repr v)) in
-            (* YP (8) *)
             (k, v) )
         |> Mpt.of_seq
       in

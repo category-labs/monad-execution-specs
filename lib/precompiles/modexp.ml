@@ -11,7 +11,7 @@ struct
   open Chain.Ethereum
   open Utils
 
-  (* Modexp gas cost calculation functions. *)
+  (* Modexp gas cost calculation functions. YP (237), adjusted for EIP-2565. *)
   let calculate_multiplication_complexity =
     match revision with
     | `Eight ->
@@ -42,6 +42,7 @@ struct
         (* EIP-2565. *)
         fun ~exponent_length ~exponent_upper_256_bits ->
           let k =
+            (* YP (238), adjusted for EIP-2565 *)
             match () with
             | () when Uint.(exponent_length <= ~$32 && exponent_upper_256_bits = zero) -> Uint.zero
             | () when Uint.(exponent_length <= ~$32) -> bit_length_minus_one exponent_upper_256_bits
@@ -52,12 +53,16 @@ struct
         (* EIP-7883. *)
         fun ~exponent_length ~exponent_upper_256_bits ->
           let k =
+            (* YP (238), adjusted for EIP-7883 *)
             match () with
             | () when Uint.(exponent_length <= ~$32 && exponent_upper_256_bits = zero) -> Uint.zero
             | () when Uint.(exponent_length <= ~$32) -> bit_length_minus_one exponent_upper_256_bits
             | () -> Uint.((~$16 * (exponent_length - ~$32)) + bit_length_minus_one exponent_upper_256_bits)
           in
           Uint.(max k one)
+
+  (* YP (236) *)
+  let gas_quad_divisor = Gas.(~$3)
 
   let calculate_gas_cost =
     match revision with
@@ -66,7 +71,7 @@ struct
         fun ~base_length ~modulus_length ~exponent_length ~exponent_upper_256_bits ->
           let multiplication_complexity = calculate_multiplication_complexity ~base_length ~modulus_length in
           let iteration_count = calculate_iteration_count ~exponent_length ~exponent_upper_256_bits in
-          Uint.(max ~$200 (multiplication_complexity * iteration_count / ~$3))
+          Uint.(max ~$200 (multiplication_complexity * iteration_count / gas_quad_divisor))
     | `Nine ->
         (* EIP-7883. *)
         fun ~base_length ~modulus_length ~exponent_length ~exponent_upper_256_bits ->
@@ -106,15 +111,20 @@ struct
   let address = Address.of_hex_string "0x05"
 
   let precompile (msg : Evmc.Message.t) : Evmc.Result.t =
+    (* YP (234) *)
     Precompile.(
       run msg
-        (let$ base_length = parameter_length in
+        ((* YP (240) *)
+         let$ base_length = parameter_length in
+         (* YP (241) *)
          let$ exponent_length = parameter_length in
+         (* YP (242) *)
          let$ modulus_length = parameter_length in
 
          let base_start = 3 * U256.byte_width in
 
          let$ () =
+           (* YP (235), adjusted for EIP-2565 and EIP-7883. *)
            let gas_cost =
              (* EIP-2565 and EIP-7883 use a formula that would compute the least significant 256 bits, which is
                 known to be an editorial mistake. We follow the Ethereum execution spec, which instead uses the
@@ -142,8 +152,11 @@ struct
               gas limits).
               TODO: once MONAD_EIGHT is obsoleted, the defensive coding here can be removed. *)
            let exponent_length = Uint.to_int exponent_length in
+           (* YP (243) *)
            let$ base = Uint.of_bytes_be <$> bytes base_length in
+           (* YP (244) *)
            let$ exponent = Uint.of_bytes_be <$> bytes exponent_length in
+           (* YP (245) *)
            let$ modulus = Uint.of_bytes_be <$> bytes modulus_length in
            let result =
              if Uint.(modulus = zero || modulus = one) then Uint.zero
@@ -155,5 +168,6 @@ struct
               it may be necessary to add padding. *)
            let padding_length = modulus_length - Bytes.length result_bytes in
            assert (padding_length >= 0) ;
+           (* YP (239) *)
            return (Bytes.make padding_length '\x00' ^ result_bytes) ) )
 end

@@ -227,6 +227,8 @@ module Uint = struct
     Bytes.init sig_bytes byte_i
 
   let of_rlp (rlp : Rlp.t) : t option = match rlp with Bytes bs -> Some (of_bytes_be bs) | List _ -> None
+
+  (* YP (199) *)
   let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
 
   (* Ceiling division. This is not implemented in fixed-width types to avoid dealing with the wraparound case. *)
@@ -293,6 +295,7 @@ struct
       U.of_z_exn Z.(if geq x zero then x else U.to_z max_unsigned + x + one)
   end
 
+  (* Unsigned(struct let byte_width = `Fixed (n / 8) end) represents ℕₙ in YP (19). *)
   module Unsigned = struct
     include U
     module Repr = Byte_string.Fixed (B)
@@ -343,6 +346,7 @@ struct
 
     let of_signed_int (x : int) = Signed.(as_unsigned ~$x)
 
+    (* YP (199) *)
     let to_rlp (x : t) = Uint.to_rlp (to_uint x)
     let of_rlp (rlp : Rlp.t) =
       Option.(

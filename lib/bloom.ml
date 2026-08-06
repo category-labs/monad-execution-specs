@@ -19,7 +19,7 @@ let test_bit (bloom : t) (bit_index : int) : bool =
   let bit_index = bit_index mod 8 in
   Stdlib.(Char.code bloom.$(byte_index) land (1 lsl bit_index) <> 0)
 
-(* M_{3:2048} in YP (31) to YP (34) *)
+(* M_{3:2048} in YP (31), YP (32), YP (33), YP (34) *)
 let hash_bytes (bytes : Bytes.t) : t =
   let of_bit_indices (indices : int list) : t = List.fold_left set_bit zeros indices in
   let byte_pair_at (bytes : B32.t) index =

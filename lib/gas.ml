@@ -59,6 +59,7 @@ let tx_intrinsic_gas (tx : Transaction.t) =
     match Transaction.call_or_create tx with
     | Call _ -> zero
     | Create {initcode} ->
+        (* YP (65) *)
         tx_create_gas + (tx_initcode_gas_per_word * bytes_to_whole_words ~$(Bytes.length initcode))
   in
   let transaction_gas = tx_base_gas in
@@ -77,25 +78,23 @@ let tx_intrinsic_gas (tx : Transaction.t) =
 let tx_floor_gas (tx : Transaction.t) =
   (~$(tokens_in_calldata tx) * tx_calldata_floor_token_gas) + tx_base_gas
 
+(* YP (66), gas_bid in Monad §2 *)
 let tx_effective_gas_price (base_fee_per_gas : t) (tx : Transaction.t) =
+  (* YP (67) and YP (70) are folded into this definition. *)
   match Transaction.fee_mechanism tx with
   | FeeMarketFee {max_fee_per_gas; max_priority_fee_per_gas} ->
-      if max_fee_per_gas < max_priority_fee_per_gas || max_fee_per_gas < base_fee_per_gas then None
+      (* YP (72) *)
+      if max_fee_per_gas < max_priority_fee_per_gas then None
       else
-        let priority_fee_per_gas = min max_priority_fee_per_gas (max_fee_per_gas - base_fee_per_gas) in
-        let effective_gas_price = priority_fee_per_gas + base_fee_per_gas in
-        Some effective_gas_price
-  | LegacyFee {gas_price} -> if gas_price < base_fee_per_gas then None else Some gas_price
+        (* f + H_f, computed as min(T_f + H_f, Tₘ) as per Monad §2, which is equivalent to folding YP (67)
+           into YP (66) *)
+        Some (min (max_priority_fee_per_gas + base_fee_per_gas) max_fee_per_gas)
+  | LegacyFee {gas_price} -> Some gas_price
 
-let tx_max_gas_fee (tx : Transaction.t) =
-  let tx_gas_limit = Transaction.gas_limit tx in
-  match Transaction.fee_mechanism tx with
-  | FeeMarketFee {max_fee_per_gas; _} -> tx_gas_limit * max_fee_per_gas
-  | LegacyFee {gas_price} -> tx_gas_limit * gas_price
-
-(* EIP-7825, adjusted for Monad §3. *)
+(* EIP-7825, adjusted for Monad §3 max_tx_gas_limit. *)
 let tx_max_gas_limit = ~$30_000_000
 
+(* Per-instruction gas costs as per YP (326), adjusted for Monad §4.1 *)
 let jumpdest = ~$1
 
 let base = ~$2
@@ -122,16 +121,19 @@ let new_account_cost = ~$25_000
 let call_value = ~$9_000
 let call_stipend = ~$2_300
 
-(* Different from Ethereum, see Monad Spec 4.1 *)
+(* Different from Ethereum, see Monad §4.1 *)
 let cold_sload_cost = ~$8_100
 let cold_account_access_cost = ~$10_100
 
 let warm_access_cost = ~$100
+
+(* YP (329) *)
 let account_access_cost = function `Warm -> warm_access_cost | `Cold -> cold_account_access_cost
 
 let memory_cost (revision : Chain.Monad.Revision.active) =
   match revision with
   | `Eight ->
+      (* YP (328) *)
       let memory_cost_per_word = ~$3 in
       fun (active_memory_words : Uint.t) ->
         Uint.(((active_memory_words ** 2) / ~$512) + (memory_cost_per_word * active_memory_words))

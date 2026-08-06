@@ -9,16 +9,15 @@ let ( .^$()<- ) x lens f = Lens.modify lens f x
 
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
-      includes the world state as per YP 4.1.
-   *)
+      includes the world state as per YP 4.1. *)
   type t =
     { history : Block.t list
-    ; accounts : Account.t Address.Map.t (* σ[a] *)
+    ; accounts : Account.t Address.Map.t (* σ[a], implicitly realizes YP (12) *)
     ; next_emptying_transaction_block : Uint.t Address.Map.t
           (** [next_emptying_transaction_block] maps every address to the next block number in which a
-        transaction from it would be emptying. The counter for an account is bumped by
-        {!Reserve_balance.execution_consensus_delay} every time the account submits a transaction or appears
-        in a valid delegation. *)
+              transaction from it would be emptying. The counter for an account is bumped by
+              {!Reserve_balance.execution_consensus_delay} every time the account submits a transaction or
+              appears in a valid delegation. *)
     }
   [@@deriving lens {submodule = true; prefix = true}]
 
@@ -38,6 +37,12 @@ module WorldState = struct
         set acct state
     in
     Lens.{get; set}
+
+  (** [account addr] provides a lens into the current state of the account for [addr]. Addresses that do not
+      correspond to entries in the underlying map are considered to correspond to empty accounts. Conversely,
+      setting the account of an address to the empty account deletes it from the underlying map. Since
+      non-existent accounts are treated as empty, we do not make a distinction between empty (YP (14)) and
+      dead (YP (15)) accounts. *)
   let account ?(keep_empty = false) addr =
     account_opt ~keep_empty addr |-- Option.get_or_default Account.empty
 
@@ -48,6 +53,7 @@ module WorldState = struct
     let mpt =
       state.accounts
       |> Address.Map.to_seq
+      (* YP (10) *)
       |> Seq.map (fun (addr, acc) ->
           (* YP (11) *)
           let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
@@ -88,15 +94,23 @@ module BlockState = struct
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
   let account_opt ?(keep_empty = false) addr = world_state |-- WorldState.account_opt ~keep_empty addr
 
-  (** [finalize_current_block bs] returns [bs.current_block] with the roots updated to reflect the
-      new state after block execution. If the block already carries its MPT roots are already calculated,
-      they are overwritten. *)
+  (** [finalize_current_block bs] returns [bs.current_block] with its header updated to reflect the new state
+      after block execution. This will overwrite header fields [parent_hash], [state_root], [transactions_root],
+      [receipts_root], [withdrawals_root], [logs_bloom], [requests_hash], [gas_used] and [blob_gas_used]. *)
   let finalize_current_block (block_state : t) : Block.t =
     (* YP (46) *)
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
-    (* YP (35) *)
+    (* The equations in YP (35) are enforced by the assignments below. *)
+
+    (* YP (183), YP (184). This also enforces the condition in YP (39) for the subsequent block, that is,
+       this block header's state root will be equal to the root of the initial state when processing the next
+       block.
+       Note that YP (39) is only enforced by this assignment, therefore any state changes that are
+       triggered by an external call (test frameworks, fuzzer harness, loading a genesis state) may break
+       this invariant. *)
     let state_root = WorldState.state_root block_state.world_state in
+
     let transactions_root =
       ( block_state.transactions_processed
       |> List.to_seq
@@ -125,7 +139,9 @@ module BlockState = struct
       |> Bloom.union
     in
 
-    (* See https://eips.ethereum.org/EIPS/eip-7685#block-header *)
+    (* Monad does not implement EIP-6110 or EIP-7002, therefore the requests list will always be empty. The
+       requests hash is computed here as per https://eips.ethereum.org/EIPS/eip-7685#block-header for
+       completeness. *)
     let requests_hash =
       block_state.requests
       |> List.filter (fun req -> Bytes.length req > 1)
@@ -134,6 +150,8 @@ module BlockState = struct
       |> Crypto.sha_256
     in
 
+    (* Gas used was tracked incrementally, instead of being computed from the last transaction receipt as
+       it is in YP (181) *)
     let gas_used = block_state.gas_used in
     (* Monad does not support Blob transactions. *)
     let blob_gas_used = U64.zero in
@@ -166,7 +184,7 @@ module TransactionState = struct
   end
 
   (** State within a single transaction. Tracks the initial world state, any changes to its storage,
-      and variables that are internal to the transaction such as the accrued substate (YP 6.1). *)
+      and variables that are internal to the transaction such as the accrued substate (YP (62)). *)
   type t =
     { initial_world_state : WorldState.t
     ; world_state : WorldState.t
@@ -188,6 +206,7 @@ module TransactionState = struct
   let empty =
     let world_state = WorldState.empty in
     let current_block = Block.{header = Header.empty; transactions = []; withdrawals = []; ommers = []} in
+    (* YP (63), except for the accessed address set Aₐ = π, which is initialized by initialize_access_sets. *)
     { initial_world_state = world_state
     ; world_state
     ; current_block
@@ -213,14 +232,10 @@ module TransactionState = struct
     ; transient_storage = Address.Map.empty
     ; accounts_created_in_current_transaction = Address.Set.empty
     ; tx_origin = sender
-    ; tx_gas_price
-    ; self_destruct = Address.Set.empty
-    ; logs = []
-    ; refund = U256.zero }
+    ; tx_gas_price }
 
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
 
-  (* YP (77). *)
   let initialize_access_sets
       (tx : Transaction.t) (transaction_state : t) (precompile_addresses : Address.Set.t) =
     let open Transaction.Access in
@@ -232,20 +247,21 @@ module TransactionState = struct
       |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.address, k)))
       |> StorageKey.Set.of_seq
     in
-    (* YP (79), YP (80). *)
+    (* The Eₐ terms in YP (80) *)
     let access_list_addresses =
       List.to_seq access_list |> Seq.map (fun acc -> acc.address) |> Address.Set.of_seq
     in
+    (* The Tₜ term in YP (79), expanded to warm any delegation target as per EIP-7702. *)
     let target_addresses =
       match Transaction.call_or_create tx with
+      | Create _ -> Address.Set.empty
       | Call {to_; _} -> (
         match Delegation.get_delegated_address transaction_state.^(account to_).code with
         | None -> Address.Set.singleton to_
         | Some delegated -> Address.Set.of_list [to_; delegated] )
-      | Create _ ->
-          let sender_nonce = transaction_state.^(account sender).nonce in
-          Address.Set.singleton (Address.of_contract_creation ~sender ~nonce:sender_nonce ~create2:None)
     in
+    (* YP (80), joined with Tₜ and the pre-existing access set containing any already-processed EIP-7702
+       authorizations. *)
     let accessed_addresses =
       List.fold_left Address.Set.union Address.Set.empty
         [ access_list_addresses
@@ -365,6 +381,7 @@ struct
 
   let precompiles = Precompiles.precompiles ChainParams.revision
 
+  (* YP (140) *)
   let try_precompile (address : Address.t) (msg : Evmc.Message.t) ~otherwise =
     match Address.Map.find_opt address precompiles with
     | Some precompile when not msg.delegated -> return (precompile msg)
@@ -381,48 +398,56 @@ struct
       let$ () = touch_account addr in
       update_field accessed_keys (StorageKey.Set.add (addr, key)) )
 
+  (* YP (119) *)
   let process_call (from_tx : Transaction.t option) (msg : Evmc.Message.t) =
     assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
     let$ transfer_ok =
+      (* YP (120), YP (121), YP (122), YP (123), YP (124), YP (125), YP (126) *)
       if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
     in
     if transfer_ok then
+      (* YP (131) *)
       try_precompile msg.code_address msg
         ~otherwise:
           (let$ code =
+             (* YP (141) does not apply here as the state stores account code directly. *)
              let$ account_code = !(account msg.code_address |-- code) in
              match (from_tx, Delegation.get_delegated_address account_code) with
              | Some _, Some delegated_addr -> !(account delegated_addr |-- code)
              | _ -> return account_code
            in
+           (* YP (140), fallthrough case. *)
            Vm.execute msg code )
     else return Evmc.Result.(failure StatusCode.Insufficient_balance)
 
+  (* YP (93) *)
   let process_create (msg : Evmc.Message.t) =
     let$ sender_nonce = !(account msg.sender |-- nonce) in
+    (* YP (94) *)
     let create_address =
-      Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce
-        ~create2:
-          (if msg.kind = Create2 then Some {salt = msg.create2_salt; initcode = msg.input_data} else None)
+      (* Subsumes YP (92) *)
+      let create2 : Address.create2_params option =
+        if msg.kind = Create2 then Some Address.{salt = msg.create2_salt; initcode = msg.input_data} else None
+      in
+      Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce ~create2
     in
+    (* YP (97) *)
     let$ () = touch_account create_address in
     let$ pre_existent_account = !(account create_address) in
     if U64.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
-      (* EIP-684 *)
-      return
-        Evmc.Result.
-          { status_code = StatusCode.Contract_validation_failure
-          ; gas_left = 0L
-          ; gas_refund = 0L
-          ; output_data = Bytes.empty
-          ; create_address = Address.zero }
+      (* EIP-684, covers YP (118) disjunct 1 *)
+      return (Evmc.Result.failure Contract_validation_failure)
     else
       let$ () =
         update_field accounts_created_in_current_transaction (fun addresses ->
             Address.Set.add create_address addresses )
       in
+      (* YP (98): σ* is σ except for the two accounts mutated below. *)
+      (* YP (99), σ*[a]ₙ and σ*[a]ₛ. The code field of σ*[a] is known to be empty by this point. *)
       let$ () = account create_address |-- storage := B32.Map.empty in
       let$ () = account create_address |-- nonce := U64.one in
+      (* σ*[a]_b as per YP (99), and σ*[s]_b as per YP (100), YP (101). YP (102) v' is implicitly calculated
+         by transfer_ether. *)
       let$ transfer_ok = transfer_ether msg.sender create_address msg.value in
 
       let$ result =
@@ -436,6 +461,7 @@ struct
               ; create2_salt = B32.zeros
               ; code_address = create_address }
           in
+          (* YP (103) *)
           Vm.execute creation_msg msg.input_data
         else return Evmc.Result.(failure StatusCode.Insufficient_balance)
       in
@@ -444,7 +470,9 @@ struct
       | Success -> (
           let contract_code = result.output_data in
           let contract_length = Bytes.length contract_code in
+          (* YP (113) *)
           let contract_code_gas = Gas.(of_int contract_length * code_deposit_per_byte) in
+          (* YP (118), disjuncts 3, 4, 5 *)
           let failure : Evmc.Result.StatusCode.t option =
             if contract_length > 0 && contract_code.[0] = '\xef' then Some Contract_validation_failure
             else if contract_length > Chain.Monad.Constants.max_code_size then
@@ -455,10 +483,14 @@ struct
           match failure with
           | Some error -> return (Evmc.Result.failure error)
           | None ->
+              (* YP (114), success case. The failure case is covered by Evmc.Result.failure *)
               let gas_left = Gas.(to_uint64 (of_uint64 result.gas_left - contract_code_gas)) in
+              (* YP (115), success case. The failure case is covered by the caller. *)
               let$ () = account create_address |-- code := contract_code in
               return {result with create_address; gas_left} )
-      | _ -> return result
+      | _ ->
+          (* YP (118), disjunct 2 *)
+          return result
 
   let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =
     let$ () =
@@ -503,6 +535,10 @@ struct
           in
           return (if reserve_dipped then {result with status_code = Revert; gas_refund = 0L} else result)
     in
+    (* YP (115), YP (116), failure cases. YP (117) is implicitly covered by result.status_code. *)
+    (* YP (127), YP (129), failure cases. YP (128) is implicitly covered by exceptional halting returning
+       Evmc.Result.failure, which sets gas refund to zero. YP (130) is implicitly covered by
+       result.status_code. *)
     let$ () = when_ (result.status_code <> Success) (put initial_state) in
     return result
 
