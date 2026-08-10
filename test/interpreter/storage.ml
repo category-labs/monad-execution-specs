@@ -60,6 +60,5 @@ let () =
              (fun () ->
                let _, state = test_message (bytecode_to_call_message bc_write) in
                ignore
-                 (test_message
-                    ~prepare_env:(fun _env -> state)
-                    ~check_vm_state:(expect_stack [value]) (bytecode_to_call_message bc_read) ) ) ) ] ) ]
+                 (test_message ~initial_state:state ~expect_output_stack:[value]
+                    (bytecode_to_call_message bc_read) ) ) ) ] ) ]

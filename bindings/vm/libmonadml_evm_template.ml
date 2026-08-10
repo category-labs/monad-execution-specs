@@ -146,15 +146,10 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
             let intf = intf
             let ctx = ctx
           end) in
-          let module Vm =
-            Monad_lib.Vm.Make
-              (struct
-                include Chain_params
-                let trace = false
-                let debug_tstore = debug_tstore
-              end)
-              (Host)
+          let (module Make_vm : Monad_lib.Vm.VM) =
+            Monad_lib.Vm.(if debug_tstore then (module Debug_tstore (Make)) else (module Make))
           in
+          let module Vm = Make_vm (Chain_params) (Host) in
           let result, () = Vm.execute msg code () in
           C_evmc.Result.to_c result )
 

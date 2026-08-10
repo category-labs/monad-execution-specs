@@ -120,18 +120,23 @@ end
 
 let process_block
     (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : Host.WorldState.t) (block : Block.t) =
-  let module Execution = Execution.Make (struct
-    let chain_id = config.chain_id
-    let revision =
-      let rev =
-        match config.network with
-        | Single rev -> rev
-        | Transition {pre; post; timestamp} -> if U256.(block.header.timestamp < timestamp) then pre else post
-        | Invalid -> assert false
-      in
-      rev |> Chain.Monad.Revision.is_active |> Option.get
-    let trace = trace
-  end) in
+  let (module Evm : Vm.VM) = if trace then (module Vm.Trace (Vm.Make)) else (module Vm.Make) in
+  let module Execution =
+    Execution.Make_with_vm
+      (struct
+        let chain_id = config.chain_id
+        let revision =
+          let rev =
+            match config.network with
+            | Single rev -> rev
+            | Transition {pre; post; timestamp} ->
+                if U256.(block.header.timestamp < timestamp) then pre else post
+            | Invalid -> assert false
+          in
+          rev |> Chain.Monad.Revision.is_active |> Option.get
+      end)
+      (Evm)
+  in
   Execution.process_block ~verify state block
 
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =

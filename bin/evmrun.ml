@@ -89,11 +89,11 @@ let block = Block.{header = Header.empty; transactions = [tx]; ommers = []; with
 module Params = struct
   let chain_id = !chain_id
   let revision = !revision
-  let trace = !trace
 end
-module Execution = Execution.Make (Params)
 
 let () =
+  let (module Evm : Vm.VM) = if !trace then (module Vm.Trace (Vm.Make)) else (module Vm.Make) in
+  let module Execution = Execution.Make_with_vm (Params) (Evm) in
   let result, _state =
     let world_state = Host.WorldState.empty in
     let block_state = Host.BlockState.make world_state block in

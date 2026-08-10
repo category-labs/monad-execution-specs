@@ -117,7 +117,6 @@ let process_block
         | Invalid -> assert false
       in
       rev |> Chain.Monad.Revision.is_active |> Option.get
-    let trace = false
   end) in
   Execution.process_block ~verify state block
 
