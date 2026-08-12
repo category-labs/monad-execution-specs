@@ -208,33 +208,37 @@ struct
       (* Validate EIP-7702 authorization list if relevant. *)
       let$ () = validate_authorizations block tx in
 
-      (* Calculate effective gas price and max payable gas fee depending on transaction type. Here we also check
-     that the gas fee stipulated by the transaction is at least as large as the base gas fee for this block. *)
-      (* TODO: check transaction's suggested gas fee is above the block's base gas fee. *)
+      (* Calculate effective gas price and max payable gas fee depending on transaction type. *)
       let base_fee_per_gas = header.base_fee_per_gas in
+      (* p in YP (66). *)
       let$ effective_gas_price =
         match Gas.tx_effective_gas_price base_fee_per_gas tx with
         | Some effective_gas_price -> Ok effective_gas_price
         | None -> invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas})
       in
-      let total_fee = Gas.(tx_gas_limit * effective_gas_price) in
-      (* Note that in Monad, a transaction only needs to be able to pay the gas fee to be considered valid. If
-         the account can pay for the gas fees but not for the value transfer, the transaction will fail but it
-         will not be considered invalid. In particular, irrevocable changes (fees paid, nonce incremented) will
-         take place. *)
+
+      (* The up-front cost v₀ of YP (68), minus Tᵥ: note that in Monad, a transaction only needs to be able to
+         pay the gas fee to be considered valid. If the account can pay for the gas fees but not for the value
+         transfer, the transaction will fail but it will not be considered invalid. In particular, irrevocable
+         changes (fees paid, nonce incremented) will take place. *)
+      let upfront_cost = Gas.tx_max_gas_fee tx in
+
       let$ () =
         when_
-          Uint.(total_fee > U256.to_uint sender_account.balance)
+          Uint.(upfront_cost > U256.to_uint sender_account.balance)
           (invalid_transaction block tx
-             (Insufficient_balance {balance = sender_account.balance; required = total_fee}) )
+             (Insufficient_balance {balance = sender_account.balance; required = upfront_cost}) )
       in
+
+      (* Total fee, calculated as p × T_g as in YP (74) *)
       let total_fee =
-        U256.of_uint_exn total_fee
-        (* Cannot fail as the check above ensures total_fee is bounded by balance. *)
+        U256.of_uint_exn Uint.(effective_gas_price * tx_gas_limit)
+        (* Cannot fail as p × T_g is bounded by v₀ which is known to be less or equal than the balance. *)
       in
 
       return {sender; total_fee; effective_gas_price; intrinsic_gas} )
 
+  (* YP (1), YP (61), YP (185) *)
   let process_transaction (block_state : BlockState.t) (tx : Transaction.t) : BlockState.t or_error =
     let open Result in
     let header = block_state.current_block.header in
