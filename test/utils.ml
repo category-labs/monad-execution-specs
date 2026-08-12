@@ -140,17 +140,17 @@ module Make (P : PARAMS) = struct
   module Vm = Evm.Vm
 
   let test_message
-      ?(prepare_env : Host.TransactionState.t -> Host.TransactionState.t = Fun.id)
+      ?(prepare_env : State.TransactionState.t -> State.TransactionState.t = Fun.id)
       ?(prepare_vm : unit Evm.Vm.M.t = Evm.Vm.M.return ())
       ?(check_vm_state : unit Evm.Vm.M.t option)
-      ?(check_env_state : Host.TransactionState.t -> unit = fun _ -> ())
+      ?(check_env_state : State.TransactionState.t -> unit = fun _ -> ())
       ?(check_result : Evmc.Result.t -> unit = expect_result_status Evmc.Result.StatusCode.Success)
       (msg : Evmc.Message.t) =
     (* This is partially duplicated from vm.ml as it needs to inject assssertion-checking.
      With better VM instrumentation we can remove the duplication *)
     let action =
       let open Evm.Host in
-      let open Monad.State (Host.TransactionState) in
+      let open Monad.State (State.TransactionState) in
       let$ tx_context = get_tx_context in
       let$ host = get in
       let module Exe = Evm.Vm.Executor (struct
@@ -191,7 +191,7 @@ module Make (P : PARAMS) = struct
                 ; create_address = Address.zero }
           | _ -> Evmc.Result.failure err ) )
     in
-    let result, state = action (prepare_env Host.TransactionState.empty) in
+    let result, state = action (prepare_env State.TransactionState.empty) in
     (* If the caller specified a VM postcondition but execution finished with an early abort,
      the postcondition did not get checked and so the test preemptively fails *)
     if Option.is_some check_vm_state then expect_result_status Evmc.Result.StatusCode.Success result ;
