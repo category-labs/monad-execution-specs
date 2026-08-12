@@ -1,8 +1,8 @@
 open Chain.Ethereum
 open Numeric
 open Byte_string
-open Host
 open Lens.Infix
+open State
 
 module Error = struct
   type invalid_block =

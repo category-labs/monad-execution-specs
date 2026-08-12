@@ -95,9 +95,9 @@ module Execution = Execution.Make (Params)
 
 let () =
   let result, _state =
-    let world_state = Host.WorldState.empty in
-    let block_state = Host.BlockState.make world_state block in
-    let transaction_state = Host.TransactionState.make block_state Address.zero tx in
+    let world_state = State.WorldState.empty in
+    let block_state = State.BlockState.make world_state block in
+    let transaction_state = State.TransactionState.make block_state Address.zero tx in
     let msg = {(Execution.prepare_message sender gas_limit tx) with code = bytecode; input_data = calldata} in
     Execution.Vm.execute msg bytecode transaction_state
   in

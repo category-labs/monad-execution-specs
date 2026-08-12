@@ -73,12 +73,12 @@ let drop_test_folder_prefix =
       String.sub filename prefix_len (String.length filename - prefix_len)
     else filename
 
-let load_preconditions pre (state : Host.WorldState.t) =
-  let open Host.WorldState in
+let load_preconditions pre (state : State.WorldState.t) =
+  let open State.WorldState in
   let accounts = Address.Map.add_seq (Address.Map.to_seq pre) state.accounts in
   {state with accounts}
 
-let check_postconditions (post : Account.t Address.Map.t) (state : Host.WorldState.t) : unit =
+let check_postconditions (post : Account.t Address.Map.t) (state : State.WorldState.t) : unit =
   let check_account_existence_and_state addr =
     let actual = Address.Map.find_opt addr state.accounts in
     let expected = Address.Map.find_opt addr post in
@@ -89,7 +89,7 @@ let check_postconditions (post : Account.t Address.Map.t) (state : Host.WorldSta
   let all_addresses = Address.(Set.union (Map.keys state.accounts) (Map.keys post)) in
   Address.Set.iter check_account_existence_and_state all_addresses
 
-let load_genesis_block (genesis_block_header : Block.Header.t) (state : Host.WorldState.t) =
+let load_genesis_block (genesis_block_header : Block.Header.t) (state : State.WorldState.t) =
   { state with
     history = [Block.{header = genesis_block_header; transactions = []; ommers = []; withdrawals = []}] }
 
@@ -101,7 +101,8 @@ module Test_failure = struct
 end
 
 let process_block
-    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : Host.WorldState.t) (block : Block.t) =
+    (config : Fixtures.BlockchainTest.config) ~(verify : bool) (state : State.WorldState.t) (block : Block.t)
+    =
   let module Execution = Execution.Make (struct
     let chain_id = config.chain_id
     let revision =
@@ -127,11 +128,11 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
     | Ok _, Some err -> Error (Test_failure.Expected_error err)
     | Error err, None -> Error (Test_failure.Expected_ok err)
   in
-  Host.WorldState.empty
+  State.WorldState.empty
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  assert (B32.(Host.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
+  assert (B32.(State.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
   |> expect_ok
