@@ -441,24 +441,23 @@ struct
       in
 
       match result.status_code with
-      | Success ->
+      | Success -> (
           let contract_code = result.output_data in
           let contract_length = Bytes.length contract_code in
           let contract_code_gas = Gas.(of_int contract_length * code_deposit_per_byte) in
-          if
-            (contract_length > 0 && contract_code.[0] = '\xef')
-            || Gas.(contract_code_gas > of_int64 result.gas_left)
-          then
-            return
-              { result with
-                gas_left = Int64.zero
-              ; output_data = Bytes.empty
-              ; status_code =
-                  Evmc.Result.StatusCode.(
-                    if contract_code.[0] = '\xef' then Contract_validation_failure else Out_of_gas ) }
-          else
-            let$ () = account create_address |-- code := contract_code in
-            return {result with create_address}
+          let failure : Evmc.Result.StatusCode.t option =
+            if contract_length > 0 && contract_code.[0] = '\xef' then Some Contract_validation_failure
+            else if contract_length > Chain.Monad.Constants.max_code_size then
+              Some Contract_validation_failure
+            else if Gas.(of_uint64 result.gas_left < contract_code_gas) then Some Out_of_gas
+            else None
+          in
+          match failure with
+          | Some error -> return (Evmc.Result.failure error)
+          | None ->
+              let gas_left = Gas.(to_uint64 (of_uint64 result.gas_left - contract_code_gas)) in
+              let$ () = account create_address |-- code := contract_code in
+              return {result with create_address; gas_left} )
       | _ -> return result
 
   let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =

@@ -176,7 +176,7 @@ struct
       (* Initcode size *)
       let$ () =
         match Transaction.call_or_create tx with
-        | Create {initcode} when Bytes.length initcode > Vm.max_init_code_size ->
+        | Create {initcode} when Bytes.length initcode > Chain.Monad.Constants.max_init_code_size ->
             invalid_transaction block tx Initcode_too_long
         | _ -> return ()
       in
