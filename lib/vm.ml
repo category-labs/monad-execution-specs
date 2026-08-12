@@ -262,10 +262,6 @@ struct
 
   let max_stack_depth = 1024
 
-  (* Monad §TODO: maximum contract code size is larger than Ethereum. *)
-  let max_code_size = 128 * 1024
-  let max_init_code_size = 2 * max_code_size
-
   let trace ?(print = Params.trace) msg =
     if print then (
       Format.print_string (msg ()) ;
@@ -1544,7 +1540,9 @@ struct
         ~(endowment : U256.t)
         ~(input_start : U256.t)
         ~(input_size_bytes : U256.t) =
-      let$ () = when_ U256.(input_size_bytes > ~$max_init_code_size) (fail Out_of_gas) in
+      let$ () =
+        when_ U256.(input_size_bytes > ~$Chain.Monad.Constants.max_init_code_size) (fail Out_of_gas)
+      in
 
       let$ () = check_write_permissions in
 
@@ -1588,7 +1586,6 @@ struct
         let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
         let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
         if status_code = Evmc.Result.StatusCode.Success then
-          let$ () = spend Gas.(code_deposit_per_byte * ~$(Bytes.length output_data)) in
           let$ () = output_buffer := Bytes.empty in
           push (Address.to_u256 create_address)
         else

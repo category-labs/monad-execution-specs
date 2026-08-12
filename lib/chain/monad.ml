@@ -98,3 +98,9 @@ end
 
 let wei_per_mon = U256.(~$1_000_000_000_000_000_000)
 let mon_to_wei mon = U256.(mon * wei_per_mon)
+
+module Constants = struct
+  (* Monad §TODO: maximum contract code size is larger than Ethereum. *)
+  let max_code_size = 128 * 1024
+  let max_init_code_size = 2 * max_code_size
+end
