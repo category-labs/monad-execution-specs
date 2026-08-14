@@ -255,30 +255,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       | None -> return result
       | Some t ->
           (* Check reserve balance condition. Monad §6 Algorithm 2. *)
-          let chain_id = ChainParams.chain_id in
-          let current_block = initial_state.current_block in
-          let delegated_in_state =
-            Delegation.is_valid_delegation initial_state.^(TransactionState.account msg.sender).code
-          in
-          (* Check whether transaction is emptying. Monad §6 Algorithm 4 (IsEmptying).
-             The check of [delegated_in_state] is exactly as in the spec. The comparison with the next emptying
-             transaction counter subsumes both [auth_condition] and [prior_sender_condition]. Note that
-             authority processing bumps the next emptying transaction block counter before the transaction is
-             processed, but the transaction itself only bumps its sender's counter after it finishes.
-           *)
-          let is_emptying =
-            (not delegated_in_state)
-            && Uint.(
-                 initial_state.world_state.^(WorldState.next_emptying_transaction_block_for msg.sender)
-                 <= current_block.header.number )
-          in
-          let base_fee_per_gas = current_block.header.base_fee_per_gas in
-          let original_balances = initial_state.initial_world_state.accounts in
-          let$ new_state = !(world_state |-- accounts) in
-          let reserve_dipped =
-            Reserve_balance.dipped_into_reserve ~chain_id ~base_fee_per_gas ~original_balances ~new_state ~t
-              ~is_emptying
-          in
+          let$ reserve_dipped = Reserve_balance.dipped_into_reserve ChainParams.revision t in
           return (if reserve_dipped then {result with status_code = Revert; gas_refund = 0L} else result)
     in
     (* YP (115), YP (116), failure cases. YP (117) is implicitly covered by result.status_code. *)
