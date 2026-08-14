@@ -146,19 +146,17 @@ struct
            Vm.execute msg code )
     else return Evmc.Result.(failure StatusCode.Insufficient_balance)
 
+  let contract_creation_address (msg : Evmc.Message.t) =
+    let$ sender_nonce = !(account msg.sender |-- nonce) in
+    (* YP (94), subsuming YP (92). *)
+    let create2 : Address.create2_params option =
+      if msg.kind = Create2 then Some Address.{salt = msg.create2_salt; initcode = msg.input_data} else None
+    in
+    return (Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce ~create2)
+
   (* YP (93) *)
   let process_create (msg : Evmc.Message.t) =
-    let$ sender_nonce = !(account msg.sender |-- nonce) in
-    (* YP (94) *)
-    let create_address =
-      (* Subsumes YP (92) *)
-      let create2 : Address.create2_params option =
-        if msg.kind = Create2 then Some Address.{salt = msg.create2_salt; initcode = msg.input_data} else None
-      in
-      Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce ~create2
-    in
-    (* YP (97) *)
-    let$ () = touch_account create_address in
+    let$ create_address = contract_creation_address msg in
     let$ pre_existent_account = !(account create_address) in
     if U64.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
       (* EIP-684, covers YP (118) disjunct 1 *)
@@ -223,6 +221,18 @@ struct
       (* Increment the nonce for non-EOA CREATE/CREATE2 messages . If the message came from an EOA transaction,
          the nonce was already incremented in the irrevocable change. *)
       when_ ((msg.kind = Create || msg.kind = Create2) && Option.is_none from_tx) (increment_nonce msg.sender)
+    in
+    let$ () =
+      match msg.kind with
+      | Create | Create2 ->
+          let$ create_address = contract_creation_address msg in
+          (* YP (97): Touching the address must occur before the initial
+             state snapshot below because a failed CREATE/CREATE2
+             retains the create address in accessed_addresses, so it
+             remains warm for the caller (see EIP-2929 for this specific
+             clarification). *)
+          touch_account create_address
+      | Call | CallCode | DelegateCall -> return ()
     in
     let$ initial_state = get in
     let$ result =
