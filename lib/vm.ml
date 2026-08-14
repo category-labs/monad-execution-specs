@@ -1067,8 +1067,10 @@ struct
       let$ src_start, size =
         match (U256.to_int_opt src_start, U256.to_int_opt size_bytes) with
         | None, _ | _, None -> fail Invalid_memory_access
-        | Some start, Some sz when start + sz > Bytes.length data -> fail Invalid_memory_access
-        | Some start, Some sz -> return (start, sz)
+        | Some start, Some sz ->
+            let data_len = Bytes.length data in
+            if start > data_len || sz > data_len - start then fail Invalid_memory_access
+            else return (start, sz)
       in
 
       let n_words = U256.(to_uint (bytes_to_whole_words size_bytes)) in
