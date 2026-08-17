@@ -1,25 +1,24 @@
+(** EVMC-style host implementation. This module provides a restricted API for the VM to interact with the
+    state of the blockchain, including accessing storage and sending messages. *)
+
 open Numeric
 open Byte_string
 open Chain.Ethereum
 open Lens.Infix
 open State
 
-module Make
-    (ChainParams : Chain.Monad.PARAMS)
-    (Vm : sig
-      val execute : Evmc.Message.t -> Bytes.t -> Evmc.Result.t TransactionState.M.t
-    end) =
-struct
+(** The division of responsibilities introduced by the EVMC API makes it so that Host and VM modules depend
+    on each other, as a host needs access to a VM to implement the {!Evmc.HOST.call} method and a VM needs
+    access to a host to interact with the blockchain. This mutual recursion is handled here by the
+    {!Instantiate} functor below.
+    In addition to the functions required by the {!Evmc.HOST} interface, this module also exposes
+    [call_from_eoa] which executes a call or create caused by a user-sent transaction (as opposed to
+    a CALL or CREATE opcode in a smart contract). *)
+module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).SIG) = struct
   open Account.TLens
   open WorldState
   include TransactionState
   open M
-
-  let dump_account addr =
-    let$ acc = !(account addr) in
-    Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
-      (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) ;
-    return ()
 
   let transfer_ether sender recipient amount =
     let$ sender_balance = !(account sender |-- balance) in
@@ -29,11 +28,14 @@ struct
       return true
     else return false
 
+  (** {!Evmc.HOST.account_exists} *)
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
+  (** {!Evmc.HOST.get_storage} *)
   let get_storage addr key =
     !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
 
+  (** {!Evmc.HOST.set_storage} *)
   let set_storage addr key v =
     let$ o =
       !( initial_world_state
@@ -66,20 +68,25 @@ struct
       | () when x o && y c && x v -> ModifiedRestored
       | () -> Assigned )
 
+  (** {!Evmc.HOST.get_balance} *)
   let get_balance addr = !(account addr |-- balance)
 
+  (** {!Evmc.HOST.get_code_size} *)
   let get_code_size addr =
     let$ code = !(account addr |-- code) in
     return (Uint64.of_int (Bytes.length code))
 
+  (** {!Evmc.HOST.get_code_hash} *)
   let get_code_hash addr =
     let$ account = !(account addr) in
     return (if Account.is_empty account then None else Some (Crypto.keccak_256 account.code))
 
+  (** {!Evmc.HOST.copy_code} *)
   let copy_code addr ~offset ~size =
     let$ code = !(account addr |-- code) in
     return (Bytes.sub_with_zero_padding code offset size)
 
+  (** {!Evmc.HOST.selfdestruct} *)
   let selfdestruct ~address ~beneficiary =
     let$ account_balance = !(account address |-- balance) in
     let$ transfer_ok = transfer_ether address beneficiary account_balance in
@@ -278,11 +285,14 @@ struct
     let$ () = when_ (result.status_code <> Success) (put initial_state) in
     return result
 
+  (** {!Evmc.HOST.call} *)
   let call (msg : Evmc.Message.t) = call_impl ~from_tx:None msg
 
-  (* Call from a transaction sent by an EOA, as opposed to a system transaction or a CALL opcode. *)
+  (** [call_from_eoa tx msg] processes a message (contract creation or call) created from a transaction sent
+      by an EOA, as opposed to a system transaction or a CALL opcode which are handled by {!call} directly. *)
   let call_from_eoa (tx : Transaction.t) (msg : Evmc.Message.t) = call_impl ~from_tx:(Some tx) msg
 
+  (** {!Evmc.HOST.get_tx_context} *)
   let get_tx_context =
     let$ state = get in
     return
@@ -306,6 +316,7 @@ struct
         ; blob_hashes = []
         ; initcodes = [] }
 
+  (** {!Evmc.HOST.get_block_hash} *)
   let get_block_hash (i : Uint64.t) =
     let$ state = get in
     state.world_state.history
@@ -313,10 +324,12 @@ struct
     |> Option.map Block.hash
     |> return
 
+  (** {!Evmc.HOST.emit_log} *)
   let emit_log address ~(data : Bytes.t) ~(topics : B32.t list) =
     let log : Log.t = {address; topics; data} in
     update_field logs (fun logs -> log :: logs)
 
+  (** {!Evmc.HOST.access_account} *)
   let access_account addr : [`Warm | `Cold] t =
     let$ accessed = !accessed_addresses in
     if Option.is_some (Address.Set.find_opt addr accessed) then return `Warm
@@ -324,6 +337,7 @@ struct
       let$ () = touch_account addr in
       return `Cold
 
+  (** {!Evmc.HOST.access_storage} *)
   let access_storage addr key =
     let$ accessed = !accessed_keys in
     if Option.is_some (StorageKey.Set.find_opt (addr, key) accessed) then return `Warm
@@ -338,8 +352,10 @@ struct
     |-- B32.Map.at key
     |-- Option.get_or_default B32.zeros
 
+  (** {!Evmc.HOST.get_transient_storage} *)
   let get_transient_storage addr key = !(transient_storage addr key)
 
+  (** {!Evmc.HOST.set_transient_storage} *)
   let set_transient_storage addr key value = transient_storage addr key := value
 end
 

@@ -1,3 +1,5 @@
+(** Ethereum precompiled contracts implementation. *)
+
 open Byte_string
 open Numeric
 open Chain.Ethereum

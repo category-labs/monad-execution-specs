@@ -25,7 +25,9 @@ type signature = {r : U256.t; s : U256.t; y_parity : U8.t}
 (* The spec only ever verifies signatures, so the signing-related components of YP appendix F are absent:
    YP (309), YP (310), YP (316), YP (319), YP (320), YP (325). *)
 
-(* ecrecover wraps ECDSARECOVER (YP (311)) with sender address extraction (YP (323)). *)
+(** [ecrecover sign hash] recovers the address that signed a message from the signature [sign] and the signed
+    hash [hash]. This is equivalent to ECDSARECOVER (YP (311)) followed by sender address extraction
+    (YP (323)). *)
 let ecrecover {r; s; y_parity} (msg_hash : B32.t) : B20.t option =
   Option.(
     let$ () = ensure U8.(y_parity = zero || y_parity = one) in

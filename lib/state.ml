@@ -1,3 +1,12 @@
+(** The state model used by the interpreter and block executor, as three record types nested by lifetime:
+    + {!WorldState.t} represents the blockchain state across multiple blocks, and includes the account
+    state σ as well as block history and the emptying transaction counter.
+    + {!BlockState.t} represents the state across multiple transactions within a block, and accumulates
+    gas used and transaction results.
+    + {!TransactionState.t} represents the state within a single transaction, and manages the values
+    that are internal to the transaction such as accrued substate and transient storage.
+ *)
+
 open Numeric
 open Byte_string
 open Chain.Ethereum
@@ -25,7 +34,9 @@ module WorldState = struct
 
   let empty = {history = []; accounts = Address.Map.empty; next_emptying_transaction_block = Address.Map.empty}
 
-  (* EIP-161 deletion of touched empty accounts is done here, which frees the implementation from keeping
+  (** [account_opt addr] provides a lens into the current state of the account for [addr]. Addresses that do
+      not correspond to entries in the underlying map correspond to [None].
+      EIP-161 deletion of touched empty accounts is done here, which frees the implementation from keeping
      track of touched accounts. Note that the Ethereum executable spec uses a similar approach by intercepting
      any state updates to an account and deleting it if it is empty after the update. *)
   let account_opt ?(keep_empty = false) addr =
@@ -42,13 +53,18 @@ module WorldState = struct
       correspond to entries in the underlying map are considered to correspond to empty accounts. Conversely,
       setting the account of an address to the empty account deletes it from the underlying map. Since
       non-existent accounts are treated as empty, we do not make a distinction between empty (YP (14)) and
-      dead (YP (15)) accounts. *)
+      dead (YP (15)) accounts.
+      As with {!account_opt}, updating an account to be empty removes it from the underlying map. *)
   let account ?(keep_empty = false) addr =
     account_opt ~keep_empty addr |-- Option.get_or_default Account.empty
 
+  (** [next_emptying_transaction_block_for addr] returns the block number of the next block in which a
+      transaction from account [addr] would be considered emptying. *)
   let next_emptying_transaction_block_for addr =
     next_emptying_transaction_block |-- Address.Map.at addr |-- Option.get_or_default Uint.zero
 
+  (** [state_root state] computes the state root of the current account map. This involves computing the
+      storage roots of every account in the state, which is very expensive. *)
   let state_root state =
     let mpt =
       state.accounts
@@ -61,13 +77,6 @@ module WorldState = struct
       |> Mpt.of_seq
     in
     mpt.root_hash
-
-  let dump_accounts ws =
-    Address.Map.iter
-      (fun addr acc ->
-        Format.eprintf "%s: %s\n" (Address.to_hex_string addr)
-          (Yojson.Safe.pretty_to_string (Account.to_yojson acc)) )
-      ws.accounts
 end
 
 module BlockState = struct
@@ -236,6 +245,12 @@ module TransactionState = struct
 
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
 
+  (** [initialize_access_sets tx state p_addr] extends the set of accessed addresses and keys of [state] with
+      the transaction sender and recipient (if any), the addresses and keys in the transaction's access list,
+      the delegation target of the recipient (if any), the block's beneficiary and the given list of precompiled
+      contract addresses.
+      The state's accessed addresses are not overwritten but extended, so any addresses that were accessed before
+      this call will remain accessed. *)
   let initialize_access_sets
       (tx : Transaction.t) (transaction_state : t) (precompile_addresses : Address.Set.t) =
     let open Transaction.Access in
@@ -261,7 +276,8 @@ module TransactionState = struct
         | Some delegated -> Address.Set.of_list [to_; delegated] )
     in
     (* YP (80), joined with Tₜ and the pre-existing access set containing any already-processed EIP-7702
-       authorizations. *)
+       authorizations. TODO: it might be cleaner to pass the authorities to this function and have a single
+       source for access initialization. *)
     let accessed_addresses =
       List.fold_left Address.Set.union Address.Set.empty
         [ access_list_addresses

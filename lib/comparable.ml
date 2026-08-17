@@ -1,4 +1,4 @@
-(** Automatically derived monomorphic comparison operators on types implementing [compare]. *)
+(** Automatically derived monomorphic comparison operators, sets and maps on types implementing [compare]. *)
 
 module Make (T : sig
   type t

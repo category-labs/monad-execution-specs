@@ -1,6 +1,10 @@
-(** Definitions for reserve balance checks. *)
-open Chain.Ethereum
+(** Definitions for reserve balance checks.
+    Reserve balance is a Monad-specific mechanism that allows the network to support asynchronous execution
+    of transactions in the presence of EIP-7702 account delegations. It ensures that the consensus layer may
+    assume that account balances don't drop below a specific amount (the reserve balance) except for the case
+    of sporadic "emptying transactions" which can be statically accounted for. *)
 
+open Chain.Ethereum
 open Chain.Monad
 open Numeric
 
@@ -9,10 +13,13 @@ let default_reserve_balance = mon_to_wei U256.(~$10)
 
 let user_reserve_balance (account : Account.t) = ignore account ; default_reserve_balance
 
-(** Monad §3: k *)
+(** Monad §3: k, the block delay between consensus and execution. *)
 let execution_consensus_delay = Uint.of_int 3
 
-(** Monad §6 Algorithm 3 (DippedIntoReserve) *)
+(** Monad §6 Algorithm 3 (DippedIntoReserve). [dipped_into_reserve ... ~t ~is_emptying] returns [true] if the
+    balances of any of the accounts that have been modified in transaction [t] have fallen below the reserve
+    balance requirement. If [is_emptying] is [true], the transaction sender's account is allowed to violate this
+    requirement *)
 let dipped_into_reserve
     ~(chain_id : Uint.t)
     ~(base_fee_per_gas : Uint.t)

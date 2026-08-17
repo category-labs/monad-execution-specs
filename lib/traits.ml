@@ -1,3 +1,7 @@
+(** Traits defining byte width and signedness for {!Numeric.Make} and {!Byte_string.Fixed} functor instantiation.
+    These functors should only be instantiated with the modules defined here, to avoid having multiple
+    incompatible types with the same parameters. *)
+
 module Byte_width = struct
   module type SIG = sig
     val byte_width : [`Variable | `Fixed of int]

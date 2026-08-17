@@ -1,11 +1,15 @@
+(** Recursive-length prefix encoding and decoding, as defined in YP Appendix B. *)
+
 open Byte_string
 
-(* YP (190), YP (191), YP (192) *)
+(** The type of RLP-encodable objects: either a byte string or a list of RLP-encodable objects. High-level types
+    define encoding and decoding functions into this type. YP (190), YP (191), YP (192) *)
 type t = Bytes of Bytes.t | List of t list
 
 let of_bytes (bs : Bytes.t) = Bytes bs
 let of_bytes32 (bs : B32.t) = Bytes (B32.to_bytes bs)
 
+(** [to_string t] returns a human-readable representation of the given RLP structure [t]. *)
 let rec to_string x =
   match x with
   | Bytes bs -> Format.sprintf "Bytes(\"%s\")" (Bytes.to_hex_string bs)
@@ -13,7 +17,7 @@ let rec to_string x =
 
 let equal (x : t) (y : t) = x = y
 
-(** Encode an integer as a big-endian byte array of minimal length. YP (195) *)
+(** [be x] encodes an integer as a big-endian byte array of minimal length. YP (195) *)
 let be (x : int) =
   let x = Z.of_int x in
   let x_bytes = (Z.numbits x + 7) / 8 in
@@ -41,9 +45,9 @@ let long_bytes_prefix = 0xb7
 let short_list_prefix = 0xc0
 let long_list_prefix = 0xf7
 
-(* TODO: OCaml's maximum string length is much smaller than 2^64, so we should switch to Bigarray *)
-(* YP (193) *)
+(** [encode obj] RLP-encodes the object [obj] into a byte array. YP (193) *)
 let rec encode (obj : t) : Bytes.t =
+  (* TODO: OCaml's maximum string length is much smaller than 2^64, so we should switch to Bigarray *)
   match obj with
   | Bytes bs when Bytes.length bs = 1 && Char.code bs.[0] < short_bytes_prefix -> bs
   | Bytes bs ->
@@ -54,7 +58,7 @@ let rec encode (obj : t) : Bytes.t =
       encode_payload bs ~short_payload_prefix:short_list_prefix ~long_payload_prefix:long_list_prefix
 
 (** [decode_first bs] decodes the first RLP-encoded object in the byte array [bs] and returns it and any
-    remaining bytes. [bs] must be non-empty. *)
+    remaining bytes. [bs] must be non-empty, otherwise a runtime error is raised. *)
 let rec decode_first (bs : Bytes.t) : t * Bytes.t =
   let len = Bytes.length bs in
   assert (len > 0) ;
@@ -85,7 +89,8 @@ and decode_all (bs : Bytes.t) : t list =
     let fst, rest = decode_first bs in
     fst :: decode_all rest
 
-(** [decode bs] behaves as [decode_first bs] except the input [bs] must contain exactly one RLP-encoded object. *)
+(** [decode bs] behaves as [decode_first bs] except the input [bs] must contain exactly one RLP-encoded object,
+    otherwise a runtime error is raised. *)
 let decode (bytes : Bytes.t) =
   let obj, rest = decode_first bytes in
   assert (Bytes.length rest = 0) ;

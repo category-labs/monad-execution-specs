@@ -1,4 +1,5 @@
 (** [Stdlib.Map] extended with lens operations. *)
+
 include Stdlib.Map
 
 module type S = sig

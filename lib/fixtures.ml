@@ -1,3 +1,6 @@
+(** Utilities for serializing and deserializing EEST-style test fixtures.
+    Currently only blockchain tests are supported. *)
+
 open Chain.Ethereum
 open Byte_string
 open Numeric
@@ -13,6 +16,7 @@ let ( .$()<- ) obj k v =
   in
   `Assoc (loop (to_assoc obj))
 
+(* Helper type for encoding and decoding OCaml association lists as JSON objects. *)
 type 'v object_as_alist = (string * 'v) list
 let object_as_alist_of_yojson value_of_yojson (json : Yojson.Safe.t) : ('v object_as_alist, string) result =
   Result.(
@@ -29,13 +33,18 @@ let object_as_alist_to_yojson value_to_yojson (alist : 'v object_as_alist) : Yoj
 let bytes_of_hex_string str = try Ok (Bytes.of_hex_string str) with _ -> Error "Fixtures.hex_or_string"
 let hex_or_string str = if String.starts_with ~prefix:"0x" str then bytes_of_hex_string str else Ok str
 
-module StateTest = struct end
 module BlockchainTest = struct
+  (** EEST blockchain test fixtures. See
+      {{:https://steel.ethereum.foundation/docs/execution-specs/running_tests/test_formats/blockchain_test}here}
+      for an overview of the file format. *)
+
   (* An EEST fixture's revision field can contain a single fork name or otherwise two fork names encoded in the
      format "<FORK_NAME>To<FORK_NAME>AtTime15k", to indicate that the fixture's blocks span a fork transition.
    *)
   type revision =
-    | Invalid (* Some fixtures have mixed revisions like "PragueToMONAD_EIGHT" which are unrepresentable. *)
+    | Invalid
+    (* Some fixtures in the MF test set have mixed revisions like "PragueToMONAD_EIGHT" which are
+       unrepresentable. *)
     | Single of Chain.Monad.Revision.t
     | Transition of {pre : Chain.Monad.Revision.t; post : Chain.Monad.Revision.t; timestamp : U256.t}
   let revision_of_yojson (json : Yojson.Safe.t) : (revision, string) result =
@@ -160,6 +169,9 @@ module BlockchainTest = struct
 end
 
 module TrieTest = struct
+  (** Trie tests matching the ethereum-tests format, see the definition
+      {{:https://ethereum-tests.readthedocs.io/en/latest/test_sample/trie_tests.html}here} *)
+
   type entry = Bytes.t * Bytes.t
 
   let entry_list_of_yojson ~hex_encoded ~hash_keys (entries : Yojson.Safe.t) : (entry list, string) result =

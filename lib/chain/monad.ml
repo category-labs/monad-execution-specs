@@ -1,8 +1,22 @@
 (** Definitions for Monad-specific types. *)
+
 open Numeric
 
 module Revision = struct
-  type t = [`Zero | `One | `Two | `Three | `Four | `Five | `Six | `Seven | `Eight | `Nine | `Next]
+  (** Monad revisions, defining the set of features that are active on chain. *)
+
+  type t =
+    [ `Zero
+    | `One
+    | `Two
+    | `Three
+    | `Four
+    | `Five
+    | `Six
+    | `Seven
+    | `Eight
+    | `Nine  (** Defined in {{:https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-6.md}MIP-6} *)
+    | `Next ]
   let all_revisions : t list = [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Next]
 
   let to_string : t -> string = function
@@ -37,8 +51,10 @@ module Revision = struct
     | `String str -> ( match of_string str with Some rev -> Ok rev | None -> Error "Revision.t" )
     | _ -> Error "Revision.t"
 
-  (* The monad revisions supported by the current version of the spec. *)
+  (** The monad revisions supported by the current version of the spec. By design, the spec only supports
+      two revisions at a time. *)
   type active = [`Eight | `Nine]
+
   let is_active (rev : t) : active option = match rev with #active as rev -> Some rev | _ -> None
   let all_active_revisions : active list = List.filter_map is_active all_revisions
 end
@@ -101,7 +117,10 @@ let wei_per_mon = U256.(~$1_000_000_000_000_000_000)
 let mon_to_wei mon = U256.(mon * wei_per_mon)
 
 module Constants = struct
-  (* Monad §TODO: maximum contract code size is larger than Ethereum. *)
+  (** Maximum size in bytes of a deployed smart contract. Monad §TODO: maximum contract code size is larger than
+      Ethereum. *)
   let max_code_size = 128 * 1024
+
+  (** Maximum size in bytes of the initcode for contract creation. *)
   let max_init_code_size = 2 * max_code_size
 end

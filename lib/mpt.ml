@@ -1,6 +1,16 @@
+(** Merkle Patricia tries, used in the calculation of state roots.
+
+    The current implementation does not maintain MPTs incrementally but instead stores all state as standard
+    maps, which are converted into MPTs only at the end of a block's execution, when their state roots are
+    required.
+
+    Construction of MPTs is done in stages, by constructing a regular trie first, then a Patricialized version
+    of it and finally Merkleizing it to an MPT. *)
+
 open Numeric
 open Byte_string
 
+(** Types and utilities for working with nibble arrays, represented as byte arrays with one byte per nibble. *)
 module Nibbles = struct
   include Byte_string.Bytes
   open Stdlib
@@ -39,9 +49,9 @@ module Nibbles = struct
     |> Seq.find (( <> ) 0)
     |> function None -> true | Some _ -> false
 
-  (** [hex_prefix_encode n flag] encodes a sequence of nibbles plus an extra flag into a sequence of bytes,
-      following the definition of HP in YP (200) *)
-  let hex_prefix_encode (ns : t) (flag : bool) : t =
+  (** [hex_prefix_encode n flag] encodes a nibble array plus an extra flag into a byte array, following the
+      definition of HP in YP (200) *)
+  let hex_prefix_encode (ns : t) (flag : bool) : Byte_string.Bytes.t =
     let odd = length ns mod 2 = 1 in
     let header =
       (* 16×f(t) as in YP (201) *)
@@ -58,7 +68,9 @@ module Nibbles = struct
             let lower_nibble = Char.code ns.[((i - 1) * 2) + 1 + shift] in
             Char.unsafe_chr ((16 * upper_nibble) + lower_nibble) )
 
-  let hex_prefix_decode (bs : t) : t * bool =
+  (** [hex_prefix_decode bs] decodes a byte array into a nibble array plus an extra flag. This is the inverse
+      of HP in YP (200). *)
+  let hex_prefix_decode (bs : Byte_string.Bytes.t) : t * bool =
     let header = Char.code bs.[0] in
     let odd = header land odd_mask <> 0 in
     let flag = header land flag_mask <> 0 in
@@ -78,6 +90,7 @@ module Nibbles = struct
     (ns, flag)
 end
 
+(** Prefix tries indexed by nibble sequences. *)
 module Trie = struct
   let branching_factor = 16
 
@@ -111,6 +124,8 @@ module Trie = struct
         find k ~depth:(depth + 1) (Iarray.get branches k_i)
 end
 
+(** Patricia tries indexed by nibble sequences. A Patricia trie is constructed from a prefix trie by merging
+    nodes that are only children with their parents. *)
 module PatriciaTrie = struct
   type t =
     | Empty
@@ -165,6 +180,9 @@ module PatriciaTrie = struct
         else None
 end
 
+(** Merkle trie nodes. A node in a Merkle Patricia trie is identical to a node in a Patricia trie, except
+    large nodes (defined here as nodes with a RLP-encoded size greater or equal to 32) are stored as 32-byte
+    hashes. *)
 module Node = struct
   type small_node_or_hash = Small of t | Hash of B32.t
   and t =
@@ -224,9 +242,11 @@ module Node = struct
     | rlp -> Small (of_rlp rlp)
 end
 
+(** Merkle Patricia tries, represented as the hash of the root node and a mapping from node hashes to nodes. *)
 type t = {inv_hashes : Node.t B32.Map.t; root_hash : B32.t}
 
 module M = struct
+  (* An ad-hoc monad to modify the inverse hash map of a MPT during construction. *)
   include Monad.State (struct
     type t = Node.t B32.Map.t
   end)

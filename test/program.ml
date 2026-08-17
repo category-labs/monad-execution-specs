@@ -1,4 +1,4 @@
-(* Utilities for building bytecode *)
+(** Higher-level utilities for building bytecode for tests. *)
 
 open Monad_lib
 open Monad_lib.Opcode

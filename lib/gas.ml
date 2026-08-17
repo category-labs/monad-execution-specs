@@ -30,29 +30,49 @@ let updated_base_fee_per_gas (parent_header : Block.Header.t) =
       base_fee + base_fee_increase
   | () -> assert false (* Unreachable. *)
 
-(* See EIP-2935, EIP-4788. *)
+(** The amount of gas provided for the execution of a system transaction. See EIP-2935, EIP-4788. *)
 let system_transaction_gas = ~$30_000_000
 
+(** Gas cost per zero byte of the calldata. Non-zero bytes consume 4 times this amount. See G_txdatazero and
+    G_txdatanonzero in YP (64). *)
 let tx_calldata_token_gas = ~$4
+
+(** The minimum amount of gas consumed by a transaction for each zero byte of the calldata. Non-zero bytes
+    consume 4 times this amount. See EIP-7623. *)
 let tx_calldata_floor_token_gas = ~$10
 
+(** Additional gas cost for contract creation transactions. See G_create in YP Appendix G. *)
 let tx_create_gas = ~$32_000
+
+(** Gas cost per 32-byte word of initcode in a deploy transaction or a CREATE or CREATE2 operation.
+    See G_initcodeword in YP Appendix G. *)
 let tx_initcode_gas_per_word = ~$2
 
+(** Gas cost per address in a transaction's access list. *)
 let tx_access_list_address = ~$2_400
+
+(** Gas cost per storage key in a transaction's access list. *)
 let tx_access_list_storage = ~$1_900
 
+(** Base gas cost of a transaction. *)
 let tx_base_gas = ~$21_000
 
+(** Compute the amount of tokens in a transaction's calldata. A zero byte is counted as one token, a
+    non-zero byte is counted as 4 tokens. *)
 let tokens_in_calldata (tx : Transaction.t) =
   let Bytes.{zero_bytes; nonzero_bytes} = Bytes.count_zero_and_nonzero_bytes Transaction.(data tx) in
   Stdlib.(zero_bytes + (4 * nonzero_bytes))
 
-(* EIP-7702 *)
+(** EIP-7702: Cost of processing an authorization when the code of the authority is empty. *)
 let tx_authorization_list_gas_per_address = Delegation.per_empty_account_cost
+
+(** EIP-7702: Gas refund when processing an authorization when the code of the authority is empty.
+    As per the EIP, the full cost is subtracted first, as if the code was empty, and this amount is then
+    added to the refund counter. *)
 let tx_authorization_list_refund_per_nonempty = Delegation.(per_empty_account_cost - per_auth_base_cost)
 
-(* YP (64) *)
+(** [tx_intrinsic_gas tx] computes the intrinsic gas cost of [tx], that is, the amount of gas that is charged
+    before execution starts. YP (64) *)
 let tx_intrinsic_gas (tx : Transaction.t) =
   let calldata_gas = ~$(tokens_in_calldata tx) * tx_calldata_token_gas in
   let create_gas =
@@ -74,11 +94,15 @@ let tx_intrinsic_gas (tx : Transaction.t) =
   in
   calldata_gas + create_gas + transaction_gas + access_list_gas + authorization_list_gas
 
-(* EIP-7623 *)
+(** [tx_floor_gas tx] computes the floor gas cost of [tx], as per EIP-7623. A transaction must provide enough
+    gas to cover this amount (before subtracting the intrinsic gas), but it is not charged. Instead, it is
+    used as a lower bound to the post-execution gas used counter. Monad transactions always use the full
+    amount of gas provided, so the floor gas is only used as a pre-execution check. *)
 let tx_floor_gas (tx : Transaction.t) =
   (~$(tokens_in_calldata tx) * tx_calldata_floor_token_gas) + tx_base_gas
 
-(* YP (66), gas_bid in Monad §2 *)
+(** [tx_effective_gas_price b tx] is the price in MON-wei that the sender of [tx] will pay per unit of gas.
+    YP (66), gas_bid in Monad §2 *)
 let tx_effective_gas_price (base_fee_per_gas : t) (tx : Transaction.t) =
   (* YP (67) and YP (70) are folded into this definition. *)
   match Transaction.fee_mechanism tx with
@@ -91,13 +115,15 @@ let tx_effective_gas_price (base_fee_per_gas : t) (tx : Transaction.t) =
         Some (min (max_priority_fee_per_gas + base_fee_per_gas) max_fee_per_gas)
   | LegacyFee {gas_price} -> Some gas_price
 
-(* EIP-7825, adjusted for Monad §3 max_tx_gas_limit. *)
+(** Maximum amount of gas a transaction is allowed to provide. If a transaction's gas limit exceeds this
+    amount, it is considered invalid. EIP-7825, adjusted for Monad §3 max_tx_gas_limit. *)
 let tx_max_gas_limit = ~$30_000_000
 
 (* Per-instruction gas costs as per YP (326), adjusted for Monad §4.1 *)
 let jumpdest = ~$1
 
 let base = ~$2
+
 let very_low = ~$3
 let low = ~$5
 let mid = ~$8
@@ -162,6 +188,8 @@ let c_gascap ~gas ~gas_left ~memory_cost ~extra_cost =
 
 type call_gas = {caller_spent_gas : Uint.t (* YP C_call *); callee_available_gas : Uint.t (* YP C_callgas *)}
 
+(** Before a call instruction, [call_gas] computes the gas that will be spent by the caller (excluding the
+    cost of memory expansion, which is paid separately) and the gas that will be available for the callee. *)
 let call_gas ~transfer_value ~gas ~gas_left ~memory_cost ~extra_cost =
   let c_gascap = c_gascap ~gas ~gas_left ~memory_cost ~extra_cost in
   let caller_spent_gas = Uint.(c_gascap + extra_cost) in
