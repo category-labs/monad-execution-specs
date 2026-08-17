@@ -1,3 +1,5 @@
+(** Common utilities for decoding precompile inputs. *)
+
 open Byte_string
 open Numeric
 open Chain.Ethereum

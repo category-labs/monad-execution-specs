@@ -14,8 +14,7 @@ let select_fixtures kind =
 let execution_mode = ref `Verify
 let set_execution_mode_update_fixture = Arg.String (fun filename -> execution_mode := `Update filename)
 
-let usage_str =
-  "Usage: execrun (--blockchain_test FILE | --state_test FILE) [--update_fixture FILE] [--trace]\n"
+let usage_str = "Usage: execrun --blockchain_test FILE [--update_fixture FILE] [--trace]"
 
 let trace = ref false
 
@@ -23,7 +22,6 @@ let () =
   Arg.(
     parse
       [ ("--blockchain_test", select_fixtures `Blockchain, "Blockchain test fixture file")
-      ; ("--state_test", select_fixtures `State, "State test fixture file")
       ; ("--trace", Set trace, "Trace VM execution")
       ; ( "--update_fixture"
         , set_execution_mode_update_fixture

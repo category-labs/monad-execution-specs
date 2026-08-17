@@ -1,9 +1,13 @@
+(** The Monad block transition function (YP (2)). *)
+
 open Chain.Ethereum
 open Numeric
 open Byte_string
 open Lens.Infix
 open State
 
+(** Validation failure errors. These represent abnormal termination conditions, not expected situations like
+    out-of-gas termination. *)
 module Error = struct
   type invalid_block =
     | Nonempty_ommers
@@ -44,6 +48,7 @@ module Error = struct
   let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
 end
 
+(** Block transition function, parameterized by Monad revision. *)
 module Make (Params : sig
   include Chain.Monad.PARAMS
   val trace : bool
@@ -62,6 +67,7 @@ struct
   module Host = Instantiation.Host
   module Vm = Vm.Make (VmParams) (Host)
 
+  (** [prepare_message s g tx] creates an {!Evmc.Message.t} object corresponding to the transaction [tx]. *)
   let prepare_message (sender : Address.t) (gas : Gas.t) (tx : Transaction.t) =
     let kind, current_target, data, code, code_address =
       match Transaction.call_or_create tx with
@@ -458,8 +464,8 @@ struct
       let result, transaction_state = Host.call message transaction_state in
       assert (result.status_code = Success) ;
       (* Update block state with storage changes. As per the relevant EIPs, a system message call
-       does not warm up accounts or storage slots, and it does not count towards the block gas
-       limit. *)
+         does not warm up accounts or storage slots, and it does not count towards the block gas
+         limit. *)
       (Some result, {block_state with world_state = transaction_state.world_state})
 
   let beacon_roots_address = Address.of_hex_string "000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
@@ -516,7 +522,10 @@ struct
 
     return ()
 
-  (* YP (2) *)
+  (** Monad state transition function (YP (2)). [process_block ~verify state block] returns the new state
+      after executing the Monad block [block] from initial state [state]. If [verify] is [true], the final
+      state roots are compared with the state roots in the input block and an error is returned in case of
+      mismatch. *)
   let process_block ~verify (world_state : WorldState.t) (block : Block.t) : WorldState.t or_error =
     let open Result in
     let$ () = validate_block world_state block in

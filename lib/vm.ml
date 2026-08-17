@@ -1,3 +1,5 @@
+(** EVMC-style EVM implementation. *)
+
 open Numeric
 open Byte_string
 
@@ -10,7 +12,11 @@ module Make
     (Host : Evmc.HOST) =
 struct
   module Memory : sig
+    (** Utilities for manipulating the machine's memory during contract execution. All reads and writes must
+        be within active memory bounds. *)
+
     type t
+
     val empty : memory_capacity:Uint.t -> t
 
     val max_memory_usage : Uint.t
@@ -171,7 +177,8 @@ struct
   end
 
   module MachineState = struct
-    (* YP 9.4.1 *)
+    (** State of the EVM during execution. Corresponds to the machine state μ defined in YP 9.4.1. *)
+
     type t =
       { gas : Uint.t (* μ_g *)
       ; pc : U256.t (* μ_pc *)
@@ -186,6 +193,7 @@ struct
                EVMC host, refunds specifically must be tracked by an EVMC-compliant interpreter. *)
       ; host : Host.t }
     [@@deriving lens {submodule = true; prefix = true}]
+
     include TLens
 
     let initial ~host ~gas ~memory_capacity =
@@ -200,6 +208,8 @@ struct
   end
 
   module ExecutionEnvironment = struct
+    (** Execution environment. Corresponds to the tuple I defined in YP 9.3. *)
+
     open Chain.Ethereum
 
     module ExecutionBlockHeader = struct
@@ -278,6 +288,7 @@ struct
       type error = Evmc.Result.StatusCode.t
     end)
 
+    (* Re-export the API of the host, wrapped in conditional tracing code. *)
     module HostAPI = struct
       module Base = Host
 
@@ -420,6 +431,9 @@ struct
 
   type opcode_impl = bool M.t
 
+  (** All opcode implementations require an execution environment to be provided. Instead of explicitly
+      parameterizing each individual implementation, the entire implementation is lifted into a functor
+      [Executor] which closes over the shared environment. *)
   module Executor (C : sig
     val execution_environment : ExecutionEnvironment.t
   end) =
@@ -2007,6 +2021,8 @@ struct
         Format.print_flush () )
       else fun _ -> ()
 
+    (** Dispatch loop. [run s] will execute the code in [execution_environment.bytecode], starting from the
+        initial state [s], executing one opcode at a time until a termination condition is reached. *)
     let rec run (s : MachineState.t) =
       (* The dispatch loop runs on each opcode so it's written in direct style for performance. *)
       trace_state s ;
@@ -2035,7 +2051,7 @@ struct
           (Error err, s)
   end
 
-  (* YP (143), YP (144) *)
+  (** {!Evmc.Vm.SIG.execute}. YP (143), YP (144) *)
   let execute (msg : Evmc.Message.t) (code : Bytes.t) : Host.t -> Evmc.Result.t * Host.t =
     trace (fun () -> "Start execution\n") ;
     trace (fun () -> Format.sprintf "Bytecode: %s\n" (Bytes.to_hex_string code)) ;

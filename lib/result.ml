@@ -1,4 +1,4 @@
-(** As [Stdlib.Result] but exposing additional operations. *)
+(** As [Stdlib.Result] but exposing additional monadic operations. *)
 
 include Stdlib.Result
 

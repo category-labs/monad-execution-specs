@@ -1,8 +1,23 @@
+(** Algebraic structures used in elliptic curve cryptography. This includes:
+    - Prime fields over the integers.
+    - General quotient fields over Euclidean domains.
+    - Polynomial rings over arbitrary fields, and polynomial extensions over them.
+    - Complex extensions over arbitrary fields.
+
+    Functor types are as follows (ignoring modulus arguments):
+    [Quotient_field : EUCLIDEAN_DOMAIN -> FIELD] using the extended Euclidean algorithm for division.
+    [Polynomial_ring : FIELD -> EUCLIDEAN_DOMAIN] implementing naive polynomial division.
+    [Polynomial_extension : FIELD -> FIELD] is the composition [Quotient_field ∘ Polynomial_ring].
+    [Complex_extension : FIELD -> FIELD] using rectangular coordinates to represent elements.
+*)
+
 open Numeric
 
-(* TODO: all our fields are finite. We could consider adding the field order and characteristic here so we can
-   e.g. include the Frobenius automorphisms for polynomial extensions. *)
+(** The module type of fields, given in terms of binary operations [+], [-], [*], [/]. Unary multiplicative
+    inversion [inv] is also provided as part of the signature although it can be derived from [/]. *)
 module type FIELD = sig
+  (* TODO: all our fields are finite. We could consider adding the field order and characteristic here so we can
+     e.g. include the Frobenius automorphisms for polynomial extensions. *)
   type t
 
   val ( = ) : t -> t -> bool
@@ -11,10 +26,13 @@ module type FIELD = sig
   val zero : t
   val one : t
 
-  (* Read the input as an unsigned integer and embed it in the field. This can be derived, but all our instances
-     can provide more efficient implementations. *)
-  val ( ~@ ) : String.t -> t
   val ( ~$ ) : int -> t
+  (** Embed an integer in the field. Note that this can be derived, but all our instances can provide more direct
+      implementations than a naive algorithm. *)
+
+  val ( ~@ ) : String.t -> t
+  (** Read the input as an unsigned integer and embed it in the field. The input can be arbitrarily long, and is
+      not constrained to fit in a machine integer. *)
 
   val ( + ) : t -> t -> t
   val ( - ) : t -> t -> t
@@ -23,6 +41,13 @@ module type FIELD = sig
   val inv : t -> t
 end
 
+(** The module type of Euclidean domains.
+    Remember that an Euclidean domain is a ring equipped with a degree function [degree : t ∖ {0} → ℕ ]
+    satisfying:
+    - Whenever [a, b ∈ t] and [b ≠ 0], there exist [q, r ∈ t] satisfying [a = q × b + r] and either [r = 0] or
+    [f(r) < f(b)].
+    The choice of degree function is unimportant, but its existence guarantees termination of the Euclidean
+    algorithm, which is used to construct quotient fields over the domain. *)
 module type EUCLIDEAN_DOMAIN = sig
   type t
 
@@ -34,12 +59,19 @@ module type EUCLIDEAN_DOMAIN = sig
   val ( ~@ ) : String.t -> t
   val ( ~$ ) : int -> t
 
+  (* The degree function is never used in the code, but is provided here so that the Euclidean domain condition
+     can be stated. *)
+  val degree : t -> int
+
   val ( + ) : t -> t -> t
   val ( - ) : t -> t -> t
   val ( * ) : t -> t -> t
   val div_rem : t -> t -> t * t
 end
 
+(** The functor [Quotient_field] constructs a field by quotienting the Euclidean domain [D] by the element
+    [Mod.modulus], which is assumed to be irreducible. Field division is implemented via the extended
+    Euclidean algorithm. *)
 module Quotient_field
     (D : EUCLIDEAN_DOMAIN)
     (Mod : sig
@@ -106,8 +138,10 @@ end = struct
     reduce D.((u :> t) * inv_v)
 end
 
-(* Prime fields over a prime modulus. We do not check primality. We also require modulus mod 4 = 3 to implement
-   sqrt. *)
+(** The functor [Prime_field] constructs the prime field of integers modulo [Mod.modulus]. As with the
+    [Quotient_field] functor, primality of [Mod.modulus] is not checked.
+    Conditionally, if [Mod.modulus mod 4 = 3], an efficient implementation of modular square root is also
+    provided. *)
 module Prime_field (Mod : sig
   val modulus : Integer.t
 end) =
@@ -151,12 +185,13 @@ struct
     let inv_v = Integer.of_z_exn (Z.invert Integer.(to_z (v :> t)) Integer.(to_z modulus)) in
     reduce Integer.((u :> t) * inv_v)
 
-  (* Returns None if the input is not already reduced. Useful for precompile input validation. *)
+  (** [of_uint_opt i] returns the input [i] as an element of this prime field if it is already reduced, or
+      None otherwise. Useful for precompile input validation. *)
   let of_uint_opt (i : Uint.t) =
     let i = Uint.as_signed i in
     if Integer.(i >= Mod.modulus) then None else Some (reduce i)
 
-  (* When modulo mod 4 = 3, we can efficiently compute square roots. *)
+  (** When [Mod.modulus mod 4 = 3], [sqrt_opt] efficiently computes square roots, when they exist. *)
   let sqrt_opt =
     if Integer.(modulo modulus ~$4 = ~$3) then
       let sqrt_exp = Integer.((modulus + one) / ~$4) in
@@ -171,7 +206,7 @@ struct
     else None
 end
 
-(* Polynomial ring over a field. *)
+(** The functor [Polynomial_ring] constructs the Euclidean domain of polynomials over an underlying field. *)
 module Polynomial_ring (F : FIELD) = struct
   module Impl : sig
     type impl = F.t Iarray.t
@@ -193,12 +228,15 @@ module Polynomial_ring (F : FIELD) = struct
 
   include Impl
 
+  (** Number of coefficients in the polynomial [p]. *)
   let length (p : t) = Iarray.length (p :> impl)
 
-  (* By convention, zero is a -1-degree polynomial. *)
+  (** Degree of the polynomial [p]. By convention, zero is a -1-degree polynomial. *)
   let degree (p : t) = Stdlib.(length p - 1)
+
   let init length p_i = of_coeffs (Iarray.init length p_i)
 
+  (** [p.$(i)] returns the i-th coefficient of the polynomial [p], or zero if [i >= length p]. *)
   let ( .$() ) (p : t) i = if i < length p then Iarray.get (p :> impl) i else F.zero
 
   let ( <> ) (p_1 : t) (p_2 : t) =
@@ -209,6 +247,8 @@ module Polynomial_ring (F : FIELD) = struct
   let one = init 1 (fun _ -> F.one)
   let ( ~@ ) i = init 1 (fun _ -> F.(~@i))
   let ( ~$ ) i = init 1 (fun _ -> F.(~$i))
+
+  (** [monomial_x] represents the degree-1 monomial x. *)
   let monomial_x = init 2 (fun i -> if Stdlib.(i = 1) then F.one else F.zero)
 
   let ( + ) (p_1 : t) (p_2 : t) = init (max (length p_1) (length p_2)) (fun i -> F.(p_1.$(i) + p_2.$(i)))
@@ -231,7 +271,7 @@ module Polynomial_ring (F : FIELD) = struct
 
   let const (a : F.t) = init 1 (fun _ -> a)
 
-  (* Computes the monomial ax^n. *)
+  (** [monomial a n] computes the monomial ax^n. *)
   let monomial a n = init Stdlib.(n + 1) (fun i -> if Stdlib.(i = n) then a else F.zero)
 
   let div_rem u v =
@@ -247,12 +287,17 @@ module Polynomial_ring (F : FIELD) = struct
     in
     loop u zero
 
-  (* Point evaluation via Horner's rule. *)
+  (** [eval p x] evaluates [p] at point [x] efficiently via Horner's rule. *)
   let eval (p : t) (x : F.t) = Iarray.fold_right (fun coeff acc -> F.(coeff + (x * acc))) (p :> impl) F.zero
 end
 
-(* Polynomial field extensions over a field of scalars. This can be specialized to perform reduction via
-   multiplication and addition, but it's hard to do functionally. Avoid until it proves a bottleneck. *)
+(** For a field of scalars [F], the functor [Polynomial_extension(F)(Mod)] constructs the field of polynomials
+    over [F] by quotienting [Polynomial_ring(F)] over the element [Mod.modulus], which is assumed to be
+    irreducible.
+
+    Modular reduction is done via the Euclidean method implemented in [Quotient_field]. This could be
+    specialized to perform reduction via iterated multiplication and subtraction, but it's hard to do
+    functionally. Avoid until it proves a bottleneck. *)
 module Polynomial_extension
     (F : FIELD)
     (Mod : sig
@@ -269,11 +314,13 @@ struct
 
   let ( .$() ) (p : t) (i : int) : F.t = Underlying_ring.((p :> t).$(i))
 
-  (* Degree of this extension over F. Elements have exactly this many coefficients. *)
+  (** Degree of this extension over [F]. Elements have at most this many coefficients. *)
   let extension_degree = Underlying_ring.degree Mod.modulus
 
-  (* Apply an automorphism f given its action on the basis element x. This is made more efficient by
-     precomputing the table f(1), f(x), f(x²), ... ahead of time. *)
+  (** Given a function [f : t -> t] which is assumed to be an automorphism, [automorphism f] constructs a
+      potentially more efficient implementation by precomputing the table f(1), f(x), f(x²), ... ahead of time.
+      For a polynomial aₙxⁿ + ... + a₀x⁰, [automorphism f] computes aₙf(xⁿ) + ... + a₀f(x⁰) from the
+      precomputed terms f(xᵏ). *)
   let automorphism (f : t -> t) : t -> t =
     let f_x = f monomial_x in
     let powers = Seq.iterate (fun f_x_i -> f_x * f_x_i) one |> Seq.take extension_degree |> Iarray.of_seq in
@@ -289,7 +336,7 @@ struct
         loop 0 zero )
       |> reduce
 
-  (* Power function, used for computing Frobenius automorphisms. *)
+  (** Power function, used for computing Frobenius automorphisms. *)
   let ( ** ) (p : t) (n : Uint.t) =
     let rec loop n p acc =
       if Uint.(n = zero) then acc
@@ -301,7 +348,8 @@ struct
     loop n p one
 end
 
-(* Complex field extensions over a field. Equivalent to a polynomial extension, but more efficient. *)
+(** The functor [Complex_extension] defines the complex extension of a field [F]. This is mathematically
+    equivalent to forming a polynomial extension over the polynomial x² + 1, but more efficient. *)
 module Complex_extension (F : FIELD) = struct
   type t = {re : F.t; im : F.t}
 
@@ -334,7 +382,9 @@ module Complex_extension (F : FIELD) = struct
 
   let ( / ) x y = x * inv y
 
-  (* When the underlying field supports efficient square roots, then so does its complex extension. *)
+  (** When the underlying field provides a square root function, [sqrt_opt] computes square roots in the complex
+      extension. Note that unlike in the real case, the complex extension of a prime field does not in general
+      have all the square roots. *)
   let sqrt_opt (sqrt_opt : F.t -> F.t option) =
     let two = F.(one + one) in
     fun (v : t) : t option ->

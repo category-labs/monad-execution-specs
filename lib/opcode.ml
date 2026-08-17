@@ -1,3 +1,6 @@
+(** Representation of EVM opcodes and associated utilities. *)
+
+(* TODO: using an ADT to represent opcodes prevents the use of lookup tables in the VM dispatch loop. *)
 type t =
   (* 0x0X *)
   | Stop
@@ -95,8 +98,8 @@ type t =
   | Selfdestruct
   | Undefined of char
 
-type info = {opcode : t; byte : char; name : string}
-
+(** Mapping from byte values to the corresponding opcode. Returns [Undefined chr] if the input [chr] does not
+    correspond to a known opcode. *)
 let of_byte = function
   | '\x00' -> Stop
   | '\x01' -> Add
@@ -185,6 +188,12 @@ let of_byte = function
   | '\xff' -> Selfdestruct
   | opcode -> Undefined opcode
 
+type info =
+  { opcode : t
+  ; byte : char  (** Byte representation of the opcode.  *)
+  ; name : string  (** Human-readable representation. *) }
+
+(** Mapping of each opcode to its metadata. *)
 let info = function
   | Stop -> {opcode = Stop; byte = '\x00'; name = "Stop"}
   | Add -> {opcode = Add; byte = '\x01'; name = "Add"}

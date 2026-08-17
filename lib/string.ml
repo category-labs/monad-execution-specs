@@ -1,6 +1,8 @@
 (** [Stdlib.String] extended with some utility functions. *)
+
 include Stdlib.String
 
+(* TODO: this will be provided by OCaml 5.5 *)
 let find_substring ~substring str =
   let substr_len = length substring in
   let str_len = length str in
