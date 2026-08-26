@@ -16,28 +16,6 @@ let ( .^() ) x lens = lens.Lens.get x
 let ( .^()<- ) x lens v' = lens.Lens.set v' x
 let ( .^$()<- ) x lens f = Lens.modify lens f x
 
-module Accounts = struct
-  include
-    Mpt.Make
-      (struct
-        let hash_keys = true
-      end)
-      (Address)
-      (struct
-        include Account
-        let commit acc = merkleized acc
-        let to_bytes acc = Rlp.encode (to_rlp acc)
-      end)
-  let to_yojson = to_yojson Account.to_yojson
-  let of_yojson =
-    let key_of_string key =
-      try Ok (Address.of_hex_string key)
-      with _ -> Error (Format.sprintf "Cannot parse \"%s\" as Address.t" key)
-    in
-    let value_of_yojson = Account.of_yojson in
-    of_yojson key_of_string value_of_yojson
-end
-
 module WorldState = struct
   (** State across multiple blocks. Tracks accounts, storage, and all previously validated blocks. This
       includes the world state as per YP 4.1. *)
@@ -88,17 +66,9 @@ module WorldState = struct
   (** [state_root state] computes the state root of the current account map. This involves computing the
       storage roots of every account in the state, which is very expensive. *)
   let state_root state =
-    let mpt =
-      state.accounts
-      |> Address.Map.to_seq
-      (* YP (10) *)
-      |> Seq.map (fun (addr, acc) ->
-          (* YP (11) *)
-          let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
-          (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
-      |> Mpt.of_seq
-    in
-    mpt.root_hash
+    let accounts = Accounts.merkleized state.accounts in
+    let state_root = Accounts.merkle_root accounts in
+    (state_root, {state with accounts})
 end
 
 module BlockState = struct
@@ -128,7 +98,7 @@ module BlockState = struct
   (** [finalize_current_block bs] returns [bs.current_block] with its header updated to reflect the new state
       after block execution. This will overwrite header fields [parent_hash], [state_root], [transactions_root],
       [receipts_root], [withdrawals_root], [logs_bloom], [requests_hash], [gas_used] and [blob_gas_used]. *)
-  let finalize_current_block (block_state : t) : Block.t =
+  let finalize_current_block (block_state : t) : Block.t * WorldState.t =
     (* YP (46) *)
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
@@ -140,28 +110,31 @@ module BlockState = struct
        Note that YP (39) is only enforced by this assignment, therefore any state changes that are
        triggered by an external call (test frameworks, fuzzer harness, loading a genesis state) may break
        this invariant. *)
-    let state_root = WorldState.state_root block_state.world_state in
+    let state_root, world_state = WorldState.state_root block_state.world_state in
 
     let transactions_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (tx, _) -> Transaction.encode tx)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let receipts_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (_, receipt) -> Receipt.encode receipt)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let withdrawals_root =
-      ( block_state.withdrawals_processed
+      block_state.withdrawals_processed
       |> List.to_seq
       |> Seq.map (fun w -> Withdrawal.encode w)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let logs_bloom =
       block_state.transactions_processed
@@ -199,7 +172,7 @@ module BlockState = struct
       ; blob_gas_used
       ; parent_hash }
     in
-    {block_state.current_block with header}
+    {block_state.current_block with header}, world_state
 end
 
 module TransactionState = struct

@@ -133,8 +133,8 @@ module BlockchainTest = struct
     ; genesis_block_header : Block.Header.t [@key "genesisBlockHeader"]
     ; genesis_rlp : Bytes.t [@key "genesisRLP"]
     ; last_blockhash : U256.t [@key "lastblockhash"]
-    ; pre : Host.Accounts.t
-    ; post : Host.Accounts.t [@key "postState"]
+    ; pre : Accounts.t
+    ; post : Accounts.t [@key "postState"]
     ; seal_engine : string option [@key "sealEngine"] [@default None] (* Deprecated. *) }
   [@@deriving yojson]
 
