@@ -34,3 +34,6 @@ setup.log
 
 # Local OPAM switch
 _opam/
+
+# Blockchain-test fixtures downloaded by scripts/download_mf_tests.sh
+test/execution/fixtures/blockchain_tests/mf_tests/
