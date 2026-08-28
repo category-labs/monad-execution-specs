@@ -639,6 +639,123 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
+(** MIP-8: page-ified storage. Slots are grouped into pages of 128 contiguous words (4096 bytes),
+    and the storage trie commits to [{page_index -> page_commitment}] pairs, where the page
+    commitment is the Induced Subtree Merkle Commit (ISMC): a 32-byte BLAKE3-based Merkle root over
+    the occupied pair-leaves of the page, sealed with its 128-bit occupancy bitmap.
+
+    Intended as a drop-in replacement for the plain slot-keyed storage of {!Account}; for now only
+    the commitment side is implemented and nothing references this module from execution. *)
+module Storage_ismc = struct
+  type t = B32.t B32.Map.t
+
+  let words_per_page = 128
+
+  (** The page a slot belongs to: [slot >> 7]. *)
+  let page_index (slot : B32.t) : U256.t = U256.(shift_right (of_repr slot) 7)
+
+  (** The position of a slot within its page: [slot & 0x7F]. *)
+  let page_offset (slot : B32.t) : int = U256.(to_int (logand (of_repr slot) ~$0x7F))
+
+  (* The domain-separated IV under which pair-leaves are compressed, separating the leaf domain
+     from the parent domain. *)
+  let leaf_iv =
+    Blake3.compress Blake3.iv
+      ("ultra_merkle_pair_leaf_domain___" ^ Bytes.make 32 '\x00')
+      ~counter:0 ~block_len:64 ~flags:Blake3.derive_key_material
+
+  (** [page_commitment entries] is the ISMC commitment of the non-empty page whose occupied words
+      are given as [(page_offset, word)] pairs, in any order. Raises [Invalid_argument] if [entries]
+      is empty or contains a duplicate or out-of-range offset. *)
+  let page_commitment (entries : (int * B32.t) list) : B32.t =
+    if entries = [] then invalid_arg "Storage_ismc.page_commitment: empty page" ;
+    let words = Array.make words_per_page None in
+    List.iter
+      (fun (offset, word) ->
+        if offset < 0 || offset >= words_per_page then
+          invalid_arg "Storage_ismc.page_commitment: offset out of range" ;
+        if Option.is_some words.(offset) then
+          invalid_arg "Storage_ismc.page_commitment: duplicate offset" ;
+        words.(offset) <- Some word )
+      entries ;
+
+    (* Phase 1: merge. Reduce each occupied pair-leaf (two adjacent words, absent words read as
+       zero) to a chaining value, then merge adjacent siblings bottom-up. Empty branches are
+       bypassed entirely: a node without an active sibling is carried up without hashing, so the
+       merge costs exactly one compression less than the number of occupied pair-leaves. *)
+    let leaf i =
+      let word offset = Option.value words.(offset) ~default:B32.zeros in
+      Blake3.compress leaf_iv
+        (B32.to_bytes (word (2 * i)) ^ B32.to_bytes (word ((2 * i) + 1)))
+        ~counter:0 ~block_len:64 ~flags:Blake3.derive_key_material
+    in
+    let parent left right =
+      Blake3.compress Blake3.iv
+        (B32.to_bytes left ^ B32.to_bytes right)
+        ~counter:0 ~block_len:64
+        ~flags:Blake3.(chunk_start lor chunk_end)
+    in
+    let leaves =
+      List.init (words_per_page / 2) Fun.id
+      |> List.filter (fun i -> Option.is_some words.(2 * i) || Option.is_some words.((2 * i) + 1))
+      |> List.map (fun i -> (i, leaf i))
+    in
+    (* Nodes are identified by the index of their leftmost pair-leaf; two nodes at [level] are
+       siblings if and only if their indices agree above bit [level], in which case they are
+       adjacent in the index-sorted node list. *)
+    let rec merge level nodes =
+      let rec merge_siblings = function
+        | (i1, v1) :: (i2, v2) :: rest when i1 lsr (level + 1) = i2 lsr (level + 1) ->
+            (i1, parent v1 v2) :: merge_siblings rest
+        | node :: rest -> node :: merge_siblings rest
+        | [] -> []
+      in
+      match nodes with
+      | [(_, subtree_root)] -> subtree_root
+      | _ ->
+          assert (level < 6) ;
+          merge (level + 1) (merge_siblings nodes)
+    in
+    let subtree_root = merge 0 leaves in
+
+    (* Phase 2: seal. Bind the subtree root to the exact positions of the occupied words by hashing
+       it together with the 128-bit occupancy bitmap, in little-endian byte order. *)
+    let bitmap =
+      Bytes.init 16 (fun j ->
+          List.init 8 Fun.id
+          |> List.fold_left
+               (fun acc k -> if Option.is_some words.((8 * j) + k) then acc lor (1 lsl k) else acc)
+               0
+          |> Char.chr )
+    in
+    Blake3.hash (bitmap ^ B32.to_bytes subtree_root)
+
+  (** The storage root: a Merkle Patricia Trie committing to [{keccak(page_index) ->
+      RLP(page_commitment)}] pairs, mirroring how the slot-keyed trie in {!Account.to_rlp} commits
+      [{keccak(slot) -> RLP(value)}]. Zero-valued slots are treated as absent. *)
+  let root (storage : t) : B32.t =
+    let pages =
+      B32.Map.fold
+        (fun slot value pages ->
+          if B32.(value = zeros) then pages
+          else
+            let entry = (page_offset slot, value) in
+            U256.Map.update (page_index slot)
+              (fun entries -> Some (entry :: Option.value entries ~default:[]))
+              pages )
+        storage U256.Map.empty
+    in
+    let mpt =
+      U256.Map.to_seq pages
+      |> Seq.map (fun (index, entries) ->
+          let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes (U256.to_repr index))) in
+          let v = Rlp.encode (Rlp.of_bytes32 (page_commitment entries)) in
+          (k, v) )
+      |> Mpt.of_seq
+    in
+    mpt.root_hash
+end
+
 module Account = struct
   type t =
     { nonce : U64.t (* σ[a]_n - 64 bits wide as per EIP-2681. *)

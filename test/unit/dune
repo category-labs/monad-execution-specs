@@ -12,3 +12,13 @@
  (name mpt)
  (modules mpt)
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest yojson))
+
+(test
+ (name blake3)
+ (modules blake3)
+ (libraries monad_lib test_utils alcotest))
+
+(test
+ (name storage_ismc)
+ (modules storage_ismc)
+ (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
