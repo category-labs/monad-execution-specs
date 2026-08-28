@@ -120,47 +120,69 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
       fun acc k v -> return (f (addr_in acc) (b32_in k) (b32_in v))
   end
 
+  (* Bindings to the monadml_evm fields. Currently, all the monadml_evm fields are
+     allocated statically once when the dynamic library is loaded, and a call to
+     make_monadml_evm simply returns a struct containing these pre-allocated pointers.
+     Any data allocated by this module, including closures, must remain alive
+     indefinitely. *)
   module Evm_bindings = struct
     open C_evmc
+    open Vm
+
+    (* Coerce an OCaml closure to a static_funptr with global lifetime. The closure f will never be
+       released by the garbage collector. *)
+    let to_static_funptr ty f =
+      let _ = Root.create f in
+      coerce (Foreign.funptr ty) (static_funptr ty) f
+
+    let name =
+      let name = CArray.of_string "monadml_evm" in
+      let _ = Root.create name in
+      CArray.start name
+
+    let version =
+      let version = CArray.of_string Version.hash in
+      let _ = Root.create version in
+      CArray.start version
 
     (* The VM instance is statically allocated, so deallocating it is a no-op, however EVMC requires
        the destroy callback to be non-null. *)
-    let destroy =
-      coerce (Foreign.funptr Vm.destroy_fn) (static_funptr Vm.destroy_fn)
-        (fun (_vm : Vm.repr structure ptr) -> () )
+    let destroy_impl (_vm : Vm.repr structure ptr) = ()
+    let destroy = to_static_funptr destroy_fn destroy_impl
 
-    let execute debug_tstore =
-      coerce (Foreign.funptr Vm.execute_fn) (static_funptr Vm.execute_fn)
-        (fun
-          (_vm : Vm.repr structure ptr)
-          (intf : Host_interface.repr structure ptr)
-          (ctx : Host_context.repr structure ptr)
-          (_rev : int)
-          (msg : Message.repr structure ptr)
-          (code : Unsigned.UInt8.t ptr)
-          (code_size : Unsigned.Size_t.t)
-        ->
-          let msg = C_evmc.Message.of_c !@msg in
-          let code = Bytes.of_c code code_size in
-          let module Host = C_host (struct
-            let intf = intf
-            let ctx = ctx
-          end) in
-          let module Vm =
-            Monad_lib.Vm.Make
-              (struct
-                include Chain_params
-                let trace = false
-                let debug_tstore = debug_tstore
-              end)
-              (Host)
-          in
-          let result, () = Vm.execute msg code () in
-          C_evmc.Result.to_c result )
+    let execute_impl
+        (debug_tstore : bool)
+        (_vm : Vm.repr structure ptr)
+        (intf : Host_interface.repr structure ptr)
+        (ctx : Host_context.repr structure ptr)
+        (_rev : int)
+        (msg : Message.repr structure ptr)
+        (code : Unsigned.UInt8.t ptr)
+        (code_size : Unsigned.Size_t.t) =
+      let msg = C_evmc.Message.of_c !@msg in
+      let code = Bytes.of_c code code_size in
+      let module Host = C_host (struct
+        let intf = intf
+        let ctx = ctx
+      end) in
+      let module Vm =
+        Monad_lib.Vm.Make
+          (struct
+            include Chain_params
+            let trace = false
+            let debug_tstore = debug_tstore
+          end)
+          (Host)
+      in
+      let result, () = Vm.execute msg code () in
+      C_evmc.Result.to_c result
+    let execute =
+      let execute_base = to_static_funptr execute_fn (execute_impl false) in
+      let execute_debug_tstore = to_static_funptr execute_fn (execute_impl true) in
+      fun debug_tstore -> if debug_tstore then execute_debug_tstore else execute_base
 
-    let get_capabilities =
-      coerce (Foreign.funptr Vm.get_capabilities_fn) (static_funptr Vm.get_capabilities_fn)
-        (fun (_vm : Vm.repr structure ptr) -> Vm.Capabilities.evm1 )
+    let get_capabilities_impl (_vm : Vm.repr structure ptr) = Vm.Capabilities.evm1
+    let get_capabilities = to_static_funptr get_capabilities_fn get_capabilities_impl
 
     let set_option = coerce (ptr void) (static_funptr Vm.set_option_fn) null
   end
@@ -169,8 +191,8 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
     let open C_evmc.Vm in
     let vm = addr (make repr) in
     vm |-> abi_version <-@ Int64.to_int C_evmc.evmc_abi_version ;
-    vm |-> name <-@ "monadml_evm" ;
-    vm |-> version <-@ Version.hash ;
+    vm |-> name <-@ Evm_bindings.name ;
+    vm |-> version <-@ Evm_bindings.version ;
     vm |-> destroy <-@ Evm_bindings.destroy ;
     vm |-> execute <-@ Evm_bindings.execute debug_tstore ;
     vm |-> get_capabilities <-@ Evm_bindings.get_capabilities ;
