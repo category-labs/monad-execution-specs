@@ -375,8 +375,8 @@ module Types (F : Ctypes.TYPE) = struct
     let set_option_fn = ptr repr @-> string @-> string @-> returning set_option_result
 
     let abi_version = field repr "abi_version" int
-    let name = field repr "name" string
-    let version = field repr "version" string
+    let name = field repr "name" (ptr char)
+    let version = field repr "version" (ptr char)
     let destroy = field repr "destroy" (static_funptr destroy_fn)
     let execute = field repr "execute" (static_funptr execute_fn)
     let get_capabilities = field repr "get_capabilities" (static_funptr get_capabilities_fn)
