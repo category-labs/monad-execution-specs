@@ -16,8 +16,10 @@ module Revision = struct
     | `Seven
     | `Eight
     | `Nine  (** Defined in {{:https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-6.md}MIP-6} *)
+    | `Ten
     | `Next ]
-  let all_revisions : t list = [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Next]
+  let all_revisions : t list =
+    [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Ten; `Next]
 
   let to_string : t -> string = function
     | `Zero -> "MONAD_ZERO"
@@ -30,6 +32,7 @@ module Revision = struct
     | `Seven -> "MONAD_SEVEN"
     | `Eight -> "MONAD_EIGHT"
     | `Nine -> "MONAD_NINE"
+    | `Ten -> "MONAD_TEN"
     | `Next -> "MONAD_NEXT"
   let to_yojson (rev : t) : Yojson.Safe.t = `String (to_string rev)
 
@@ -44,6 +47,7 @@ module Revision = struct
     | "MONAD_SEVEN" -> Some `Seven
     | "MONAD_EIGHT" -> Some `Eight
     | "MONAD_NINE" -> Some `Nine
+    | "MONAD_TEN" -> Some `Ten
     | "MONAD_NEXT" -> Some `Next
     | _ -> None
   let of_yojson (json : Yojson.Safe.t) : (t, string) result =
@@ -74,7 +78,9 @@ module Testnet = struct
   let chain_id = Uint.(~$10_143)
 
   let timestamp_to_revision (timestamp : U256.t) : Revision.t =
-    if U256.(timestamp >= ~$1773153000) then (* 2026-03-10T14:30:00.000Z *)
+    if U256.(timestamp >= ~$1786545000) then (* 2026-08-12T14:30:00.000Z *)
+      `Ten
+    else if U256.(timestamp >= ~$1773153000) then (* 2026-03-10T14:30:00.000Z *)
       `Nine
     else if U256.(timestamp >= ~$1763562600) then (* 2025-11-19T14:30:00.000Z *)
       `Eight
@@ -100,7 +106,9 @@ module Mainnet = struct
   let chain_id = Uint.(~$143)
 
   let timestamp_to_revision (timestamp : U256.t) : Revision.t =
-    if U256.(timestamp >= ~$1773930600) then (* 2026-03-19T14:30:00.000Z *)
+    if U256.(timestamp >= ~$1788359400) then (* 2026-09-02T14:30:00.000Z *)
+      `Ten
+    else if U256.(timestamp >= ~$1773930600) then (* 2026-03-19T14:30:00.000Z *)
       `Nine
     else if U256.(timestamp >= ~$1763649000) then (* 2025-11-20T14:30:00.000Z *)
       `Eight
