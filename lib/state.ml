@@ -21,7 +21,7 @@ module WorldState = struct
       includes the world state as per YP 4.1. *)
   type t =
     { history : Block.t list
-    ; accounts : Account.t Address.Map.t (* σ[a], implicitly realizes YP (12) *)
+    ; accounts : Accounts.t (* σ[a], implicitly realizes YP (12) *)
     ; next_emptying_transaction_block : Uint.t Address.Map.t
           (** [next_emptying_transaction_block] maps every address to the next block number in which a
               transaction from it would be emptying. The counter for an account is bumped by
@@ -32,7 +32,7 @@ module WorldState = struct
 
   include TLens
 
-  let empty = {history = []; accounts = Address.Map.empty; next_emptying_transaction_block = Address.Map.empty}
+  let empty = {history = []; accounts = Accounts.empty; next_emptying_transaction_block = Address.Map.empty}
 
   (** [account_opt addr] provides a lens into the current state of the account for [addr]. Addresses that do
       not correspond to entries in the underlying map correspond to [None].
@@ -40,7 +40,7 @@ module WorldState = struct
      track of touched accounts. Note that the Ethereum executable spec uses a similar approach by intercepting
      any state updates to an account and deleting it if it is empty after the update. *)
   let account_opt ?(keep_empty = false) addr =
-    let Lens.{get; set} = accounts |-- Address.Map.at addr in
+    let Lens.{get; set} = accounts |-- Accounts.at addr in
     let set =
       if keep_empty then set
       else fun acct state ->
@@ -66,17 +66,9 @@ module WorldState = struct
   (** [state_root state] computes the state root of the current account map. This involves computing the
       storage roots of every account in the state, which is very expensive. *)
   let state_root state =
-    let mpt =
-      state.accounts
-      |> Address.Map.to_seq
-      (* YP (10) *)
-      |> Seq.map (fun (addr, acc) ->
-          (* YP (11) *)
-          let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
-          (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
-      |> Mpt.of_seq
-    in
-    mpt.root_hash
+    let accounts = Accounts.merkleized state.accounts in
+    let state_root = Accounts.merkle_root accounts in
+    (state_root, {state with accounts})
 end
 
 module BlockState = struct
@@ -106,7 +98,7 @@ module BlockState = struct
   (** [finalize_current_block bs] returns [bs.current_block] with its header updated to reflect the new state
       after block execution. This will overwrite header fields [parent_hash], [state_root], [transactions_root],
       [receipts_root], [withdrawals_root], [logs_bloom], [requests_hash], [gas_used] and [blob_gas_used]. *)
-  let finalize_current_block (block_state : t) : Block.t =
+  let finalize_current_block (block_state : t) : Block.t * WorldState.t =
     (* YP (46) *)
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
@@ -118,28 +110,31 @@ module BlockState = struct
        Note that YP (39) is only enforced by this assignment, therefore any state changes that are
        triggered by an external call (test frameworks, fuzzer harness, loading a genesis state) may break
        this invariant. *)
-    let state_root = WorldState.state_root block_state.world_state in
+    let state_root, world_state = WorldState.state_root block_state.world_state in
 
     let transactions_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (tx, _) -> Transaction.encode tx)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let receipts_root =
-      ( block_state.transactions_processed
+      block_state.transactions_processed
       |> List.to_seq
       |> Seq.map (fun (_, receipt) -> Receipt.encode receipt)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let withdrawals_root =
-      ( block_state.withdrawals_processed
+      block_state.withdrawals_processed
       |> List.to_seq
       |> Seq.map (fun w -> Withdrawal.encode w)
-      |> Mpt.of_seq_i )
-        .root_hash
+      |> Mpt.Generic.of_seq_i
+      |> Mpt.Generic.merkleized ~value_to_bytes:Fun.id
+      |> Mpt.Generic.merkle_root
     in
     let logs_bloom =
       block_state.transactions_processed
@@ -177,7 +172,7 @@ module BlockState = struct
       ; blob_gas_used
       ; parent_hash }
     in
-    {block_state.current_block with header}
+    {block_state.current_block with header}, world_state
 end
 
 module TransactionState = struct

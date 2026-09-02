@@ -4,7 +4,7 @@ open Byte_string
 
 (** The type of RLP-encodable objects: either a byte string or a list of RLP-encodable objects. High-level types
     define encoding and decoding functions into this type. YP (190), YP (191), YP (192) *)
-type t = Bytes of Bytes.t | List of t list
+type t = Bytes of Bytes.t | List of t list [@@deriving to_yojson]
 
 let of_bytes (bs : Bytes.t) = Bytes bs
 let of_bytes32 (bs : B32.t) = Bytes (B32.to_bytes bs)
@@ -57,17 +57,21 @@ let long_bytes_prefix = 0xb7
 let short_list_prefix = 0xc0
 let long_list_prefix = 0xf7
 
+let encode_bytes (bs : Bytes.t) : Bytes.t =
+  if Bytes.length bs = 1 && Char.code bs.[0] < short_bytes_prefix then bs
+  else encode_payload bs ~short_payload_prefix:short_bytes_prefix ~long_payload_prefix:long_bytes_prefix
+
+let rec encode_list (encoded_items : Bytes.t list) : Bytes.t =
+  (* YP (198) *)
+  let bs = Bytes.(concat empty encoded_items) in
+  encode_payload bs ~short_payload_prefix:short_list_prefix ~long_payload_prefix:long_list_prefix
+
 (** [encode obj] RLP-encodes the object [obj] into a byte array. YP (193) *)
-let rec encode (obj : t) : Bytes.t =
+and encode (obj : t) : Bytes.t =
   (* TODO: OCaml's maximum string length is much smaller than 2^64, so we should switch to Bigarray *)
   match obj with
-  | Bytes bs when Bytes.length bs = 1 && Char.code bs.[0] < short_bytes_prefix -> bs
-  | Bytes bs ->
-      encode_payload bs ~short_payload_prefix:short_bytes_prefix ~long_payload_prefix:long_bytes_prefix
-  | List ls ->
-      (* YP (198) *)
-      let bs = Bytes.concat Bytes.empty (List.map encode ls) in
-      encode_payload bs ~short_payload_prefix:short_list_prefix ~long_payload_prefix:long_list_prefix
+  | Bytes bs -> encode_bytes bs
+  | List ls -> encode_list (List.map encode ls)
 
 (** [decode_first bs] decodes the first RLP-encoded object in the byte array [bs] and returns it and any
     remaining bytes. [bs] must be non-empty, otherwise a runtime error is raised. *)

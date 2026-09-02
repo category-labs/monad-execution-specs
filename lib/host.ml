@@ -29,11 +29,11 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     else return false
 
   (** {!Evmc.HOST.account_exists} *)
-  let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
+  let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Accounts.at addr)
 
   (** {!Evmc.HOST.get_storage} *)
   let get_storage addr key =
-    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
+    !(account addr |-- Account.storage |-- Storage.at key |-- Option.get_or_default B32.zeros)
 
   (** {!Evmc.HOST.set_storage} *)
   let set_storage addr key v =
@@ -41,15 +41,15 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       !( initial_world_state
        |-- WorldState.account addr
        |-- storage
-       |-- B32.Map.at key
+       |-- Storage.at key
        |-- Option.get_or_default B32.zeros )
     in
-    let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
+    let$ c = !(account addr |-- storage |-- Storage.at key |-- Option.get_or_default B32.zeros) in
     (* In practice there is no way to modify the storage of an account with zero nonce, so there is no
        need to keep empty accounts here. However, for the purpose of unit tests, it is useful to allow storage
        operations to work on empty accounts without clearing them up automatically. *)
     let$ () =
-      account ~keep_empty:true addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v
+      account ~keep_empty:true addr |-- storage |-- Storage.at key := if B32.(v = zeros) then None else Some v
     in
     let zero u = B32.(u = zeros) in
     let x u = B32.(u <> zeros && u = o) in
@@ -175,7 +175,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       in
       (* YP (98): σ* is σ except for the two accounts mutated below. *)
       (* YP (99), σ*[a]ₙ and σ*[a]ₛ. The code field of σ*[a] is known to be empty by this point. *)
-      let$ () = account create_address |-- storage := B32.Map.empty in
+      let$ () = account create_address |-- storage := Storage.empty in
       let$ () = account create_address |-- nonce := U64.one in
       (* σ*[a]_b as per YP (99), and σ*[s]_b as per YP (100), YP (101). YP (102) v' is implicitly calculated
          by transfer_ether. *)

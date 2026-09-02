@@ -47,9 +47,10 @@ module QCheck2 = struct
       return (if negative then Z.neg abs else abs)
 
     let rec depth = function Rlp.Bytes _ -> 0 | Rlp.List ls -> 1 + List.(fold_left max 0 (map depth ls))
-    let string ~nonempty : Bytes.t t =
-      let size = if nonempty then ( + ) 1 <$> small_nat else small_nat in
-      string_size size
+    let string_of char ~nonempty : Bytes.t t =
+     let size = if nonempty then ( + ) 1 <$> small_nat else small_nat in
+      string_size ~gen:char size
+    let string ~nonempty : Bytes.t t = string_of char ~nonempty
 
     let rlp ~nonempty : Rlp.t t =
       fix
