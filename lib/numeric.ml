@@ -226,7 +226,14 @@ module Uint = struct
     let byte_i i = bytes_le.[Stdlib.(sig_bytes - i - 1)] in
     Bytes.init sig_bytes byte_i
 
-  let of_rlp (rlp : Rlp.t) : t option = match rlp with Bytes bs -> Some (of_bytes_be bs) | List _ -> None
+  let of_rlp (rlp : Rlp.t) : t option =
+    match rlp with
+    | Bytes bs ->
+        let x = of_bytes_be bs in
+        (* As per YP Appendix B, RLP-encoded integers must be encoded as the shortest byte array that can
+           represent them. Longer encodings are not canonical and must be rejected. *)
+        if Int.equal (significant_bytes x) (Bytes.length bs) then Some x else None
+    | List _ -> None
 
   (* YP (199) *)
   let to_rlp (x : t) : Rlp.t = Rlp.Bytes (to_bytes_be x)
@@ -350,6 +357,7 @@ struct
     let to_rlp (x : t) = Uint.to_rlp (to_uint x)
     let of_rlp (rlp : Rlp.t) =
       Option.(
+        (* Uint decoding checks that the encoding was canonical, so there is no need to check again. *)
         let$ uint = Uint.of_rlp rlp in
         of_uint_opt uint )
   end

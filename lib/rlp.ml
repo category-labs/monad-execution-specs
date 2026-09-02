@@ -25,11 +25,23 @@ let be (x : int) =
   let byte_i i = x_le.[x_bytes - i - 1] in
   Bytes.init x_bytes byte_i
 
+(** [decode_be bs] decodes a big-endian byte array of minimal length as an integer. This is the inverse
+    of {!be}. If the input byte array is not of minimal length, a runtime error is raised. *)
+let decode_be (bs : Bytes.t) =
+  let bs_le = Bytes.reverse bs in
+  let num = Z.of_bits bs_le in
+  let significant_bytes = (Z.numbits num + 7) / 8 in
+  (* The byte array should be minimal. *)
+  assert (significant_bytes = Bytes.length bs) ;
+  num
+
+let max_short_payload_len = 55
+
 (* Covers YP (194) cases 2, 3 and YP (197) cases 1, 2. YP (196) is implemented here as string concatenation. *)
 let encode_payload payload ~long_payload_prefix ~short_payload_prefix =
   let len = Bytes.length payload in
   let header =
-    if len <= 55 then
+    if len <= max_short_payload_len then
       (* Case ‖x‖ < 56 *)
       Bytes.of_char (Char.chr (short_payload_prefix + len))
     else
@@ -61,20 +73,29 @@ let rec encode (obj : t) : Bytes.t =
     remaining bytes. [bs] must be non-empty, otherwise a runtime error is raised. *)
 let rec decode_first (bs : Bytes.t) : t * Bytes.t =
   let len = Bytes.length bs in
+  (* The empty byte-string is not a valid RLP-encoded object. *)
   assert (len > 0) ;
   let tag = Char.code bs.[0] in
   let payload_start, payload_len =
     match tag with
     | b when b < short_bytes_prefix -> (0, 1)
-    | b when b >= short_bytes_prefix && b <= long_bytes_prefix -> (1, b - short_bytes_prefix)
+    | b when b >= short_bytes_prefix && b <= long_bytes_prefix ->
+        let len = b - short_bytes_prefix in
+        (* Single bytes under 128 should be encoded as themselves. *)
+        if len = 1 then assert (Char.code bs.[1] >= short_bytes_prefix) ;
+        (1, len)
     | b when b > long_bytes_prefix && b < short_list_prefix ->
         let payload_len_len = b - long_bytes_prefix in
-        let payload_len = Z.(to_int (of_bits (Bytes.reverse (Bytes.sub bs 1 payload_len_len) :> string))) in
+        let payload_len = Z.to_int (decode_be (Bytes.sub bs 1 payload_len_len)) in
+        (* Short payloads should encode the length as part of the tag. *)
+        assert (payload_len > max_short_payload_len) ;
         (1 + payload_len_len, payload_len)
     | b when b >= short_list_prefix && b <= long_list_prefix -> (1, b - short_list_prefix)
     | b ->
         let payload_len_len = b - long_list_prefix in
-        let payload_len = Z.(to_int (of_bits (Bytes.reverse (Bytes.sub bs 1 payload_len_len) :> string))) in
+        let payload_len = Z.to_int (decode_be (Bytes.sub bs 1 payload_len_len)) in
+        (* Short payloads should encode the length as part of the tag. *)
+        assert (payload_len > max_short_payload_len) ;
         (1 + payload_len_len, payload_len)
   in
   let payload = Bytes.sub bs payload_start payload_len in
