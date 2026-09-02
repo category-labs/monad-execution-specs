@@ -169,7 +169,7 @@ module Transaction = struct
     ; value : U256.t (* T_v *)
     ; r : U256.t (* T_r *)
     ; s : U256.t (* T_s *)
-    ; to_ : Address.t_opt (* T_t *) [@key "to"]
+    ; to_ : Address.t (* T_t. As per EIP-7702, this must not be null. *) [@key "to"]
     ; data : Bytes.t (* Either T_d or T_i *)
     ; max_fee_per_gas : Uint.t (* T_m *) [@key "maxFeePerGas"]
     ; max_priority_fee_per_gas : Uint.t (* T_f *) [@key "maxPriorityFeePerGas"]
@@ -207,7 +207,9 @@ module Transaction = struct
     | _ -> None
 
   let to_ tx =
-    match tx with Legacy {to_; _} | AccessList {to_; _} | FeeMarket {to_; _} | SetCode {to_; _} -> to_
+    match tx with
+    | Legacy {to_; _} | AccessList {to_; _} | FeeMarket {to_; _} -> to_
+    | SetCode {to_; _} -> Some to_
 
   let nonce tx =
     match tx with
@@ -307,7 +309,7 @@ module Transaction = struct
           ; Uint.to_rlp tx.max_priority_fee_per_gas
           ; Uint.to_rlp tx.max_fee_per_gas
           ; Uint.to_rlp tx.gas_limit
-          ; Address.t_opt_to_rlp tx.to_
+          ; Address.to_rlp tx.to_
           ; U256.to_rlp tx.value
           ; Rlp.Bytes tx.data
           ; Rlp.List (List.map Access.to_rlp tx.access_list)
@@ -392,7 +394,7 @@ module Transaction = struct
                  ; Uint.to_rlp tx.max_priority_fee_per_gas
                  ; Uint.to_rlp tx.max_fee_per_gas
                  ; Uint.to_rlp tx.gas_limit
-                 ; Address.t_opt_to_rlp tx.to_
+                 ; Address.to_rlp tx.to_
                  ; U256.to_rlp tx.value
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list)
