@@ -210,9 +210,8 @@ module type HOST = sig
       {{:https://evmc.ethereum.org/group__EVMC.html#ga7971754ea6e237ffb9e9b7ab102fa16e}evmc_get_code_hash_fn}. *)
 
   val copy_code : Address.t -> offset:int -> size:int -> t -> Bytes.t * t
-  (** [copy_code addr ~offset ~size] returns the [size] bytes of the code for the account at [addr] starting
-      at offset [offset]. If the requested interval exceeds the size of the code at [addr], the result is padded
-      with zeros on the right.
+  (** [copy_code addr ~offset ~size] returns at most [size] bytes of the code for the account at [addr] starting
+      at offset [offset].
       Equivalent to
       {{:https://evmc.ethereum.org/group__EVMC.html#ga7dc696d1491951200ac5dc4f852a4499}evmc_copy_code_fn}. *)
 

@@ -84,7 +84,10 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
   (** {!Evmc.HOST.copy_code} *)
   let copy_code addr ~offset ~size =
     let$ code = !(account addr |-- code) in
-    return (Bytes.sub_with_zero_padding code offset size)
+    if offset >= Bytes.length code then return Bytes.empty
+    else
+      let size = min size (Bytes.length code - offset) in
+      return (Bytes.sub code offset size)
 
   (** {!Evmc.HOST.selfdestruct} *)
   let selfdestruct ~address ~beneficiary =
