@@ -38,11 +38,11 @@ let is_emptying_tx : bool TransactionState.M.t =
            <= state.current_block.header.number ) ) )
 
 (** Monad §6 Algorithm 3 (DippedIntoReserve). *)
-let dipped_into_reserve (revision : Chain.Monad.Revision.active) (tx : Transaction.t) :
-    bool TransactionState.M.t =
+let dipped_into_reserve (revision : Chain.Monad.Revision.active) : bool TransactionState.M.t =
   let open TransactionState in
   M.(
     let$ tx_sender = !tx_origin in
+    let$ tx_gas_limit = !tx_gas_limit in
     let$ tx_effective_gas_price = !tx_gas_price in
     let$ is_emptying = is_emptying_tx in
     let$ original_balances = !(initial_world_state |-- WorldState.accounts) in
@@ -53,7 +53,7 @@ let dipped_into_reserve (revision : Chain.Monad.Revision.active) (tx : Transacti
       let current_balance = new_account.balance in
       let violation_threshold =
         if Address.(addr = tx_sender) then
-          let tx_gas_fees = Uint.(Transaction.gas_limit tx * tx_effective_gas_price) in
+          let tx_gas_fees = Uint.(tx_gas_limit * tx_effective_gas_price) in
           if Uint.(U256.to_uint reserve >= tx_gas_fees) then U256.(reserve - of_uint_exn tx_gas_fees)
           else
             (* The behavior here is consistent with Monad §6 Algorithm 3 Eqn (28), but it differs from both

@@ -19,6 +19,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
   open WorldState
   include TransactionState
   open M
+  module Precompiles = Precompiles.Make (ChainParams)
 
   let transfer_ether sender recipient amount =
     let$ sender_balance = !(account sender |-- balance) in
@@ -115,18 +116,6 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
         assert (U64.(nonce < max_t)) ;
         U64.(nonce + one) )
 
-  let precompiles = Precompiles.precompiles ChainParams.revision
-
-  (* YP (140) *)
-  let try_precompile (address : Address.t) (msg : Evmc.Message.t) ~otherwise =
-    match Address.Map.find_opt address precompiles with
-    | Some precompile when not msg.delegated -> return (precompile msg)
-    | Some _ ->
-        (* Delegated calls to precompiles are executed as if the corresponding contract was empty,
-           as per EIP-7702. *)
-        Vm.execute msg Bytes.empty
-    | None -> otherwise
-
   let touch_account addr = M.update_field accessed_addresses (Address.Set.add addr)
 
   let touch_storage addr key =
@@ -142,18 +131,21 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
     in
     if transfer_ok then
-      (* YP (131) *)
-      try_precompile msg.code_address msg
-        ~otherwise:
-          (let$ code =
-             (* YP (141) does not apply here as the state stores account code directly. *)
-             let$ account_code = !(account msg.code_address |-- code) in
-             match (from_tx, Delegation.get_delegated_address account_code) with
-             | Some _, Some delegated_addr -> !(account delegated_addr |-- code)
-             | _ -> return account_code
-           in
-           (* YP (140), fallthrough case. *)
-           Vm.execute msg code )
+      let$ code_address, code =
+        (* YP (141) does not apply here as the state stores account code directly. *)
+        let$ account_code = !(account msg.code_address |-- code) in
+        (* If the call came from a smart contract, the VM has already resolved the target address. It is not
+           necessary to resolve it twice. TODO: simplify this. *)
+        match (from_tx, Delegation.get_delegated_address account_code) with
+        | Some _, Some delegated_addr ->
+            let$ delegated_code = !(account delegated_addr |-- code) in
+            return (delegated_addr, delegated_code)
+        | _ -> return (msg.code_address, account_code)
+      in
+      (* YP (131), YP (140). *)
+      match Precompiles.try_precompile msg code_address with
+      | Some action -> action
+      | None -> Vm.execute msg code
     else return Evmc.Result.(failure StatusCode.Insufficient_balance)
 
   let contract_creation_address (msg : Evmc.Message.t) =
@@ -252,11 +244,11 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     in
     let$ result =
       match from_tx with
-      | None -> return result
-      | Some t ->
+      | Some _t when result.status_code = Success ->
           (* Check reserve balance condition. Monad §6 Algorithm 2. *)
-          let$ reserve_dipped = Reserve_balance.dipped_into_reserve ChainParams.revision t in
+          let$ reserve_dipped = Reserve_balance.dipped_into_reserve ChainParams.revision in
           return (if reserve_dipped then {result with status_code = Revert; gas_refund = 0L} else result)
+      | Some _ | None -> return result
     in
     (* YP (115), YP (116), failure cases. YP (117) is implicitly covered by result.status_code. *)
     (* YP (127), YP (129), failure cases. YP (128) is implicitly covered by exceptional halting returning
