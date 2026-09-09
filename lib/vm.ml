@@ -50,7 +50,7 @@ struct
     let max_memory_usage =
       match Params.revision with
       | `Eight -> Uint.zero
-      | `Nine ->
+      | `Nine | `Ten ->
           (* MIP-3. *)
           Uint.of_int (8 * 1024 * 1024)
 
@@ -141,7 +141,7 @@ struct
     let available_memory_size =
       match Params.revision with
       | `Eight -> fun _mem -> max_memory_usage
-      | `Nine -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
+      | `Nine | `Ten -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
 
     (* YP (330) *)
     let extend_to_monad_eight ~start ~size_bytes mem =
@@ -163,7 +163,7 @@ struct
         if Uint.(active_bytes <= mem.memory_capacity) then Some {mem with active_bytes} else None
 
     let extend_to =
-      match Params.revision with `Eight -> extend_to_monad_eight | `Nine -> extend_to_monad_nine
+      match Params.revision with `Eight -> extend_to_monad_eight | `Nine | `Ten -> extend_to_monad_nine
 
     let dump mem =
       (* Write one word at a time *)
@@ -382,6 +382,12 @@ struct
             Format.sprintf "set_transient_storage %s %s %s" (Address.to_short_hex_string addr)
               (B32.to_short_hex_string key) (B32.to_short_hex_string v) ) ;
         lift (Base.set_transient_storage addr key v)
+
+      let update_page addr key status =
+        host_trace (fun () ->
+            Format.sprintf "update_page %s %s" (Address.to_short_hex_string addr)
+              (B32.to_short_hex_string key) ) ;
+        lift (Base.update_page addr key status)
     end
   end
   open M
@@ -860,7 +866,7 @@ struct
     let clz =
       match Params.revision with
       | `Eight -> undefined
-      | `Nine ->
+      | `Nine | `Ten ->
           (* Stack *)
           let$ value = pop in
 
@@ -1298,7 +1304,12 @@ struct
 
       (* Gas *)
       let$ access = HostAPI.access_storage self (U256.to_repr key) in
-      let$ () = spend Gas.(match access with `Cold -> cold_sload_cost | `Warm -> warm_access_cost) in
+      let sload_cost =
+        match Params.revision with
+        | `Eight | `Nine -> ( Gas.(function `Warm -> warm_access_cost | `Cold -> cold_sload_cost) )
+        | `Ten -> ( Gas.(function `Warm -> page_base_cost | `Cold -> page_base_cost + page_load_cost) )
+      in
+      let$ () = spend (sload_cost access) in
 
       (* Operation *)
       let$ value = U256.of_repr <$> HostAPI.get_storage self (U256.to_repr key) in
@@ -1307,9 +1318,51 @@ struct
       (* PC *)
       increase_pc_and_continue
 
+    let sstore_impl key value =
+      let$ access = HostAPI.access_storage self key in
+      let$ storage_status = HostAPI.set_storage self key value in
+      match Params.revision with
+      | `Eight | `Nine ->
+          let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
+          let update_gas =
+            match storage_status with
+            | Added -> Gas.sset_cost
+            | Deleted | Modified -> Gas.sreset_cost
+            | _ -> Gas.warm_access_cost
+          in
+          let$ () = spend Gas.(access_gas + update_gas) in
+
+          (* The refund here can be negative as we may be undoing a previous positive refund *)
+          let refund =
+            Integer.(
+              match storage_status with
+              | Deleted | ModifiedDeleted -> Gas.(as_signed sclear_refund)
+              | DeletedAdded -> zero - Gas.(as_signed sclear_refund)
+              | DeletedRestored ->
+                  Gas.(as_signed sreset_cost)
+                  - Gas.(as_signed warm_access_cost)
+                  - Gas.(as_signed sclear_refund)
+              | AddedDeleted -> Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost)
+              | ModifiedRestored -> Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost)
+              | Assigned | Added | Modified -> zero )
+          in
+          (* Overall gas refund is non-negative, but we have to do signed addition here *)
+          update_field gas_refund (fun r -> Integer.(r + refund))
+      | `Ten ->
+          let$ page_status = HostAPI.update_page self key storage_status in
+
+          (* Page I/O cost *)
+          let load_gas = Gas.(match access with `Warm -> zero | `Cold -> page_load_cost) in
+          let write_gas = if page_status.first_page_write then Gas.page_write_cost else Gas.zero in
+
+          (* State transition cost *)
+          let growth_gas = if page_status.grew_state then Gas.page_state_growth_cost else Gas.zero in
+
+          spend Gas.(page_base_cost + load_gas + write_gas + growth_gas)
+
     let sstore =
       (* Stack *)
-      let$ key, value' = pop2 in
+      let$ key, value = pop2 in
 
       (* Gas *)
       (* Protection against reentrancy attacks, see EIP-2200 *)
@@ -1322,34 +1375,7 @@ struct
        costs. *)
       let$ () = check_write_permissions in
 
-      let$ access = HostAPI.access_storage self (U256.to_repr key) in
-      let$ storage_status = HostAPI.set_storage self (U256.to_repr key) (U256.to_repr value') in
-
-      let access_gas = Gas.(match access with `Warm -> zero | `Cold -> cold_sload_cost) in
-      let update_gas =
-        match storage_status with
-        | Added -> Gas.sset_cost
-        | Deleted | Modified -> Gas.sreset_cost
-        | _ -> Gas.warm_access_cost
-      in
-      let$ () = spend Gas.(access_gas + update_gas) in
-
-      (* The refund here can be negative as we may be undoing a previous positive refund *)
-      let refund =
-        Integer.(
-          match storage_status with
-          | Deleted | ModifiedDeleted -> Gas.(as_signed sclear_refund)
-          | DeletedAdded -> zero - Gas.(as_signed sclear_refund)
-          | DeletedRestored ->
-              Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost) - Gas.(as_signed sclear_refund)
-          | AddedDeleted -> Gas.(as_signed sset_cost) - Gas.(as_signed warm_access_cost)
-          | ModifiedRestored -> Gas.(as_signed sreset_cost) - Gas.(as_signed warm_access_cost)
-          | Assigned | Added | Modified -> zero )
-      in
-      let$ () =
-        (* Overall gas refund is non-negative, but we have to do signed addition here *)
-        update_field gas_refund (fun r -> Integer.(r + refund))
-      in
+      let$ () = sstore_impl (U256.to_repr key) (U256.to_repr value) in
 
       (* PC *)
       increase_pc_and_continue
