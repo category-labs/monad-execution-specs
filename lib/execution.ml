@@ -298,7 +298,8 @@ struct
          recipient changes delegation, it is the new delegation that is warmed up. *)
       (* YP (77) *)
       let transaction_state =
-        TransactionState.initialize_access_sets tx transaction_state Precompiles.precompile_addresses
+        TransactionState.initialize_access_sets Params.revision tx transaction_state
+          Precompiles.precompile_addresses
       in
 
       (* YP (81) *)
@@ -461,7 +462,9 @@ struct
           ; logs = []
           ; refund = U256.zero
           ; accessed_addresses = Address.Set.empty
-          ; accessed_keys = StorageKey.Set.empty }
+          ; accessed_keys = StorageKey.Set.empty
+          ; written_pages = StorageKey.Set.empty
+          ; page_growth = StorageKey.Map.empty }
       in
       let result, transaction_state = Host.call message transaction_state in
       assert (result.status_code = Success) ;
@@ -564,7 +567,7 @@ struct
     let block_state = List.fold_left process_withdrawal block_state block.withdrawals in
 
     (* Compute roots and add the finalized block to the blockchain. *)
-    let finalized_block = BlockState.finalize_current_block block_state in
+    let finalized_block = BlockState.finalize_current_block Params.revision block_state in
     let$ () = validate_block world_state finalized_block in
 
     let$ () =
