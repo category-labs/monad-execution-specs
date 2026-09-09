@@ -118,6 +118,15 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
     let set_transient_storage : Address.t -> B32.t -> B32.t -> unit st =
       let f = bind set_transient_storage_fn set_transient_storage in
       fun acc k v -> return (f (addr_in acc) (b32_in k) (b32_in v))
+
+    let update_page : Address.t -> B32.t -> Evmc.StorageStatus.t -> Evmc.PageStorageStatus.t st =
+      let f = bind update_page_fn update_page in
+      fun acc k status ->
+        let r = f (addr_in acc) (b32_in k) status in
+        return
+          Evmc.PageStorageStatus.
+            { first_page_write = getf r C_evmc.Page_storage_status.first_page_write
+            ; grew_state = getf r C_evmc.Page_storage_status.grew_state }
   end
 
   (* Bindings to the monadml_evm fields. Currently, all the monadml_evm fields are

@@ -165,6 +165,17 @@ module StorageStatus = struct
     | Assigned
 end
 
+module PageStorageStatus = struct
+  (** MIP-8: page storage status for a SSTORE, reported by {!HOST.update_page}.
+      See {{:https://github.com/category-labs/evmc}[evmc_page_storage_status]}. *)
+  type t =
+    { first_page_write : bool  (** This SSTORE is the first in the transaction to modify the page. *)
+    ; grew_state : bool
+          (** This SSTORE increases the number of occupied slots in the page above the highest value it has
+              reached so far in the transaction. *)
+    }
+end
+
 module type HOST = sig
   (** Types supporting a purely functional version of the EVMC host API. This mirrors the structure
       of {{:https://evmc.ethereum.org/structevmc__host__interface.html}[evmc_host_interface]}, replacing
@@ -257,6 +268,8 @@ module type HOST = sig
   val access_storage : Address.t -> B32.t -> t -> [`Warm | `Cold] * t
   (** [access_storage addr key] adds the pair [(addr, key)] to the list of accessed storage slots in the current
       transaction, and returns [`Warm] if the pair had previously been accessed or [`Cold] otherwise.
+      From MIP-8 onwards the pair recorded and looked up is [(addr, Page.align key)], so accessing any slot of
+      a page warms every other slot of that page.
       Equivalent to
       {{:https://evmc.ethereum.org/group__EVMC.html#ga8eb6233115c660f8d779eb9b132e93c5}evmc_access_storage_fn}.
    *)
@@ -273,6 +286,12 @@ module type HOST = sig
       at [addr] to the new value [value].
       Equivalent to
       {{:https://evmc.ethereum.org/group__EVMC.html#gaf9d05d52083ede06470147205d695224}evmc_set_transient_storage_fn}. *)
+
+  val update_page : Address.t -> B32.t -> StorageStatus.t -> t -> PageStorageStatus.t * t
+  (** [update_page addr key status] reports a MIP-8 SSTORE to [key] in a storage page, where [status] is the
+      value returned by the {!set_storage} call for [key].
+      Should not be called pre-MONAD_TEN.
+      Equivalent to [evmc_update_page_fn]. *)
 end
 
 (** The type of EVMC VMs over a host [H.t], broadly based on
