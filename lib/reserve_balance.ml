@@ -71,7 +71,7 @@ let dipped_into_reserve (revision : Chain.Monad.Revision.active) (tx : Transacti
     let balances_to_check =
       match revision with
       | `Eight -> original_balances
-      | `Nine ->
+      | `Nine | `Ten ->
           original_balances
           |> Seq.filter (fun (addr, _) ->
               (* Monad §TODO: Accounts that are created and self-destructed in this transaction are allowed

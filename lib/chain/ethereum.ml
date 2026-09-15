@@ -710,23 +710,47 @@ module Account = struct
       to an EIP-7702 delegation. *)
   let is_smart_contract {code; _} = Bytes.(code <> empty) && not (Delegation.is_valid_delegation code)
 
-  (** [to_rlp acc] returns the RLP encoding of the account [acc]. This involves computing the storage
-      root of the account, which is potentially very expensive. *)
-  let to_rlp {nonce; balance; storage; code} =
+  (** [to_rlp revision acc] returns the RLP encoding of the account [acc]. This involves computing the
+      storage root of the account, which is potentially very expensive. *)
+  let to_rlp (revision : Monad.Revision.active) {nonce; balance; storage; code} =
     let storage_root =
-      (* Unlike in the Yellow Paper, accounts contain their entire storage. The relationship in YP (7) is
-         used here in reverse to calculate the storage root from the storage KV pairs. *)
-      let mpt =
-        storage
-        |> B32.Map.to_seq
-        |> Seq.map (fun (k, v) ->
-            (* YP (8), YP (9) *)
-            let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
-            let v = Rlp.encode U256.(to_rlp (of_repr v)) in
-            (k, v) )
-        |> Mpt.of_seq
-      in
-      mpt.root_hash
+      match revision with
+      | `Eight | `Nine ->
+          (* Unlike in the Yellow Paper, accounts contain their entire storage. The relationship in YP (7) is
+             used here in reverse to calculate the storage root from the storage KV pairs. *)
+          let mpt =
+            storage
+            |> B32.Map.to_seq
+            |> Seq.map (fun (k, v) ->
+                (* YP (8), YP (9) *)
+                let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in
+                let v = Rlp.encode U256.(to_rlp (of_repr v)) in
+                (k, v) )
+            |> Mpt.of_seq
+          in
+          mpt.root_hash
+      | `Ten ->
+          (* MIP-8: Commit to (page_index_i, page_commit(page_i)) pairs. *)
+          let pages =
+            B32.Map.fold
+              (fun slot value pages ->
+                if B32.(value = zeros) then pages
+                else
+                  let entry = (Ismc.Page.offset_of_slot slot, value) in
+                  U256.Map.update (Ismc.Page.index_of_slot slot)
+                    (fun entries -> Some (entry :: Option.value entries ~default:[]))
+                    pages )
+              storage U256.Map.empty
+          in
+          let mpt =
+            U256.Map.to_seq pages
+            |> Seq.map (fun (index, entries) ->
+                let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes (U256.to_repr index))) in
+                let v = Rlp.encode (Rlp.of_bytes32 (Ismc.page_commitment entries)) in
+                (k, v) )
+            |> Mpt.of_seq
+          in
+          mpt.root_hash
     in
     let code_hash = Crypto.keccak_256 code in
     Rlp.List [U64.to_rlp nonce; U256.to_rlp balance; Rlp.of_bytes32 storage_root; Rlp.of_bytes32 code_hash]
