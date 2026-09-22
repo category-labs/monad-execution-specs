@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-URL="https://github.com/monad-developers/execution-spec-tests/releases/download/monad%40v1.0.0/fixtures_monad.tar.gz"
-SHA="94b68a8cb1eb66f03a60156ac1cc73191fc084257cf8673fb259992e44c7ed0d"
+URL="https://github.com/monad-developers/execution-specs/releases/download/tests-monad@v1.2.2/fixtures_monad.tar.gz"
+SHA="c96c822d2e187e9168aa20f2c158c8a2de96ea076f6e6c473a1b6d3fc5c064df"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/monad-execution-specs"
 mkdir -p "$CACHE"
 TARBALL="$CACHE/fixtures_monad-$SHA.tar.gz"

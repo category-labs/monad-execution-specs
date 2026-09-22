@@ -234,21 +234,24 @@ module Transaction = struct
     | Legacy _ -> None
 
   let signature chain_id tx =
+    let open Option in
     (* r, s below are as in YP (321), YP (322) *)
     match tx with
     | AccessList {r; s; y_parity; _} | FeeMarket {r; s; y_parity; _} | SetCode {r; s; y_parity; _} ->
         (* YP (324), case 3 *)
-        Crypto.{r; s; y_parity}
+        Some Crypto.{r; s; y_parity}
     | Legacy {r; s; v; _} ->
         (* YP (324), cases 1, 2 *)
-        let y_parity =
-          if U256.(v = ~$27) then U8.zero
-          else if U256.(v = ~$28) then U8.one
+        let$ y_parity =
+          if U256.(v = ~$27) then return U8.zero
+          else if U256.(v = ~$28) then return U8.one
           else
             let parity = U256.(v - ~$35 - (~$2 * U256.of_uint_exn chain_id)) in
-            if U256.(parity = zero) then U8.zero else if U256.(parity = one) then U8.one else assert false
+            if U256.(parity = zero) then return U8.zero
+            else if U256.(parity = one) then return U8.one
+            else None
         in
-        Crypto.{r; s; y_parity}
+        Some Crypto.{r; s; y_parity}
 
   type fee_mechanism =
     | LegacyFee of {gas_price : Uint.t}
@@ -407,7 +410,7 @@ module Transaction = struct
   let sender (chain_id : Uint.t) (tx : t) : Address.t option =
     let msg_hash = signing_hash chain_id tx in
     Option.(
-      let signature = signature chain_id tx in
+      let$ signature = signature chain_id tx in
       (* YP (312) *)
       let$ () = ensure U256.(zero < signature.r && signature.r < Crypto.secp256k1n) in
       (* YP (313) *)

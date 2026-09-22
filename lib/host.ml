@@ -109,13 +109,6 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
   let should_transfer (msg : Evmc.Message.t) =
     match msg.kind with Call | CallCode | Create | Create2 -> not msg.static | DelegateCall -> false
 
-  let increment_nonce (addr : Address.t) =
-    update_field
-      (account addr |-- nonce)
-      (fun nonce ->
-        assert (U64.(nonce < max_t)) ;
-        U64.(nonce + one) )
-
   let touch_account addr = M.update_field accessed_addresses (Address.Set.add addr)
 
   let touch_storage addr key =
@@ -220,11 +213,6 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
 
   let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =
     let$ () =
-      (* Increment the nonce for non-EOA CREATE/CREATE2 messages . If the message came from an EOA transaction,
-         the nonce was already incremented in the irrevocable change. *)
-      when_ ((msg.kind = Create || msg.kind = Create2) && Option.is_none from_tx) (increment_nonce msg.sender)
-    in
-    let$ () =
       match msg.kind with
       | Create | Create2 ->
           let$ create_address = contract_creation_address msg in
@@ -257,8 +245,26 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     let$ () = when_ (result.status_code <> Success) (put initial_state) in
     return result
 
+  let try_increment_nonce (addr : Address.t) =
+    let$ current_nonce = !(account addr |-- nonce) in
+    if U64.(current_nonce = max_t) then return false
+    else
+      let$ () = account addr |-- nonce := U64.(current_nonce + one) in
+      return true
+
   (** {!Evmc.HOST.call} *)
-  let call (msg : Evmc.Message.t) = call_impl ~from_tx:None msg
+  let call (msg : Evmc.Message.t) =
+    let$ no_nonce_overflow =
+      (* Increment the nonce for non-EOA CREATE/CREATE2 messages . If the message came from an EOA transaction,
+         the nonce was already incremented in the irrevocable change. *)
+      if msg.kind = Create || msg.kind = Create2 then try_increment_nonce msg.sender else return true
+    in
+    if no_nonce_overflow then call_impl ~from_tx:None msg
+    else
+      (* As per EIP-2681, if the account nonce is already 2^64-1 when executing a CREATE or CREATE2 instruction,
+         the call returns a failure code but no gas is spent. This is in contrast with failure due to an
+         exceptional halt like a stack underflow, where the remaining gas returned would be zero. *)
+      return {(Evmc.Result.failure Argument_out_of_range) with gas_left = msg.gas}
 
   (** [call_from_eoa tx msg] processes a message (contract creation or call) created from a transaction sent
       by an EOA, as opposed to a system transaction or a CALL opcode which are handled by {!call} directly. *)
