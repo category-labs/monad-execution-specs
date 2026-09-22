@@ -95,7 +95,7 @@ module BlockchainTest = struct
     {base_fee_update_fraction : Uint.t [@key "baseFeeUpdateFraction"]; max : Uint.t; target : Uint.t}
   [@@deriving yojson]
   type config =
-    { blob_schedule : blob_schedule object_as_alist [@key "blobSchedule"]
+    { blob_schedule : blob_schedule object_as_alist [@key "blobSchedule"] [@default []]
     ; chain_id : Uint.t [@key "chainid"]
     ; network : revision }
   [@@deriving yojson]
