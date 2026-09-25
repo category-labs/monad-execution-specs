@@ -111,10 +111,12 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
 
   let touch_account addr = M.update_field accessed_addresses (Address.Set.add addr)
 
+  let storage_key key = TransactionState.storage_key ChainParams.revision key
+
   let touch_storage addr key =
     M.(
       let$ () = touch_account addr in
-      update_field accessed_keys (StorageKey.Set.add (addr, key)) )
+      update_field accessed_keys (StorageKey.Set.add (addr, storage_key key)) )
 
   (* YP (119) *)
   let process_call (from_tx : Transaction.t option) (msg : Evmc.Message.t) =
@@ -318,10 +320,36 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
   (** {!Evmc.HOST.access_storage} *)
   let access_storage addr key =
     let$ accessed = !accessed_keys in
-    if Option.is_some (StorageKey.Set.find_opt (addr, key) accessed) then return `Warm
+    if StorageKey.Set.mem (addr, storage_key key) accessed then return `Warm
     else
       let$ () = touch_storage addr key in
       return `Cold
+
+  (** {!Evmc.HOST.update_page} MIP-8 *)
+  let update_page addr key status =
+    (match ChainParams.revision with `Eight | `Nine -> assert false | `Ten -> ()) ;
+    let open Evmc.StorageStatus in
+    let page = (addr, storage_key key) in
+    let value_changed = Stdlib.(status <> Assigned) in
+    let$ written = !written_pages in
+    let first_page_write = value_changed && not (StorageKey.Set.mem page written) in
+    let$ () = when_ first_page_write (update_field written_pages (StorageKey.Set.add page)) in
+    let delta =
+      match status with
+      | Added | DeletedAdded | DeletedRestored -> 1
+      | Deleted | ModifiedDeleted | AddedDeleted -> -1
+      | Modified | ModifiedRestored | Assigned -> 0
+    in
+    let$ grew_state =
+      if Stdlib.(delta = 0) then return false
+      else
+        let growth = page_growth |-- StorageKey.Map.at page in
+        let$ current = !(growth |-- Option.get_or_default PageGrowth.zero) in
+        let charge, updated = PageGrowth.bump delta current in
+        let$ () = growth := Some updated in
+        return charge
+    in
+    return Evmc.PageStorageStatus.{first_page_write; grew_state}
 
   let transient_storage addr key =
     transient_storage

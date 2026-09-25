@@ -138,6 +138,15 @@ module BlockchainTest = struct
     ; seal_engine : string option [@key "sealEngine"] [@default None] (* Deprecated. *) }
   [@@deriving yojson]
 
+  let header_revision (config : config) (header : Block.Header.t) : Chain.Monad.Revision.active =
+    let rev =
+      match config.network with
+      | Single rev -> rev
+      | Transition {pre; post; timestamp} -> if U256.(header.timestamp < timestamp) then pre else post
+      | Invalid -> assert false
+    in
+    rev |> Chain.Monad.Revision.is_active |> Option.get
+
   let is_active_revision (test : test_case) =
     match test.config.network with
     | Single rev -> Option.is_some (Chain.Monad.Revision.is_active rev)
