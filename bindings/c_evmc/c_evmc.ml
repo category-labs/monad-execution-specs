@@ -91,32 +91,34 @@ module Result = struct
       coerce (static_funptr release_result_fn) (Foreign.funptr release_result_fn) release (addr repr) ;
     result
 
-  let to_c (res : t) : repr structure =
+  (* Following the EVMC API, the output buffer of a result created by [to_c] must be kept alive until the owner
+     of the result calls its release function. However, using an OCaml closure (marshalled by libffi) as the
+     release function can cause segmentation faults when the C driver that consumes the results is compiled
+     with Clang's function sanitizer. The required [release] callback must have a native C entry point and
+     free the output buffer with [free]. It is installed before returning the result. If construction raises,
+     [to_c] frees the buffer itself. *)
+  let to_c ~release:release_fn (res : t) : repr structure =
     let repr = make repr in
     setf repr status_code res.status_code ;
     setf repr gas_left res.gas_left ;
     setf repr gas_refund res.gas_refund ;
-    let (output_data_ptr, output_data_size), output_data_handle =
-      Bytes.to_c res.output_data ~ownership:Manual
-    in
-    setf repr output_data output_data_ptr ;
-    setf repr output_size output_data_size ;
-
-    (* Careful: we need to root not only the allocated output_data, but also the release closure itself. For
-       this, we need a mutable reference to break the recursion. *)
-    let release_fn =
-      let release_handle = ref None in
-      let release =
-       fun (_self : repr structure ptr) ->
-        Root.release output_data_handle ;
-        Root.release (Option.get !release_handle)
-      in
-      release_handle := Some (Root.create release) ;
-      release
-    in
-    setf repr release (coerce (Foreign.funptr release_result_fn) (static_funptr release_result_fn) release_fn) ;
+    setf repr release release_fn ;
     setf repr create_address (Address.to_c res.create_address) ;
-    repr
+    let size = Bytes.length res.output_data in
+    let data_size = Unsigned.Size_t.of_int size in
+    let data = if size = 0 then null else Common.malloc data_size in
+    if size <> 0 && is_null data then raise Out_of_memory ;
+    try
+      let data_ptr = from_voidp char data in
+      Bytes.iteri (fun i c -> data_ptr +@ i <-@ c) res.output_data ;
+      setf repr output_data (from_voidp uint8_t data) ;
+      setf repr output_size data_size ;
+      repr
+    with exn ->
+      (* Do not leak the malloc'd memory if an exception is thrown. *)
+      let backtrace = Printexc.get_raw_backtrace () in
+      Common.free data ;
+      Printexc.raise_with_backtrace exn backtrace
 end
 
 module Tx_context = struct

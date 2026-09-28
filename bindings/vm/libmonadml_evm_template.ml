@@ -1,4 +1,4 @@
-module Stubs (I : Cstubs_inverted.INTERNAL) = struct
+module Stubs (I : Common.INTERNAL) = struct
   open Monad_lib
   open Byte_string
   open Numeric
@@ -123,17 +123,12 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
   (* Bindings to the monadml_evm fields. Currently, all the monadml_evm fields are
      allocated statically once when the dynamic library is loaded, and a call to
      make_monadml_evm simply returns a struct containing these pre-allocated pointers.
-     Any data allocated by this module, including closures, must remain alive
-     indefinitely. *)
+     Any data allocated by this module must remain alive indefinitely. The function
+     pointers point to the C functions generated for each OCaml function by
+     Cstubs_inverted. *)
   module Evm_bindings = struct
     open C_evmc
     open Vm
-
-    (* Coerce an OCaml closure to a static_funptr with global lifetime. The closure f will never be
-       released by the garbage collector. *)
-    let to_static_funptr ty f =
-      let _ = Root.create f in
-      coerce (Foreign.funptr ty) (static_funptr ty) f
 
     let name =
       let name = CArray.of_string "monadml_evm" in
@@ -148,7 +143,12 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
     (* The VM instance is statically allocated, so deallocating it is a no-op, however EVMC requires
        the destroy callback to be non-null. *)
     let destroy_impl (_vm : Vm.repr structure ptr) = ()
-    let destroy = to_static_funptr destroy_fn destroy_impl
+    let destroy = I.internal "monadml_evm_destroy" destroy_fn destroy_impl
+
+    let release_result_impl (result : Result.repr structure ptr) =
+      Common.free (to_voidp !@(result |-> Result.output_data))
+    let release_result =
+      I.internal "monadml_evm_release_result" C_evmc.Result.release_result_fn release_result_impl
 
     let execute_impl
         (debug_tstore : bool)
@@ -175,14 +175,16 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
           (Host)
       in
       let result, () = Vm.execute msg code () in
-      C_evmc.Result.to_c result
+      C_evmc.Result.to_c ~release:release_result result
     let execute =
-      let execute_base = to_static_funptr execute_fn (execute_impl false) in
-      let execute_debug_tstore = to_static_funptr execute_fn (execute_impl true) in
+      let execute_base = I.internal "monadml_evm_execute" execute_fn (execute_impl false) in
+      let execute_debug_tstore =
+        I.internal "monadml_evm_execute_debug_tstore" execute_fn (execute_impl true)
+      in
       fun debug_tstore -> if debug_tstore then execute_debug_tstore else execute_base
 
     let get_capabilities_impl (_vm : Vm.repr structure ptr) = Vm.Capabilities.evm1
-    let get_capabilities = to_static_funptr get_capabilities_fn get_capabilities_impl
+    let get_capabilities = I.internal "monadml_evm_get_capabilities" get_capabilities_fn get_capabilities_impl
 
     let set_option = coerce (ptr void) (static_funptr Vm.set_option_fn) null
   end
@@ -202,14 +204,16 @@ module Stubs (I : Cstubs_inverted.INTERNAL) = struct
   let monadml_evm_default = make_monadml_evm false
   let () = ignore (Root.create monadml_evm_default)
   let () =
-    I.internal ~runtime_lock:false "evmc_create_monadml_evm"
-      (void @-> returning (ptr C_evmc.Vm.repr))
-      (fun () -> monadml_evm_default)
+    ignore
+      (I.internal ~runtime_lock:false "evmc_create_monadml_evm"
+         (void @-> returning (ptr C_evmc.Vm.repr))
+         (fun () -> monadml_evm_default) )
 
   let monadml_evm_debug_tstore = make_monadml_evm true
   let () = ignore (Root.create monadml_evm_debug_tstore)
   let () =
-    I.internal ~runtime_lock:false "evmc_create_monadml_evm_debug_tstore"
-      (void @-> returning (ptr C_evmc.Vm.repr))
-      (fun () -> monadml_evm_debug_tstore)
+    ignore
+      (I.internal ~runtime_lock:false "evmc_create_monadml_evm_debug_tstore"
+         (void @-> returning (ptr C_evmc.Vm.repr))
+         (fun () -> monadml_evm_debug_tstore) )
 end
