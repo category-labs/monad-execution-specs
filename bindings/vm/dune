@@ -24,9 +24,10 @@
  (foreign_stubs
   (language c)
   (include_dirs %{project_root}/third_party/evmc/include)
-  ; Suppress unused variable errors in generated stubs (C)
+  ; Suppress unused variable errors in generated stubs (C). The stubs are linked into a shared object and
+  ; take the addresses of exported functions, so they must be compiled as position-independent code.
   (flags
-   (-g -Wno-unused-variable -Wno-visibility))
+   (-g -fPIC -Wno-unused-variable -Wno-visibility))
   (names libmonadml_evm_stubs_generated))
  ; Suppress unused variable errors in generated stubs (OCaml)
  (flags
