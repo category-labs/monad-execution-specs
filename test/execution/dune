@@ -1,9 +1,90 @@
-(test
+; Blockchain tests are split into shards that dune runs in parallel.
+; If changing shard count, manually change each rule below.
+
+(executable
  (name blockchain_tests)
  (modules blockchain_tests)
+ (libraries monad_lib test_utils alcotest))
+
+(rule
+ (alias runtest)
  (deps
   (source_tree fixtures))
- (libraries monad_lib test_utils alcotest))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   1/8
+   (run %{exe:blockchain_tests.exe}))))
+
+(rule
+ (alias runtest)
+ (deps
+  (source_tree fixtures))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   2/8
+   (run %{exe:blockchain_tests.exe}))))
+
+(rule
+ (alias runtest)
+ (deps
+  (source_tree fixtures))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   3/8
+   (run %{exe:blockchain_tests.exe}))))
+
+(rule
+ (alias runtest)
+ (deps
+  (source_tree fixtures))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   4/8
+   (run %{exe:blockchain_tests.exe}))))
+
+(rule
+ (alias runtest)
+ (deps
+  (source_tree fixtures))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   5/8
+   (run %{exe:blockchain_tests.exe}))))
+
+(rule
+ (alias runtest)
+ (deps
+  (source_tree fixtures))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   6/8
+   (run %{exe:blockchain_tests.exe}))))
+
+(rule
+ (alias runtest)
+ (deps
+  (source_tree fixtures))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   7/8
+   (run %{exe:blockchain_tests.exe}))))
+
+(rule
+ (alias runtest)
+ (deps
+  (source_tree fixtures))
+ (action
+  (setenv
+   BLOCKCHAIN_TESTS_SHARD
+   8/8
+   (run %{exe:blockchain_tests.exe}))))
 
 (test
  (name procedural_tests)
