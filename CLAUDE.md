@@ -19,7 +19,7 @@ Running a single test file (Alcotest via dune): `dune exec test/unit/numeric.exe
 
 External test fixtures for `test/execution/blockchain_tests.ml` are downloaded by `./scripts/download_mf_tests.sh` into `test/execution/fixtures/blockchain_tests/mf_tests/`. CI runs this before `dune test`; run it locally before executing that suite.
 
-Requires OCaml 5.4.0 with flambda. Git submodules under `third_party/` (`evmc`, `tests`) must be checked out (`git submodule update --init`).
+Requires OCaml 5.5.1 with flambda. Git submodules under `third_party/` (`evmc`, `tests`) must be checked out (`git submodule update --init`).
 
 ## Architecture
 

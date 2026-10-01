@@ -51,8 +51,7 @@ let test_case_of_fixture (name, fixture) =
   Alcotest.(test_case name `Quick (fun () -> check' b32 ~msg:"Root" ~expected:fixture.root ~actual:root'))
 
 let test_fixture_file ?(hash_keys = false) file =
-  (* TODO: do something disciplined about paths *)
-  let path = "../../../../third_party/tests/TrieTests/" ^ file in
+  let path = "../../third_party/tests/TrieTests/" ^ file in
   let test_fixtures =
     Result.get_ok (Fixtures.TrieTest.of_yojson ~hash_keys (Yojson.Safe.from_file ~fname:file path))
   in
