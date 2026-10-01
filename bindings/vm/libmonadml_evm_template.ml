@@ -14,6 +14,44 @@ module Stubs (I : Common.INTERNAL) = struct
     let revision = `Eight
   end
 
+  (** Utility functions to read a function pointer from an EVMC host vtable and wrap it in an OCaml-level
+      closure. Both creating a [Foreign.funptr] type object and coercing a C function pointer to it allocate
+      libffi type descriptors internally and these are never freed, causing leaks. Instead, a [Foreign.funptr]
+      type object is created once for each callback type, and the libffi-created closures are cached based on
+      the underlying function pointer. *)
+  module Host_fns = struct
+    open C_evmc.Host_interface
+
+    let host_fn (fn_typ : (C_evmc.Host_context.repr structure ptr -> 'a) fn) field =
+      let coercion = coerce (static_funptr fn_typ) (Foreign.funptr fn_typ) in
+      let cache = Hashtbl.create 1 in
+      fun intf ->
+        let fn_ptr = !@(intf |-> field) in
+        let key = raw_address_of_ptr (coerce (static_funptr fn_typ) (ptr void) fn_ptr) in
+        match Hashtbl.find_opt cache key with
+        | Some f -> f
+        | None ->
+            let f = coercion fn_ptr in
+            Hashtbl.add cache key f ; f
+
+    let account_exists = host_fn account_exists_fn account_exists
+    let get_storage = host_fn get_storage_fn get_storage
+    let set_storage = host_fn set_storage_fn set_storage
+    let get_balance = host_fn get_balance_fn get_balance
+    let get_code_size = host_fn get_code_size_fn get_code_size
+    let get_code_hash = host_fn get_code_hash_fn get_code_hash
+    let copy_code = host_fn copy_code_fn copy_code
+    let selfdestruct = host_fn selfdestruct_fn selfdestruct
+    let call = host_fn call_fn call
+    let get_tx_context = host_fn get_tx_context_fn get_tx_context
+    let get_block_hash = host_fn get_block_hash_fn get_block_hash
+    let emit_log = host_fn emit_log_fn emit_log
+    let access_account = host_fn access_account_fn access_account
+    let access_storage = host_fn access_storage_fn access_storage
+    let get_transient_storage = host_fn get_transient_storage_fn get_transient_storage
+    let set_transient_storage = host_fn set_transient_storage_fn set_transient_storage
+  end
+
   (* Unpack a C host vtable into an Evmc.Host implementation. *)
   module C_host (Host : sig
     val intf : C_evmc.Host_interface.repr structure ptr
@@ -25,12 +63,9 @@ module Stubs (I : Common.INTERNAL) = struct
     let return (v : 'a) : 'a st = fun () -> (v, ())
 
     open C_evmc
-    open Host_interface
 
-    (* Wrap a C vtable function pointer in an OCaml-level closure. *)
-    let bind (fn_typ : (C_evmc.Host_context.repr structure ptr -> 'a) fn) field =
-      let coercion = coerce (static_funptr fn_typ) (Foreign.funptr fn_typ) in
-      coercion !@(Host.intf |-> field) Host.ctx
+    (* Apply a host function to this execution's vtable and context. *)
+    let bind host_fn = host_fn Host.intf Host.ctx
 
     let addr_in a = addr (Address.to_c a)
 
@@ -38,34 +73,34 @@ module Stubs (I : Common.INTERNAL) = struct
     let b32_out bs = Bytes32.of_c bs
 
     let account_exists : Address.t -> bool st =
-      let f = bind account_exists_fn account_exists in
+      let f = bind Host_fns.account_exists in
       fun acc -> return (f (addr_in acc))
 
     let get_storage : Address.t -> B32.t -> B32.t st =
-      let f = bind get_storage_fn get_storage in
+      let f = bind Host_fns.get_storage in
       fun acc loc -> return (b32_out (f (addr_in acc) (b32_in loc)))
 
     let set_storage : Address.t -> B32.t -> B32.t -> Evmc.StorageStatus.t st =
-      let f = bind set_storage_fn set_storage in
+      let f = bind Host_fns.set_storage in
       fun acc loc v -> return (f (addr_in acc) (b32_in loc) (b32_in v))
 
     let get_balance : Address.t -> U256.t st =
-      let f = bind get_balance_fn get_balance in
+      let f = bind Host_fns.get_balance in
       fun acc -> return (Uint256be.of_c (f (addr_in acc)))
 
     let get_code_size : Address.t -> Uint64.t st =
-      let f = bind get_code_size_fn get_code_size in
+      let f = bind Host_fns.get_code_size in
       fun acc -> return (Unsigned.Size_t.to_int64 (f (addr_in acc)))
 
     let get_code_hash : Address.t -> B32.t option st =
-      let f = bind get_code_hash_fn get_code_hash in
+      let f = bind Host_fns.get_code_hash in
       fun acc ->
         return
           (let r = b32_out (f (addr_in acc)) in
            if B32.(equal r zeros) then None else Some r )
 
     let copy_code : Address.t -> offset:int -> size:int -> Bytes.t st =
-      let f = bind copy_code_fn copy_code in
+      let f = bind Host_fns.copy_code in
       fun addr ~offset ~size ->
         return
           (let buf = CArray.make uint8_t size in
@@ -75,26 +110,26 @@ module Stubs (I : Common.INTERNAL) = struct
            Bytes.of_c (CArray.start buf) n )
 
     let selfdestruct : address:Address.t -> beneficiary:Address.t -> bool st =
-      let f = bind selfdestruct_fn selfdestruct in
+      let f = bind Host_fns.selfdestruct in
       fun ~address ~beneficiary -> return (f (addr_in address) (addr_in beneficiary))
 
     let call : Evmc.Message.t -> Evmc.Result.t st =
-      let f = bind call_fn call in
+      let f = bind Host_fns.call in
       fun msg -> return (Result.of_c (f (addr (Message.to_c msg))))
 
     let get_tx_context : Evmc.TxContext.t st =
-      let ptr = bind get_tx_context_fn get_tx_context in
+      let ptr = bind Host_fns.get_tx_context in
       return (Tx_context.of_c !@ptr)
 
     let get_block_hash : Uint64.t -> B32.t option st =
-      let f = bind get_block_hash_fn get_block_hash in
+      let f = bind Host_fns.get_block_hash in
       fun n ->
         return
           (let r = b32_out (f n) in
            if B32.(equal r zeros) then None else Some r )
 
     let emit_log : Address.t -> data:Bytes.t -> topics:B32.t list -> unit st =
-      let f = bind emit_log_fn emit_log in
+      let f = bind Host_fns.emit_log in
       fun addr ~data ~topics ->
         return
           (let data_ptr, data_size = Bytes.to_c data ~ownership:Local in
@@ -104,19 +139,19 @@ module Stubs (I : Common.INTERNAL) = struct
              topics_count )
 
     let access_account : Address.t -> [`Warm | `Cold] st =
-      let f = bind access_account_fn access_account in
+      let f = bind Host_fns.access_account in
       fun acc -> return (f (addr_in acc))
 
     let access_storage : Address.t -> B32.t -> [`Warm | `Cold] st =
-      let f = bind access_storage_fn access_storage in
+      let f = bind Host_fns.access_storage in
       fun acc k -> return (f (addr_in acc) (b32_in k))
 
     let get_transient_storage : Address.t -> B32.t -> B32.t st =
-      let f = bind get_transient_storage_fn get_transient_storage in
+      let f = bind Host_fns.get_transient_storage in
       fun acc k -> return (b32_out (f (addr_in acc) (b32_in k)))
 
     let set_transient_storage : Address.t -> B32.t -> B32.t -> unit st =
-      let f = bind set_transient_storage_fn set_transient_storage in
+      let f = bind Host_fns.set_transient_storage in
       fun acc k v -> return (f (addr_in acc) (b32_in k) (b32_in v))
   end
 
