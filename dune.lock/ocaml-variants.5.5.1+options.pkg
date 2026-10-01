@@ -1,4 +1,4 @@
-(version 5.4.0+options)
+(version 5.5.1+options)
 
 (depends
  (all_platforms (ocaml-compiler)))

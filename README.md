@@ -8,7 +8,7 @@ This repository contains the specification of the Monad Execution layer implemen
 
 ### Requirements
 
-To build, you will need a recent (>= 3.20) version of [dune](https://dune.build/). The easiest way to get it is to install [opam](https://opam.ocaml.org/) and then run `opam install dune` from a terminal.
+To build, you will need a recent (>= 3.24) version of [dune](https://dune.build/). The easiest way to get it is to install [opam](https://opam.ocaml.org/) and then run `opam install dune` from a terminal.
 
 ### Building and running
 

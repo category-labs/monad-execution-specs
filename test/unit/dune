@@ -11,4 +11,6 @@
 (test
  (name mpt)
  (modules mpt)
+ (deps
+  (glob_files %{project_root}/third_party/tests/TrieTests/*.json))
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest yojson))
