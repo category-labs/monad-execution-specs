@@ -32,7 +32,7 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
   (* Tests disabled at the individual test fixture or revision level, specified as a mapping from the test
      folder plus fixture index to the list of revisions for which the tests are to be run (or an empty list
      to suppress the entire test fixture file). Alcotest's filter mechanism does not provide the actual
-     filename, just the test family name and the test index. *)
+     filename, just the test family name and the (unsharded) test index. *)
   let enabled_revisions_map = Test_entry.Map.empty in
   fun (name, idx) ->
     if String.Set.mem name disabled_tests then []
@@ -111,50 +111,70 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   |> expect_ok
   |> check_postconditions fixtures.post
 
+(* Test files can be split into shards to be run in parallel (see dune file).
+   Setting BLOCKCHAIN_TESTS_SHARD=k/n selects every n-th test file, starting from
+   the k-th one (1-based). When not set, run everything. *)
+let shard : (int * int) option =
+  Sys.getenv_opt "BLOCKCHAIN_TESTS_SHARD"
+  |> Option.map (fun s ->
+      Scanf.sscanf s "%d/%d%!" (fun k n ->
+          if not (1 <= k && k <= n) then invalid_arg "BLOCKCHAIN_TESTS_SHARD=k/n must satisfy 1 <= k <= n" ;
+          (k, n) ) )
+
+let in_shard = match shard with None -> fun _ -> true | Some (k, n) -> fun i -> i mod n = k - 1
+
+let blockchain_test_case group_name i path filename =
+  Alcotest.test_case filename `Quick (fun subtest_filter ->
+      let enabled_revisions = (enabled_revisions_for_test (group_name, i) :> Chain.Monad.Revision.t list) in
+      if List.is_empty enabled_revisions then Alcotest.skip () ;
+      let matches_subtest_filter : string -> bool =
+        match subtest_filter with
+        | None -> fun _ -> true
+        | Some filter -> fun s -> String.includes ~affix:filter s
+      in
+      let matches_rev_filter : Fixtures.BlockchainTest.revision -> bool = function
+        | Fixtures.BlockchainTest.Single rev -> List.mem rev enabled_revisions
+        | Transition {pre; post; _} -> List.mem pre enabled_revisions && List.mem post enabled_revisions
+        | Invalid -> false
+      in
+      Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path)
+      |> Result.get_ok'
+      |> List.filter (fun (name, (test : Fixtures.BlockchainTest.test_case)) ->
+          matches_subtest_filter name && matches_rev_filter test.config.network )
+      |> List.iter run_blockchain_test )
+
 let blockchain_tests =
   traverse_folder blockchain_tests_folder
   |> Seq.filter (fun (_path, filename) -> Filename.extension filename = ".json" && filename <> "index.json")
   |> Seq.group (fun (path_1, _) (path_2, _) -> path_1 = path_2)
   |> Seq.map (fun test_group ->
-      let (path, filename), tl = Option.get (Seq.uncons test_group) in
-      let group_name = drop_test_folder_prefix path in
-      let tests =
-        Seq.cons (path, filename) tl
-        |> List.of_seq
-        |> List.sort (fun (_, f1) (_, f2) -> compare f1 f2)
-        |> List.mapi (fun i (path, filename) ->
-            let path = path $/ filename in
-            Alcotest.test_case filename `Quick (fun subtest_filter ->
-                let matches_subtest_filter : string -> bool =
-                  match subtest_filter with
-                  | None -> fun _ -> true
-                  | Some filter -> fun s -> String.includes ~affix:filter s
-                in
-                let matches_rev_filter : Fixtures.BlockchainTest.revision -> bool =
-                  let enabled_revisions =
-                    (enabled_revisions_for_test (group_name, i) :> Chain.Monad.Revision.t list)
-                  in
-                  function
-                  | Fixtures.BlockchainTest.Single rev -> List.mem rev enabled_revisions
-                  | Transition {pre; post; _} ->
-                      List.mem pre enabled_revisions && List.mem post enabled_revisions
-                  | Invalid -> false
-                in
-                Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path)
-                |> Result.get_ok'
-                |> List.filter (fun (name, (test : Fixtures.BlockchainTest.test_case)) ->
-                    matches_subtest_filter name && matches_rev_filter test.config.network )
-                |> List.iter run_blockchain_test ) )
-      in
-      (group_name, tests) )
+      let (path, _), _ = Option.get (Seq.uncons test_group) in
+      let files = test_group |> List.of_seq |> List.sort (fun (_, f1) (_, f2) -> compare f1 f2) in
+      (drop_test_folder_prefix path, files) )
   |> List.of_seq
+  (* Number the test files consecutively. *)
+  |> List.fold_left_map
+       (fun offset (group_name, files) ->
+         (offset + List.length files, (group_name, List.mapi (fun i file -> (offset + i, i, file)) files)) )
+       0
+  |> snd
+  |> List.filter_map (fun (group_name, files) ->
+      (* Test files are indexed in the unsharded folder. *)
+      files
+      |> List.filter_map (fun (global_index, i, (path, filename)) ->
+          if in_shard global_index then Some (blockchain_test_case group_name i (path $/ filename) filename)
+          else None )
+      |> function [] -> None | tests -> Some (group_name, tests) )
 
 (* Blockchain tests contain multiple subtests per json file. The --subtest_filter flag can be used to
    execute a specific such subtest. *)
 let subtest_filter_flag =
   Cmdliner.Arg.(value & opt (some string) None & info ["subtest_filter"] ~doc:"Select a specific subtest")
 
-(* Filter failing tests. *)
-let filter ~name ~index = if List.is_empty (enabled_revisions_for_test (name, index)) then `Skip else `Run
-
-let () = Alcotest.run_with_args "Blockchain tests" subtest_filter_flag blockchain_tests ~filter
+let () =
+  let suite_name =
+    match shard with
+    | None -> "Blockchain tests"
+    | Some (k, n) -> Format.sprintf "Blockchain tests - shard %d of %d" k n
+  in
+  Alcotest.run_with_args suite_name subtest_filter_flag blockchain_tests
