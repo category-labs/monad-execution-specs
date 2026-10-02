@@ -63,9 +63,10 @@ module WorldState = struct
   let next_emptying_transaction_block_for addr =
     next_emptying_transaction_block |-- Address.Map.at addr |-- Option.get_or_default Uint.zero
 
-  (** [state_root state] computes the state root of the current account map. This involves computing the
-      storage roots of every account in the state, which is very expensive. *)
-  let state_root state =
+  (** [state_root revision state] computes the state root of the current account map. This involves computing
+      the storage roots of every account in the state, which is very expensive. [revision] selects the storage
+      commitment scheme of the accounts, see {!Account.to_rlp}. *)
+  let state_root (revision : Chain.Monad.Revision.active) state =
     let mpt =
       state.accounts
       |> Address.Map.to_seq
@@ -73,7 +74,7 @@ module WorldState = struct
       |> Seq.map (fun (addr, acc) ->
           (* YP (11) *)
           let address_hash = Crypto.keccak_256 (Address.to_bytes addr) in
-          (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp acc)) )
+          (B32.to_bytes address_hash, Rlp.encode (Account.to_rlp revision acc)) )
       |> Mpt.of_seq
     in
     mpt.root_hash
@@ -103,10 +104,11 @@ module BlockState = struct
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
   let account_opt ?(keep_empty = false) addr = world_state |-- WorldState.account_opt ~keep_empty addr
 
-  (** [finalize_current_block bs] returns [bs.current_block] with its header updated to reflect the new state
-      after block execution. This will overwrite header fields [parent_hash], [state_root], [transactions_root],
-      [receipts_root], [withdrawals_root], [logs_bloom], [requests_hash], [gas_used] and [blob_gas_used]. *)
-  let finalize_current_block (block_state : t) : Block.t =
+  (** [finalize_current_block revision bs] returns [bs.current_block] with its header updated to reflect the
+      new state after block execution. This will overwrite header fields [parent_hash], [state_root],
+      [transactions_root], [receipts_root], [withdrawals_root], [logs_bloom], [requests_hash], [gas_used] and
+      [blob_gas_used]. *)
+  let finalize_current_block (revision : Chain.Monad.Revision.active) (block_state : t) : Block.t =
     (* YP (46) *)
     let parent_hash = Block.hash (List.hd block_state.world_state.history) in
 
@@ -118,7 +120,7 @@ module BlockState = struct
        Note that YP (39) is only enforced by this assignment, therefore any state changes that are
        triggered by an external call (test frameworks, fuzzer harness, loading a genesis state) may break
        this invariant. *)
-    let state_root = WorldState.state_root block_state.world_state in
+    let state_root = WorldState.state_root revision block_state.world_state in
 
     let transactions_root =
       ( block_state.transactions_processed
@@ -189,8 +191,31 @@ module TransactionState = struct
         if c1 = 0 then B32.compare w1 w2 else c1
     end
     include Impl
-    module Set = Set.Make (Impl)
+    include Comparable.Make (Impl)
   end
+
+  module PageGrowth = struct
+    (** MIP-8: the state growth counters of a single storage page.
+
+        [current] is the current net number of slots created/cleared in the page so far in this transaction.
+        [peak] maintains the highest value of [current]. *)
+    type t = {current : int; peak : int}
+
+    let zero = {current = 0; peak = 0}
+
+    (** [bump delta growth] records the creation ([delta = 1]) or clearing ([delta = -1]) of one occupied slot
+        in the page.
+
+        Returns [(charge, growth')] where [charge] indicates if {!Gas.page_state_growth_cost} is
+        owed for this write. *)
+    let bump delta {current; peak} =
+      let current = current + delta in
+      if current > peak then (true, {current; peak = current}) else (false, {current; peak})
+  end
+
+  (** [storage_key revision slot] is the key for which [slot] is warm. *)
+  let storage_key (revision : Chain.Monad.Revision.active) (slot : B32.t) =
+    match revision with `Eight | `Nine -> slot | `Ten -> Ismc.Page.align slot
 
   (** State within a single transaction. Tracks the initial world state, any changes to its storage,
       and variables that are internal to the transaction such as the accrued substate (YP (62)). *)
@@ -207,7 +232,12 @@ module TransactionState = struct
     ; logs : Log.t list  (** A_l, in reverse order *)
     ; refund : U256.t  (** A_r *)
     ; accessed_addresses : Address.Set.t  (** A_a *)
-    ; accessed_keys : StorageKey.Set.t  (** A_K *) }
+    ; accessed_keys : StorageKey.Set.t  (** A_K.
+              MIP-8: the set of accessed storage pages. *)
+    ; written_pages : StorageKey.Set.t
+          (** MIP-8: the storage pages that have already been written to in the current transaction. *)
+    ; page_growth : PageGrowth.t StorageKey.Map.t  (** MIP-8: the state growth counters of written pages. *)
+    }
   [@@deriving lens {submodule = true; prefix = true}]
 
   include TLens
@@ -229,7 +259,9 @@ module TransactionState = struct
     ; logs = []
     ; refund = U256.zero
     ; accessed_addresses = Address.Set.empty
-    ; accessed_keys = StorageKey.Set.empty }
+    ; accessed_keys = StorageKey.Set.empty
+    ; written_pages = StorageKey.Set.empty
+    ; page_growth = StorageKey.Map.empty }
 
   let make (block_state : BlockState.t) (sender : Address.t) tx =
     let tx_gas_price =
@@ -248,21 +280,25 @@ module TransactionState = struct
 
   let account ?(keep_empty = false) addr = world_state |-- WorldState.account ~keep_empty addr
 
-  (** [initialize_access_sets tx state p_addr] extends the set of accessed addresses and keys of [state] with
-      the transaction sender and recipient (if any), the addresses and keys in the transaction's access list,
-      the delegation target of the recipient (if any), the block's beneficiary and the given list of precompiled
-      contract addresses.
+  (** [initialize_access_sets revision tx state p_addr] extends the set of accessed addresses and keys of
+      [state] with the transaction sender and recipient (if any), the addresses and keys in the transaction's
+      access list, the delegation target of the recipient (if any), the block's beneficiary and the given list
+      of precompiled contract addresses.
       The state's accessed addresses are not overwritten but extended, so any addresses that were accessed before
       this call will remain accessed. *)
   let initialize_access_sets
-      (tx : Transaction.t) (transaction_state : t) (precompile_addresses : Address.Set.t) =
+      (revision : Chain.Monad.Revision.active)
+      (tx : Transaction.t)
+      (transaction_state : t)
+      (precompile_addresses : Address.Set.t) =
     let open Transaction.Access in
     let sender = transaction_state.tx_origin in
     let access_list = Transaction.access_list tx in
     (* YP (78). *)
     let accessed_keys =
       List.to_seq access_list
-      |> Seq.flat_map (fun acc -> List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.address, k)))
+      |> Seq.flat_map (fun acc ->
+          List.to_seq acc.storage_keys |> Seq.map (fun k -> (acc.address, storage_key revision k)) )
       |> StorageKey.Set.of_seq
     in
     (* The Eₐ terms in YP (80) *)

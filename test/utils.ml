@@ -129,6 +129,13 @@ module Monad_nine : PARAMS = struct
   let debug_tstore = false
 end
 
+module Monad_ten : PARAMS = struct
+  let chain_id = Chain.Monad.Testnet.chain_id
+  let revision = `Ten
+  let trace = false
+  let debug_tstore = false
+end
+
 module Make (P : PARAMS) = struct
   module Evm = struct
     module Evm0 = Host.Instantiate (P) (Vm.Make (P))
@@ -214,6 +221,17 @@ module Make (P : PARAMS) = struct
         ; code_address = Address.zero
         ; code
         ; memory_capacity = Uint.to_uint32 Evm.Vm.Memory.max_memory_usage } )
+
+  let with_storage (slots : (U256.t * U256.t) list) =
+    let storage =
+      slots |> List.map (fun (k, v) -> (U256.to_repr k, U256.to_repr v)) |> List.to_seq |> B32.Map.of_seq
+    in
+    let account = {Chain.Ethereum.Account.empty with nonce = U64.one; storage} in
+    let world_state =
+      { State.WorldState.empty with
+        accounts = Chain.Ethereum.Address.Map.singleton Chain.Ethereum.Address.zero account }
+    in
+    fun (state : State.TransactionState.t) -> {state with initial_world_state = world_state; world_state}
 
   let expect_stack expected_stack =
     let open Evm.Vm.M in
