@@ -44,9 +44,7 @@ let drop_test_folder_prefix =
   let prefix = blockchain_tests_folder ^ "/" in
   let prefix_len = String.length prefix in
   fun filename ->
-    if String.starts_with ~prefix filename then
-      String.sub filename prefix_len (String.length filename - prefix_len)
-    else filename
+    if String.starts_with ~prefix filename then String.drop_first prefix_len filename else filename
 
 let load_preconditions pre (state : State.WorldState.t) =
   let open State.WorldState in
@@ -130,7 +128,7 @@ let blockchain_tests =
                 let matches_subtest_filter : string -> bool =
                   match subtest_filter with
                   | None -> fun _ -> true
-                  | Some filter -> fun s -> Option.is_some (String.find_substring ~substring:filter s)
+                  | Some filter -> fun s -> String.includes ~affix:filter s
                 in
                 let matches_rev_filter : Fixtures.BlockchainTest.revision -> bool =
                   let enabled_revisions =

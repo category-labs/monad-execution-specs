@@ -58,14 +58,10 @@ module BlockchainTest = struct
       | Some rev -> Ok (Single rev)
       | None ->
           Option.(
-            let$ to_index = String.find_substring ~substring:"To" str in
-            let$ () = ensure (String.ends_with ~suffix:"AtTime15k" str) in
-            let$ pre = Chain.Monad.Revision.of_string (String.sub str 0 to_index) in
-            let$ post =
-              Chain.Monad.Revision.of_string
-                (String.sub str (to_index + 2)
-                   (String.length str - String.length "To" - String.length "AtTime15k" - to_index) )
-            in
+            let$ pre, rest = String.split_first ~sep:"To" str in
+            let$ () = ensure (String.ends_with ~suffix:"AtTime15k" rest) in
+            let$ pre = Chain.Monad.Revision.of_string pre in
+            let$ post = Chain.Monad.Revision.of_string (String.drop_last (String.length "AtTime15k") rest) in
             Some (Transition {pre; post; timestamp = U256.of_int 15_000}) )
           |> Option.to_result ~none:"Fixtures.BlockchainTest.revision" )
     | _ -> Error "Fixtures.BlockchainTest.revision"
