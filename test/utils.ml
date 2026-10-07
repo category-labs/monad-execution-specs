@@ -115,16 +115,16 @@ module type PARAMS = sig
   val debug_tstore : bool
 end
 
-module Monad_eight : PARAMS = struct
+module Monad_nine : PARAMS = struct
   let chain_id = Chain.Monad.Testnet.chain_id
-  let revision = `Eight
+  let revision = `Nine
   let trace = false
   let debug_tstore = false
 end
 
-module Monad_nine : PARAMS = struct
+module Monad_ten : PARAMS = struct
   let chain_id = Chain.Monad.Testnet.chain_id
-  let revision = `Nine
+  let revision = `Ten
   let trace = false
   let debug_tstore = false
 end
