@@ -8,7 +8,7 @@ open State
 
 module ChainParams = struct
   let chain_id = Mainnet.chain_id
-  let revision = `Eight
+  let revision = `Nine
   let trace = false
 end
 
@@ -68,7 +68,7 @@ let send
   let recid = Char.code rs.{64} in
   let v = U256.of_int (27 + recid) in
   let tx = Transaction.Legacy {nonce; gas_limit; value; r; s; to_ = Some receiver; data; gas_price; v} in
-  let sender' = Transaction.sender Monad_eight.chain_id tx in
+  let sender' = Transaction.sender Monad_nine.chain_id tx in
   assert (Address.(sender.address = Option.get sender')) ;
   (tx, state)
 
