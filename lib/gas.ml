@@ -156,16 +156,7 @@ let warm_access_cost = ~$100
 (* YP (329) *)
 let account_access_cost = function `Warm -> warm_access_cost | `Cold -> cold_account_access_cost
 
-let memory_cost (revision : Chain.Monad.Revision.active) =
-  match revision with
-  | `Eight ->
-      (* YP (328) *)
-      let memory_cost_per_word = ~$3 in
-      fun (active_memory_words : Uint.t) ->
-        Uint.(((active_memory_words ** 2) / ~$512) + (memory_cost_per_word * active_memory_words))
-  | `Nine ->
-      (* MIP-3 *)
-      fun (active_memory_words : Uint.t) -> Uint.(active_memory_words / ~$2)
+let memory_cost (active_memory_words : Uint.t) = Uint.(active_memory_words / ~$2)
 
 let copy_cost_per_word = ~$3
 
