@@ -37,7 +37,7 @@ dune exec evmrun -- <params>
 Usage is as below.
 ```shell
 Usage: evmrun <options> (--bytecode_file FILE | --bytecode HEX) (--calldata_file FILE | --calldata HEX)
-  --revision Revision to use (default: MONAD_EIGHT)
+  --revision Revision to use (default: MONAD_NINE)
   --chain_id Chain ID to use (default: 10143)
   --bytecode_file Bytecode file
   --calldata_file Calldata file
