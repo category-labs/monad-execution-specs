@@ -1,5 +1,5 @@
 {
-  "./updated_2/highGasUsage.json::highGasUsage_MONAD_EIGHT": {
+  "./updated_2/highGasUsage.json::highGasUsage_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcGasPricerTest/highGasUsageFiller.json",
       "sourceHash": "0xe0bafe9bf5c3987dfe3541df88d89f3d3002472cc4d444d9a965c3fb3dcab599"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -478,14 +478,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

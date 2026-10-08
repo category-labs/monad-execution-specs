@@ -1,5 +1,5 @@
 {
-  "test/execution/fixtures/blockchain_tests/valid_blocks/wallet2outOf3txsRevoke.json::wallet2outOf3txsRevoke_MONAD_EIGHT": {
+  "test/execution/fixtures/blockchain_tests/valid_blocks/wallet2outOf3txsRevoke.json::wallet2outOf3txsRevoke_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun b4bb697",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcWalletTest/wallet2outOf3txsRevokeFiller.json",
       "sourceHash": "0xf2f2098c7f38b0b3a79d33017247c3f5b50dda228e00857f11b42f34e3129403"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -310,14 +310,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

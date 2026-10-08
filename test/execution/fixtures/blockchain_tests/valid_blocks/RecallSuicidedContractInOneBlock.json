@@ -1,5 +1,5 @@
 {
-  "test/execution/fixtures/blockchain_tests/valid_blocks/RecallSuicidedContractInOneBlock.json::RecallSuicidedContractInOneBlock_MONAD_EIGHT": {
+  "test/execution/fixtures/blockchain_tests/valid_blocks/RecallSuicidedContractInOneBlock.json::RecallSuicidedContractInOneBlock_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun b4bb697",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcValidBlockTest/RecallSuicidedContractInOneBlockFiller.json",
       "sourceHash": "0x19a1bc80c3f534d0a73614e63c3be6d06d2bb61850321147f5663e4ce59f9bb9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -111,14 +111,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

@@ -1,5 +1,5 @@
 {
-  "./updated_2/SimpleTx3LowS.json::SimpleTx3LowS_MONAD_EIGHT": {
+  "./updated_2/SimpleTx3LowS.json::SimpleTx3LowS_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcValidBlockTest/SimpleTx3LowSFiller.json",
       "sourceHash": "0xefd553c153a4ac5d23d29c10fe266ffd4a130e8f7777d4794379f6825302b1b5"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -80,14 +80,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
