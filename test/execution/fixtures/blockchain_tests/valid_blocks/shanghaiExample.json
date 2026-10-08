@@ -1,5 +1,5 @@
 {
-  "./updated_2/shanghaiExample.json::shanghaiExample_MONAD_EIGHT": {
+  "./updated_2/shanghaiExample.json::shanghaiExample_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcExample/shanghaiExampleFiller.json",
       "sourceHash": "0xb329f6451e36414237ebb4d15b3793f14108f128c0024d342af3a7e42d002e8e"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -65,14 +65,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

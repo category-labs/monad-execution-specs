@@ -1,5 +1,5 @@
 {
-  "test/execution/fixtures/blockchain_tests/valid_blocks/logRevert.json::logRevert_MONAD_EIGHT": {
+  "test/execution/fixtures/blockchain_tests/valid_blocks/logRevert.json::logRevert_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun b4bb697",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/logRevertFiller.yml",
       "sourceHash": "0x9f1db627f0a8ca7cd2bf1efa9f5db3eb78cbd626a20ef5ea51893265ca911adf"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -166,14 +166,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

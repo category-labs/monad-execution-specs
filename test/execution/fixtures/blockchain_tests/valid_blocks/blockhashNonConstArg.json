@@ -1,5 +1,5 @@
 {
-  "./updated_2/blockhashNonConstArg.json::blockhashNonConstArg_MONAD_EIGHT": {
+  "./updated_2/blockhashNonConstArg.json::blockhashNonConstArg_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/blockhashNonConstArgFiller.json",
       "sourceHash": "0x322aa3317493b4b4a8a9276281afe84d522e117c42f9abdacdc665df2c871ee2"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -100,14 +100,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

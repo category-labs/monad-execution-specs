@@ -1,5 +1,5 @@
 {
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -58,14 +58,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -245,7 +245,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -257,7 +257,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -304,14 +304,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -491,7 +491,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -503,7 +503,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -550,14 +550,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -737,7 +737,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -749,7 +749,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -796,14 +796,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -983,7 +983,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -995,7 +995,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -1042,14 +1042,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -1229,7 +1229,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -1241,7 +1241,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -1288,14 +1288,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -1475,7 +1475,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -1487,7 +1487,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -1534,14 +1534,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -1721,7 +1721,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -1733,7 +1733,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -1780,14 +1780,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -1967,7 +1967,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -1979,7 +1979,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -2026,14 +2026,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -2213,7 +2213,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -2225,7 +2225,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -2272,14 +2272,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -2459,7 +2459,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -2471,7 +2471,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -2518,14 +2518,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -2705,7 +2705,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -2717,7 +2717,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -2764,14 +2764,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -2951,7 +2951,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -2963,7 +2963,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -3010,14 +3010,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -3197,7 +3197,7 @@
       }
     }
   },
-  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_EIGHT": {
+  "./updated_2/testOpcode_80.json::testOpcode_80_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -3209,7 +3209,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/testOpcode_80Filler.yml",
       "sourceHash": "0x1c57ade70eacd3134695279ef89a55d645f70bda0904f03916d10dc017b93a9"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -3256,14 +3256,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

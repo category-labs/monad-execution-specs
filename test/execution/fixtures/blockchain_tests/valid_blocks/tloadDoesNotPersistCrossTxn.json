@@ -1,5 +1,5 @@
 {
-  "./updated_2/tloadDoesNotPersistCrossTxn.json::tloadDoesNotPersistCrossTxn_MONAD_EIGHT": {
+  "./updated_2/tloadDoesNotPersistCrossTxn.json::tloadDoesNotPersistCrossTxn_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcEIP1153-transientStorage/tloadDoesNotPersistCrossTxnFiller.yml",
       "sourceHash": "0xe624b0d0cf3feda1953a8f46f0f9f3c10a0be93064eb3d67eeac5c6cf2dc4123"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -77,14 +77,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
