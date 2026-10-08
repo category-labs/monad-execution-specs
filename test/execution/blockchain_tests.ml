@@ -29,6 +29,7 @@ let enabled_revisions_for_test : Test_entry.t -> Chain.Monad.Revision.active lis
       ; "mf_tests/for_monad_nine/monad_eight/typed_transactions/blob_transaction"
       ; "mf_tests/for_monad_ten/monad_eight/typed_transactions/blob_transaction"
         (* All monad-ten tests suppressed as they fail pre-MIP-8 due to gas costs *)
+      ; "mf_tests/for_monad_ninetomonad_tenattime15k/berlin/eip2929_gas_cost_increases/precompile_warming"
       ; "mf_tests/for_monad_ninetomonad_tenattime15k/monad_ten/mip8_pageified_storage/fork_transition"
       ; "mf_tests/for_monad_ten/amsterdam/eip8037_state_creation_gas_cost_increase/block_2d_gas_accounting"
       ; "mf_tests/for_monad_ten/berlin/eip2929_gas_cost_increases/call"

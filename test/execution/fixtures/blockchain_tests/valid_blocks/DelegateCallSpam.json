@@ -1,5 +1,5 @@
 {
-  "./updated_2/DelegateCallSpam.json::DelegateCallSpam_MONAD_EIGHT": {
+  "./updated_2/DelegateCallSpam.json::DelegateCallSpam_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcExploitTest/DelegateCallSpamFiller.json",
       "sourceHash": "0xd423de7aa299467252cebda128b1818fe589bc8a1d04ca6c842a1cad2f4fc22e"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -58,14 +58,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
