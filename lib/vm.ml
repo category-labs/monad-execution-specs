@@ -1489,7 +1489,7 @@ struct
       increase_pc_and_continue
 
     let merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund =
-      let$ () = update_field gas (fun g -> Uint.(g + of_int64 gas_left)) in
+      let$ () = update_field gas (fun g -> Uint.(g + of_uint64 gas_left)) in
       if status_code = Evmc.Result.StatusCode.Success then
         update_field MachineState.gas_refund (fun g -> Integer.(g + of_int64 gas_refund))
       else return (assert (Int64.(gas_refund = zero)))
@@ -1604,7 +1604,7 @@ struct
               ; delegated = false
               ; static = false
               ; depth = Int32.of_int new_depth
-              ; gas = Uint.to_int64 create_message_gas
+              ; gas = Uint.to_uint64 create_message_gas
               ; recipient = Address.zero
               ; sender = self
               ; input_data = call_data
