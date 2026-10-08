@@ -10,6 +10,8 @@ jobs:
   formatting-check:
     name: Check ocamlformat
     runs-on: ubuntu-latest
+    env:
+      DUNE_CACHE: enabled
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
