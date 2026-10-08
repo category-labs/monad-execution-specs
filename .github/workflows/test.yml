@@ -7,6 +7,8 @@ jobs:
   test:
     name: Dune tests
     runs-on: ubuntu-latest
+    env:
+      DUNE_CACHE: enabled
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,10 +20,6 @@ jobs:
         with:
           ocaml-compiler: ocaml-variants.5.5.1+options,ocaml-option-flambda
           dune-cache: true
-
-      - name: Install dependencies
-        run: |
-          opam install . --deps-only -y
 
       - name: Build
         run: |
