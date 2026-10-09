@@ -121,14 +121,7 @@ let process_block
     =
   let module Execution = Execution.Make (struct
     let chain_id = config.chain_id
-    let revision =
-      let rev =
-        match config.network with
-        | Single rev -> rev
-        | Transition {pre; post; timestamp} -> if U256.(block.header.timestamp < timestamp) then pre else post
-        | Invalid -> assert false
-      in
-      rev |> Chain.Monad.Revision.is_active |> Option.get
+    let revision = Fixtures.BlockchainTest.header_revision config block.header
     let trace = trace
   end) in
   Execution.process_block ~verify state block
@@ -148,7 +141,10 @@ let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   |> load_genesis_block fixtures.genesis_block_header
   |> load_preconditions fixtures.pre
   |> fun s ->
-  assert (B32.(State.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
+  let genesis_revision =
+    Fixtures.BlockchainTest.header_revision fixtures.config fixtures.genesis_block_header
+  in
+  assert (B32.(State.WorldState.state_root genesis_revision s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
   |> Result.get_ok'

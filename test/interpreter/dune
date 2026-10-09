@@ -25,3 +25,7 @@
 (test
  (name eip_7939)
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
+
+(test
+ (name mip_8)
+ (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))

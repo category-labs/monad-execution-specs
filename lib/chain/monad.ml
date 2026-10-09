@@ -57,7 +57,8 @@ module Revision = struct
 
   (** The monad revisions supported by the current version of the spec. By design, the spec only supports
       two revisions at a time. *)
-  type active = [`Eight | `Nine]
+  type active = [`Eight | `Nine | `Ten]
+  (* TODO rkeleti remove Eight *)
 
   let is_active (rev : t) : active option = match rev with #active as rev -> Some rev | _ -> None
   let all_active_revisions : active list = List.filter_map is_active all_revisions
