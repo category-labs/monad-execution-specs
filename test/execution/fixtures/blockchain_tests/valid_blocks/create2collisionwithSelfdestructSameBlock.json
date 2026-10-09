@@ -1,5 +1,5 @@
 {
-  "./updated_2/create2collisionwithSelfdestructSameBlock.json::create2collisionwithSelfdestructSameBlock_MONAD_EIGHT": {
+  "./updated_2/create2collisionwithSelfdestructSameBlock.json::create2collisionwithSelfdestructSameBlock_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/create2collisionwithSelfdestructSameBlockFiller.json",
       "sourceHash": "0x528a246f3376e56241dcb4aafb34f507437231851e36ebcb3e22e492b5db79d0"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -69,14 +69,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

@@ -1,5 +1,5 @@
 {
-  "test/execution/fixtures/blockchain_tests/valid_blocks/timeDiff12.json::timeDiff12_MONAD_EIGHT": {
+  "test/execution/fixtures/blockchain_tests/valid_blocks/timeDiff12.json::timeDiff12_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun b4bb697",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcValidBlockTest/timeDiff12Filler.json",
       "sourceHash": "0x31435e65a73051fd5eb2b74c9b6011c0e6d9ca960b966f2c7db88b4ab271da85"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -100,14 +100,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

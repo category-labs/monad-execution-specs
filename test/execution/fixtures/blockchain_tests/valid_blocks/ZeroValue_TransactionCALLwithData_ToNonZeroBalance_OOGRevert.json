@@ -1,5 +1,5 @@
 {
-  "./updated_2/ZeroValue_TransactionCALLwithData_ToNonZeroBalance_OOGRevert.json::ZeroValue_TransactionCALLwithData_ToNonZeroBalance_OOGRevert_MONAD_EIGHT": {
+  "./updated_2/ZeroValue_TransactionCALLwithData_ToNonZeroBalance_OOGRevert.json::ZeroValue_TransactionCALLwithData_ToNonZeroBalance_OOGRevert_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/ZeroValue_TransactionCALLwithData_ToNonZeroBalance_OOGRevertFiller.json",
       "sourceHash": "0x3ac822224d5f8b3eadbc936f8d477ba2a46d22fb9c6a5b787e30376e0cf9bfa"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -58,14 +58,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

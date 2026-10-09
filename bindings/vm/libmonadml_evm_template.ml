@@ -10,8 +10,7 @@ module Stubs (I : Common.INTERNAL) = struct
   module Chain_params : Chain.Monad.PARAMS = struct
     include Chain.Monad.Mainnet
 
-    (* TODO: bump to Nine once EIP-5 lands. *)
-    let revision = `Eight
+    let revision = `Nine
   end
 
   (** Utility functions to read a function pointer from an EVMC host vtable and wrap it in an OCaml-level

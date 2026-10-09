@@ -1,5 +1,5 @@
 {
-  "test/execution/fixtures/blockchain_tests/valid_blocks/suicideCoinbase.json::suicideCoinbase_MONAD_EIGHT": {
+  "test/execution/fixtures/blockchain_tests/valid_blocks/suicideCoinbase.json::suicideCoinbase_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun b4bb697",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/suicideCoinbaseFiller.json",
       "sourceHash": "0x3ad4df21b8eefd86693df84e9674f4099923db24d2c55c65f01c74127c442cec"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -80,14 +80,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

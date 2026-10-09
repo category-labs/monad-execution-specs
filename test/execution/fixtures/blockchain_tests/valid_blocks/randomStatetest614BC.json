@@ -1,5 +1,5 @@
 {
-  "./updated_2/randomStatetest614BC.json::randomStatetest614BC_MONAD_EIGHT": {
+  "./updated_2/randomStatetest614BC.json::randomStatetest614BC_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcRandomBlockhashTest/randomStatetest614BCFiller.json",
       "sourceHash": "0x11fd31cec18b7d658766cbecabbb552d2d46c66125156dddb5da2155bed0fe69"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -58,14 +58,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
