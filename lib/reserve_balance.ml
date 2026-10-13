@@ -67,7 +67,7 @@ let dipped_into_reserve (revision : Chain.Monad.Revision.active) : bool Transact
       in
       (Address.(addr <> tx_sender) || not is_emptying) && U256.(current_balance < violation_threshold)
     in
-    let original_balances = Address.Map.to_seq original_balances in
+    let original_balances = Accounts.to_seq original_balances in
     let balances_to_check =
       match revision with
       | `Eight -> original_balances
@@ -81,7 +81,7 @@ let dipped_into_reserve (revision : Chain.Monad.Revision.active) : bool Transact
     balances_to_check
     (* TODO: filter out the staking precompile once that is merged. *)
     |> Seq.filter_map (fun (addr, orig_account) ->
-        let new_account = Address.Map.find_opt addr new_state |> Option.value ~default:Account.empty in
+        let new_account = Accounts.find_opt addr new_state |> Option.value ~default:Account.empty in
         if Account.is_smart_contract new_account then None else Some (addr, orig_account, new_account) )
     |> Seq.exists (fun (addr, orig_account, new_account) ->
         account_reserve_violated addr orig_account new_account )
