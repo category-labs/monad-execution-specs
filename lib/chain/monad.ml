@@ -18,6 +18,7 @@ module Revision = struct
     | `Nine  (** Defined in {{:https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-6.md}MIP-6} *)
     | `Ten
     | `Next ]
+  [@@deriving eq]
   let all_revisions : t list =
     [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Ten; `Next]
 
@@ -61,6 +62,9 @@ module Revision = struct
 
   let is_active (rev : t) : active option = match rev with #active as rev -> Some rev | _ -> None
   let all_active_revisions : active list = List.filter_map is_active all_revisions
+
+  let ( = ) = equal
+  let ( <> ) x y = not (equal x y)
 end
 
 module type PARAMS = sig
