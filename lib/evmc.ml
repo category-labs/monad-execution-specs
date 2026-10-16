@@ -44,6 +44,7 @@ module Result = struct
       (* TODO: there is currently no Monad EVMC equivalent for this. The C++ implementation does not track
          VM error conditions with this granularity. *)
       | Create_from_delegated_eoa
+    [@@deriving eq]
 
     let to_string = function
       | Success -> "Success"
@@ -82,7 +83,7 @@ module Result = struct
   (** [failure error_code] constructs a result representing termination due to execution failure (but not
       deliberate termination due to a [REVERT] instruction). *)
   let failure error_code =
-    assert (StatusCode.(error_code <> Success && error_code <> Revert)) ;
+    assert (match error_code with StatusCode.Success | Revert -> false | _ -> true) ;
     { status_code = error_code
     ; gas_left = 0L
     ; gas_refund = 0L
@@ -95,7 +96,9 @@ module Message = struct
       {{:https://evmc.ethereum.org/group__EVMC.html#gab2fa68a92a6828064a61e46060abc634}[evmc_call_kind]}. Note
       that the [EVMC_EOFCREATE] call kind is not provided. *)
   module CallKind = struct
-    type t = Call | DelegateCall | CallCode | Create | Create2
+    type t = Call | DelegateCall | CallCode | Create | Create2 [@@deriving eq]
+
+    let is_create = function Create | Create2 -> true | Call | DelegateCall | CallCode -> false
   end
 
   (** An EVMC message represents a call to the EVM, corresponding to a contract creation or message call in

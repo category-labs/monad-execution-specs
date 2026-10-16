@@ -118,7 +118,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
 
   (* YP (119) *)
   let process_call (from_tx : Transaction.t option) (msg : Evmc.Message.t) =
-    assert (msg.kind = Call || msg.kind = CallCode || msg.kind = DelegateCall) ;
+    assert (not (Evmc.Message.CallKind.is_create msg.kind)) ;
     let$ transfer_ok =
       (* YP (120), YP (121), YP (122), YP (123), YP (124), YP (125), YP (126) *)
       if should_transfer msg then transfer_ether msg.sender msg.recipient msg.value else return true
@@ -145,7 +145,9 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     let$ sender_nonce = !(account msg.sender |-- nonce) in
     (* YP (94), subsuming YP (92). *)
     let create2 : Address.create2_params option =
-      if msg.kind = Create2 then Some Address.{salt = msg.create2_salt; initcode = msg.input_data} else None
+      if Evmc.Message.CallKind.(equal msg.kind Create2) then
+        Some Address.{salt = msg.create2_salt; initcode = msg.input_data}
+      else None
     in
     return (Address.of_contract_creation ~sender:msg.sender ~nonce:sender_nonce ~create2)
 
@@ -153,7 +155,8 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
   let process_create (msg : Evmc.Message.t) =
     let$ create_address = contract_creation_address msg in
     let$ pre_existent_account = !(account create_address) in
-    if U64.(pre_existent_account.nonce <> zero) || pre_existent_account.code <> Bytes.empty then
+    if U64.(pre_existent_account.nonce <> zero) || not (Bytes.equal pre_existent_account.code Bytes.empty)
+    then
       (* EIP-684, covers YP (118) disjunct 1 *)
       return (Evmc.Result.failure Contract_validation_failure)
     else
@@ -193,7 +196,8 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
           let contract_code_gas = Gas.(of_int contract_length * code_deposit_per_byte) in
           (* YP (118), disjuncts 3, 4, 5 *)
           let failure : Evmc.Result.StatusCode.t option =
-            if contract_length > 0 && contract_code.[0] = '\xef' then Some Contract_validation_failure
+            if contract_length > 0 && Char.equal contract_code.[0] '\xef' then
+              Some Contract_validation_failure
             else if contract_length > Chain.Monad.Constants.max_code_size then
               Some Contract_validation_failure
             else if Gas.(of_uint64 result.gas_left < contract_code_gas) then Some Out_of_gas
@@ -232,7 +236,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     in
     let$ result =
       match from_tx with
-      | Some _t when result.status_code = Success ->
+      | Some _t when Evmc.Result.StatusCode.(equal result.status_code Success) ->
           (* Check reserve balance condition. Monad §6 Algorithm 2. *)
           let$ reserve_dipped = Reserve_balance.dipped_into_reserve ChainParams.revision in
           return (if reserve_dipped then {result with status_code = Revert; gas_refund = 0L} else result)
@@ -242,7 +246,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     (* YP (127), YP (129), failure cases. YP (128) is implicitly covered by exceptional halting returning
        Evmc.Result.failure, which sets gas refund to zero. YP (130) is implicitly covered by
        result.status_code. *)
-    let$ () = when_ (result.status_code <> Success) (put initial_state) in
+    let$ () = when_ (not Evmc.Result.StatusCode.(equal result.status_code Success)) (put initial_state) in
     return result
 
   let try_increment_nonce (addr : Address.t) =
@@ -257,7 +261,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     let$ no_nonce_overflow =
       (* Increment the nonce for non-EOA CREATE/CREATE2 messages . If the message came from an EOA transaction,
          the nonce was already incremented in the irrevocable change. *)
-      if msg.kind = Create || msg.kind = Create2 then try_increment_nonce msg.sender else return true
+      if Evmc.Message.CallKind.is_create msg.kind then try_increment_nonce msg.sender else return true
     in
     if no_nonce_overflow then call_impl ~from_tx:None msg
     else

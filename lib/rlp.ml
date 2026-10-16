@@ -4,7 +4,7 @@ open Byte_string
 
 (** The type of RLP-encodable objects: either a byte string or a list of RLP-encodable objects. High-level types
     define encoding and decoding functions into this type. YP (190), YP (191), YP (192) *)
-type t = Bytes of Bytes.t | List of t list
+type t = Bytes of Bytes.t | List of t list [@@deriving eq]
 
 let of_bytes (bs : Bytes.t) = Bytes bs
 let of_bytes32 (bs : B32.t) = Bytes (B32.to_bytes bs)
@@ -14,8 +14,6 @@ let rec to_string x =
   match x with
   | Bytes bs -> Format.sprintf "Bytes(\"%s\")" (Bytes.to_hex_string bs)
   | List elts -> List.map to_string elts |> String.concat ", " |> Format.sprintf "List(%s)"
-
-let equal (x : t) (y : t) = x = y
 
 (** [be x] encodes an integer as a big-endian byte array of minimal length. YP (195) *)
 let be (x : int) =

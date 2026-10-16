@@ -13,11 +13,14 @@
  (name monad_lib)
  (public_name monad-spec.monad_lib)
  (libraries
+  monomorphic
   zarith
   lens
   digestif
   secp256k1-internal
   yojson
   ppx_deriving_yojson.runtime)
+ (flags
+  (:standard -open Monomorphic))
  (preprocess
-  (pps lens.ppx_deriving ppx_deriving_yojson)))
+  (pps lens.ppx_deriving ppx_deriving_yojson ppx_deriving.eq)))

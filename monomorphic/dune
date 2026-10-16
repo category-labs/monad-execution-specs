@@ -1,0 +1,3 @@
+(library
+ (name monomorphic)
+ (public_name monad-spec.monomorphic))

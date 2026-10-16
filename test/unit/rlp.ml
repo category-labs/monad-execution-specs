@@ -71,7 +71,7 @@ let () =
     ; ("Non-canonical encodings", List.map test_non_canonical non_canonical_encodings)
     ; ( "Round-trip"
       , [ check_prop ~print:Print.rlp ~name:"x = decode (encode x)" (Gen.rlp ~nonempty:false) (fun obj ->
-              Rlp.(obj = decode (encode obj)) ) ] )
+              Rlp.(equal obj (decode (encode obj))) ) ] )
     ; ( "Canonicality"
       , [ check_prop ~print:Print.byte_string ~name:"b = encode (decode b), for every accepted b"
             Gen.(string_size ~gen:(map Char.chr (int_range 0 255)) (int_range 0 12))

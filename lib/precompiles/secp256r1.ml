@@ -35,13 +35,13 @@ let verify (msg : Evmc.Message.t) : Evmc.Result.t =
            let$ q_y = F_p.of_uint_opt q_y in
            G_1.of_coords q_x q_y
          in
-         let$ () = ensure G_1.(q <> zero) in
+         let$ () = ensure (not (G_1.is_zero q)) in
 
          let s_inv = (F_q.(one / s) :> Integer.t) in
          let u_1 = Integer.as_unsigned_exn (F_q.(reduce Integer.(h * s_inv)) :> Integer.t) in
          let u_2 = Integer.as_unsigned_exn (F_q.(reduce Integer.((r :> Integer.t) * s_inv)) :> Integer.t) in
          let r' = G_1.((u_1 * generator) + (u_2 * q)) in
-         let$ () = ensure (not G_1.(r' = zero)) in
+         let$ () = ensure (not (G_1.is_zero r')) in
          let x, _ = G_1.coords r' in
          let$ () = ensure F_q.(reduce (x :> Integer.t) = r) in
          return U256.(to_repr_bytes one) )

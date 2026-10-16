@@ -9,3 +9,8 @@
  (public_name execrun)
  (modes byte exe)
  (libraries monad_lib))
+
+(env
+ (_
+  (flags
+   (:standard -open Monomorphic))))

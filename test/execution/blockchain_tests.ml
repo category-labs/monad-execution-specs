@@ -11,7 +11,7 @@ module Test_entry = struct
   include Comparable.Make (struct
     type nonrec t = t
     let compare (name, index) (name', index') =
-      let d = compare name name' in
+      let d = String.compare name name' in
       if d <> 0 then d else compare index index'
   end)
 end
@@ -145,11 +145,12 @@ let blockchain_test_case group_name i path filename =
 
 let blockchain_tests =
   traverse_folder blockchain_tests_folder
-  |> Seq.filter (fun (_path, filename) -> Filename.extension filename = ".json" && filename <> "index.json")
-  |> Seq.group (fun (path_1, _) (path_2, _) -> path_1 = path_2)
+  |> Seq.filter (fun (_path, filename) ->
+      String.equal (Filename.extension filename) ".json" && not (String.equal filename "index.json") )
+  |> Seq.group (fun (path_1, _) (path_2, _) -> String.equal path_1 path_2)
   |> Seq.map (fun test_group ->
       let (path, _), _ = Option.get (Seq.uncons test_group) in
-      let files = test_group |> List.of_seq |> List.sort (fun (_, f1) (_, f2) -> compare f1 f2) in
+      let files = test_group |> List.of_seq |> List.sort (fun (_, f1) (_, f2) -> String.compare f1 f2) in
       (drop_test_folder_prefix path, files) )
   |> List.of_seq
   (* Number the test files consecutively. *)

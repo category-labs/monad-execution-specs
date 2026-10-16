@@ -130,7 +130,7 @@ module Precompile = struct
           ; create_address = Address.zero }
     | Error err, _ ->
         (* Failure return path for precompiles that can fail, as per YP (269), YP (280), YP (287), YP (293) *)
-        assert (err <> Evmc.Result.StatusCode.Success) ;
+        assert (not Evmc.Result.StatusCode.(equal err Success)) ;
         Evmc.Result.failure err
 end
 
