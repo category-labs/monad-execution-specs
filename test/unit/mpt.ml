@@ -21,7 +21,7 @@ let round_trip_trie_ok entries =
   let map = Nibbles.Map.of_list entries in
   let trie = Trie.of_seq (List.to_seq entries) in
   Nibbles.Map.to_seq map
-  |> Seq.for_all (fun (k, v) -> match Trie.find k trie with None -> false | Some v' -> v = v')
+  |> Seq.for_all (fun (k, v) -> match Trie.find k trie with None -> false | Some v' -> Rlp.(v = v'))
 
 let round_trip_patricia_ok entries =
   let open Mpt in
@@ -29,7 +29,7 @@ let round_trip_patricia_ok entries =
   let trie = Trie.of_seq (List.to_seq entries) in
   let pt = PatriciaTrie.of_trie trie in
   Nibbles.Map.to_seq map
-  |> Seq.for_all (fun (k, v) -> match PatriciaTrie.find k pt with None -> false | Some v' -> v = v')
+  |> Seq.for_all (fun (k, v) -> match PatriciaTrie.find k pt with None -> false | Some v' -> Rlp.(v = v'))
 
 let round_trip_mpt_ok entries =
   let open Mpt in
@@ -38,12 +38,12 @@ let round_trip_mpt_ok entries =
   let pt = PatriciaTrie.of_trie trie in
   let mpt = of_patricia pt in
   Nibbles.Map.to_seq map
-  |> Seq.for_all (fun (k, v) -> match find k mpt with None -> false | Some v' -> v = v')
+  |> Seq.for_all (fun (k, v) -> match find k mpt with None -> false | Some v' -> Rlp.(v = v'))
 
 let round_trip_hp_ok (nibbles, flag) =
   let hp = Mpt.Nibbles.hex_prefix_encode nibbles flag in
   let nibbles', flag' = Mpt.Nibbles.hex_prefix_decode hp in
-  nibbles = nibbles' && flag = flag'
+  Mpt.Nibbles.(nibbles = nibbles') && Bool.equal flag flag'
 
 let test_case_of_fixture (name, fixture) =
   let open Fixtures.TrieTest in

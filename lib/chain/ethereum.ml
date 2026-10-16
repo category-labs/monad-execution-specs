@@ -35,7 +35,7 @@ module Address = struct
     of_bytes32_truncating (Crypto.keccak_256 lin)
 
   (* Encoding/decoding address options, used to handle the recipient of a transaction. *)
-  type t_opt = t option
+  type t_opt = t option [@@deriving eq]
   let t_opt_to_yojson (addr : t option) = match addr with Some addr -> to_yojson addr | None -> `String ""
   let t_opt_of_yojson (json : Yojson.Safe.t) =
     match json with `String "" -> Ok None | _ -> Result.map Option.some (of_yojson json)
@@ -77,10 +77,13 @@ module Transaction = struct
   module Access = struct
     (** An entry in an EIP-2930 access list. *)
     type t = {address : Address.t (* E_a *); storage_keys : B32.t list (* E_s *) [@key "storageKeys"]}
-    [@@deriving yojson]
+    [@@deriving yojson, eq]
 
     let to_rlp {address; storage_keys} =
       Rlp.List [Address.to_rlp address; Rlp.List (List.map Rlp.of_bytes32 storage_keys)]
+
+    let ( = ) = equal
+    let ( <> ) x y = not (equal x y)
   end
 
   module Authorization = struct
@@ -92,7 +95,7 @@ module Transaction = struct
       ; y_parity : U8.t [@key "v"]
       ; r : U256.t
       ; s : U256.t }
-    [@@deriving yojson {strict = false}]
+    [@@deriving yojson {strict = false}, eq]
 
     let to_rlp {chain_id; nonce; address; y_parity; r; s} =
       Rlp.List
@@ -113,6 +116,9 @@ module Transaction = struct
         let$ () = ensure U256.(zero < r && r < Crypto.secp256k1n) in
         let$ () = ensure U256.(zero < s && s <= Crypto.secp256k1n / ~$2) in
         Crypto.ecrecover {y_parity; r; s} auth_hash )
+
+    let ( = ) = equal
+    let ( <> ) x y = not (equal x y)
   end
 
   (* Transaction types below according to YP (18), YP (20) *)
@@ -129,7 +135,7 @@ module Transaction = struct
     ; data : Bytes.t (* Either T_d or T_i *)
     ; gas_price : Uint.t (* T_p *) [@key "gasPrice"]
     ; v : U256.t (* T_w *) }
-  [@@deriving yojson {strict = false}]
+  [@@deriving yojson {strict = false}, eq]
 
   (** EIP-2930 access list transactions (transaction type 1 as per YP Section 4.2) *)
   type access_list_tx =
@@ -144,7 +150,7 @@ module Transaction = struct
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U8.t (* T_y *) [@key "v"] }
-  [@@deriving yojson {strict = false}]
+  [@@deriving yojson {strict = false}, eq]
 
   (** EIP-1559 fee market transactions (transaction type 2 as per YP Section 4.2) *)
   type fee_market_tx =
@@ -160,7 +166,7 @@ module Transaction = struct
     ; access_list : Access.t list (* T_A *) [@key "accessList"]
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U8.t (* T_y *) [@key "v"] }
-  [@@deriving yojson {strict = false}]
+  [@@deriving yojson {strict = false}, eq]
 
   (** EIP-7702 set-code transactions (transaction type 4 as per EIP-7702). *)
   type set_code_tx =
@@ -177,13 +183,14 @@ module Transaction = struct
     ; authorization_list : Authorization.t list [@key "authorizationList"]
     ; chain_id : Uint.t (* T_c *) [@key "chainId"]
     ; y_parity : U8.t (* T_y *) [@key "v"] }
-  [@@deriving yojson {strict = false}]
+  [@@deriving yojson {strict = false}, eq]
 
   type t =
     | Legacy of legacy_tx
     | AccessList of access_list_tx
     | FeeMarket of fee_market_tx
     | SetCode of set_code_tx
+  [@@deriving eq]
 
   type kind_tag = [`Legacy | `AccessList | `FeeMarket | `SetCode]
   let kind_tag tx : kind_tag =
@@ -473,6 +480,9 @@ module Transaction = struct
     match kind_tag tx with
     | `Legacy -> untagged_tx
     | tag -> `Assoc (("type", kind_tag_to_yojson tag) :: Yojson.Safe.Util.to_assoc untagged_tx)
+
+  let ( = ) = equal
+  let ( <> ) x y = not (equal x y)
 end
 
 module Withdrawal = struct
@@ -485,13 +495,16 @@ module Withdrawal = struct
     ; recipient : Address.t [@key "address"]
           (** W_r, the address of the account that will receive the withdrawn funds. *)
     ; amount : U64.t [@key "amount"]  (** W_a, the amount to be withdrawn, in MON-Gwei. *) }
-  [@@deriving yojson]
+  [@@deriving yojson, eq]
 
   (* YP (21) *)
   let to_rlp {global_index; validator_index; recipient; amount} =
     Rlp.List [U64.to_rlp global_index; U64.to_rlp validator_index; Address.to_rlp recipient; U64.to_rlp amount]
 
   let encode (withdrawal : t) = Rlp.encode (to_rlp withdrawal)
+
+  let ( = ) = equal
+  let ( <> ) x y = not (equal x y)
 end
 
 module Block = struct
@@ -538,7 +551,7 @@ module Block = struct
             (** Root hash of the corresponding beacon chain block, see EIP-4788. *)
       ; requests_hash : B32.t [@key "requestsHash"]
             (** [sha_256] of all the EIP-7685 requests in this block. *) }
-    [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens]
+    [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens, eq]
 
     (** [to_rlp h] RLP-encodes a block header according to YP (40) *)
     let to_rlp h =
@@ -588,6 +601,9 @@ module Block = struct
       ; excess_blob_gas = U64.zero
       ; parent_beacon_block_root = B32.zeros
       ; requests_hash = B32.zeros }
+
+    let ( = ) = equal
+    let ( <> ) x y = not (equal x y)
   end
 
   (* Bring block header lenses into scope for convenience. *)
@@ -602,7 +618,8 @@ module Block = struct
           (** B_U, the uncle blocks of this block. Always empty as Monad does not implement proof-of-work. *)
     ; withdrawals : Withdrawal.t list [@key "withdrawals"]
           (** The withdrawals to be processed by this block. *) }
-  [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens]
+  [@@deriving
+    yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens, eq]
 
   let empty = {header = empty; transactions = []; ommers = []; withdrawals = []}
 
@@ -623,6 +640,9 @@ module Block = struct
       ; Rlp.List (List.map Withdrawal.to_rlp b.withdrawals) ]
 
   let hash b = Crypto.keccak_256 (Rlp.encode (Header.to_rlp b.header))
+
+  let ( = ) = equal
+  let ( <> ) x y = not (equal x y)
 end
 
 module Log = struct
@@ -689,18 +709,12 @@ module Account = struct
           (** σ\[a\]ₛ, the account storage, represented directly as a map rather than a state root. *)
     ; code : Bytes.t  (** σ\[a\]_c, the account code, represented directly as bytecode rather than a hash. *)
     }
-  [@@deriving lens {submodule = true; prefix = true}, yojson]
+  [@@deriving lens {submodule = true; prefix = true}, yojson, eq]
 
   include TLens
 
-  (** Structural equality on accounts. *)
-  let equal acc_1 acc_2 =
-    U64.(acc_1.nonce = acc_2.nonce)
-    && U256.(acc_1.balance = acc_2.balance)
-    && B32.Map.(equal B32.equal acc_1.storage acc_2.storage)
-    && Bytes.(acc_1.code = acc_2.code)
-
   let ( = ) = equal
+  let ( <> ) x y = not (equal x y)
 
   let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U64.zero}
 

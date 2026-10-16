@@ -204,7 +204,7 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
   (** [bytes_to_whole_words x] computes {m ceil(x / 32)}. *)
   let bytes_to_whole_words (x : t) =
     let q, r = Z.div_rem (to_z x) (Z.of_int 32) in
-    of_z_exn q + if Z.(equal r zero) then zero else one
+    of_z_exn q + if Z.(Compare.(r = zero)) then zero else one
 end
 
 module UintBase = Make (Traits.Byte_width.Variable) (Traits.Signedness.Unsigned)

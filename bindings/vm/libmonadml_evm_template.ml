@@ -97,7 +97,7 @@ module Stubs (I : Common.INTERNAL) = struct
       fun acc ->
         return
           (let r = b32_out (f (addr_in acc)) in
-           if B32.(equal r zeros) then None else Some r )
+           if B32.(r = zeros) then None else Some r )
 
     let copy_code : Address.t -> offset:int -> size:int -> Bytes.t st =
       let f = bind Host_fns.copy_code in
@@ -126,7 +126,7 @@ module Stubs (I : Common.INTERNAL) = struct
       fun n ->
         return
           (let r = b32_out (f n) in
-           if B32.(equal r zeros) then None else Some r )
+           if B32.(r = zeros) then None else Some r )
 
     let emit_log : Address.t -> data:Bytes.t -> topics:B32.t list -> unit st =
       let f = bind Host_fns.emit_log in

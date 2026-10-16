@@ -135,7 +135,11 @@ let process_block
 
 let run_blockchain_test (fixtures : Fixtures.BlockchainTest.test_case) =
   let check_block_fixture state Fixtures.BlockchainTest.{block; expect_exception} =
-    let result = process_block fixtures.config ~verify:(execution_mode = `Verify) state block in
+    let result =
+      process_block fixtures.config
+        ~verify:(match execution_mode with `Verify -> true | `Update _ -> false)
+        state block
+    in
     match (result, expect_exception) with
     | Ok state, None -> Ok state
     | Error _, Some _ ->

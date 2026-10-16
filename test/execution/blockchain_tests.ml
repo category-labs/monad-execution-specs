@@ -11,7 +11,7 @@ module Test_entry = struct
   include Comparable.Make (struct
     type nonrec t = t
     let compare (name, index) (name', index') =
-      let d = compare name name' in
+      let d = String.compare name name' in
       if d <> 0 then d else compare index index'
   end)
 end
@@ -132,9 +132,10 @@ let blockchain_test_case group_name i path filename =
         | None -> fun _ -> true
         | Some filter -> fun s -> String.includes ~affix:filter s
       in
-      let matches_rev_filter : Fixtures.BlockchainTest.revision -> bool = function
-        | Fixtures.BlockchainTest.Single rev -> List.mem rev enabled_revisions
-        | Transition {pre; post; _} -> List.mem pre enabled_revisions && List.mem post enabled_revisions
+      let is_enabled rev = List.exists Chain.Monad.Revision.(( = ) rev) enabled_revisions in
+      let matches_rev_filter : Fixtures.BlockchainTest.Revision.t -> bool = function
+        | Single rev -> is_enabled rev
+        | Transition {pre; post; _} -> is_enabled pre && is_enabled post
         | Invalid -> false
       in
       Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path)
@@ -145,11 +146,12 @@ let blockchain_test_case group_name i path filename =
 
 let blockchain_tests =
   traverse_folder blockchain_tests_folder
-  |> Seq.filter (fun (_path, filename) -> Filename.extension filename = ".json" && filename <> "index.json")
-  |> Seq.group (fun (path_1, _) (path_2, _) -> path_1 = path_2)
+  |> Seq.filter (fun (_path, filename) ->
+      String.(Filename.extension filename = ".json" && filename <> "index.json") )
+  |> Seq.group (fun (path_1, _) (path_2, _) -> String.(path_1 = path_2))
   |> Seq.map (fun test_group ->
       let (path, _), _ = Option.get (Seq.uncons test_group) in
-      let files = test_group |> List.of_seq |> List.sort (fun (_, f1) (_, f2) -> compare f1 f2) in
+      let files = test_group |> List.of_seq |> List.sort (fun (_, f1) (_, f2) -> String.compare f1 f2) in
       (drop_test_folder_prefix path, files) )
   |> List.of_seq
   (* Number the test files consecutively. *)

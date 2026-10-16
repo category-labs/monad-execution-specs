@@ -28,7 +28,7 @@ struct
     State.TransactionState.M.(
       if Gas.(of_uint64 msg.gas < gas_dipped_into_reserve) then return Evmc.Result.(failure Out_of_gas)
       else if Bytes.length msg.input_data < 4 then return (revert "method not supported")
-      else if Bytes.sub msg.input_data 0 4 <> selector_dipped_into_reserve then
+      else if Bytes.(sub msg.input_data 0 4 <> selector_dipped_into_reserve) then
         return (revert "method not supported")
       else if U256.(msg.value <> zero) then return (revert "value is nonzero")
       else if Bytes.length msg.input_data > 4 then return (revert "input is invalid")
