@@ -5,7 +5,7 @@
 module Bytes = struct
   include String
 
-  (* Shadow the monomorphic comparison operators introduced in String. *)
+  (* Shadow the comparison operators introduced by [String] with the [int] ones. *)
   open Stdlib
 
   let of_char (chr : char) = make 1 chr
@@ -35,10 +35,10 @@ module Bytes = struct
     let hex_table =
       Iarray.init 256 (fun i ->
           let open Stdlib in
-          let i_c = Char.(chr i) in
-          if i_c >= '0' && i_c <= '9' then i - Char.code '0'
-          else if i_c >= 'a' && i_c <= 'f' then 10 + i - Char.code 'a'
-          else if i_c >= 'A' && i_c <= 'F' then 10 + i - Char.code 'A'
+          let in_range lo hi = i >= Char.code lo && i <= Char.code hi in
+          if in_range '0' '9' then i - Char.code '0'
+          else if in_range 'a' 'f' then 10 + i - Char.code 'a'
+          else if in_range 'A' 'F' then 10 + i - Char.code 'A'
           else -256 )
     in
     fun ?width str ->
@@ -69,7 +69,7 @@ module Bytes = struct
   let count_zero_and_nonzero_bytes (bs : t) =
     fold_left
       (fun counts byte ->
-        if byte = '\x00' then {counts with zero_bytes = counts.zero_bytes + 1}
+        if Char.equal byte '\x00' then {counts with zero_bytes = counts.zero_bytes + 1}
         else {counts with nonzero_bytes = counts.nonzero_bytes + 1} )
       {zero_bytes = 0; nonzero_bytes = 0} bs
 

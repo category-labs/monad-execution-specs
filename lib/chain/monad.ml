@@ -18,6 +18,7 @@ module Revision = struct
     | `Nine  (** Defined in {{:https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-6.md}MIP-6} *)
     | `Ten
     | `Next ]
+  [@@deriving eq]
   let all_revisions : t list =
     [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Ten; `Next]
 

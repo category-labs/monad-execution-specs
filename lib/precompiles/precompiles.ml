@@ -164,7 +164,8 @@ struct
     | Some precompile -> Some (return (precompile msg))
     | None -> (
       match Address.Map.find_opt address monad_precompiles with
-      | Some _precompile when msg.delegated || msg.static || msg.kind <> Call ->
+      | Some _precompile when msg.delegated || msg.static || not Evmc.Message.CallKind.(equal msg.kind Call)
+        ->
           (* Monad precompiles fail unless they're called via a non-delegated, non-static CALL operation.
             STATICCALL, DELEGATECALL and CALLCODE, as well as regular CALLs that hit an EIP-7702 delegation
             will cause the precompile to fail. *)

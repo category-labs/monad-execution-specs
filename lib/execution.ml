@@ -353,7 +353,7 @@ struct
         (* YP (90) *)
         let logs = List.rev transaction_state.logs in
         (* YP (91) *)
-        let succeeded = result.status_code = Success in
+        let succeeded = Evmc.Result.StatusCode.(equal result.status_code Success) in
         let bloom = Bloom.union (Seq.map Log.to_bloom (List.to_seq logs)) in
         Receipt.
           { tx_type = Transaction.kind_tag tx
@@ -410,7 +410,8 @@ struct
     (* YP (57) *)
     let$ () =
       when_
-        (B32.(header.ommers_hash <> Crypto.keccak_256 Rlp.(encode (List []))) || block.ommers <> [])
+        ( B32.(header.ommers_hash <> Crypto.keccak_256 Rlp.(encode (List [])))
+        || not (List.is_empty block.ommers) )
         (invalid_block block Nonempty_ommers)
     in
 
@@ -429,7 +430,7 @@ struct
   let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
     let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
     let code = block_state.^(BlockState.account addr).code in
-    if code = Bytes.empty then (None, block_state)
+    if Bytes.equal code Bytes.empty then (None, block_state)
     else
       let message =
         Evmc.Message.
@@ -464,7 +465,7 @@ struct
           ; accessed_keys = StorageKey.Set.empty }
       in
       let result, transaction_state = Host.call message transaction_state in
-      assert (result.status_code = Success) ;
+      assert (Evmc.Result.StatusCode.(equal result.status_code Success)) ;
       (* Update block state with storage changes. As per the relevant EIPs, a system message call
          does not warm up accounts or storage slots, and it does not count towards the block gas
          limit. *)
@@ -520,7 +521,7 @@ struct
         (invalid_block input_block (Wrong_parent_hash {expected = output_header.parent_hash}))
     in
 
-    assert (input_block = output_block) ;
+    assert (Block.equal input_block output_block) ;
 
     return ()
 

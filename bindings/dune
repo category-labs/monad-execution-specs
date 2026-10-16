@@ -2,3 +2,8 @@
  (name common)
  (libraries monad_lib ctypes ctypes.stubs ctypes-foreign)
  (modules common))
+
+(env
+ (_
+  (flags
+   (:standard -open Monomorphic))))

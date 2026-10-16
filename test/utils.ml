@@ -12,7 +12,7 @@ module QCheck2 = struct
     let i256 x = Format.sprintf "%s (%s)" (I256.to_string x) (I256.to_hex_string x)
     let z : Z.t t =
      fun x ->
-      (if Z.(x < zero) then Format.sprintf "%s (-%s)" (Z.to_string x) else Format.sprintf "%s")
+      (if Z.(lt x zero) then Format.sprintf "%s (-%s)" (Z.to_string x) else Format.sprintf "%s")
         (Bytes.to_hex_string (Z.to_bits x))
     let rlp : Rlp.t t = Rlp.to_string
     let byte_string = Bytes.to_hex_string
@@ -91,7 +91,6 @@ let status_code =
   ( module struct
     include Evmc.Result.StatusCode
     let pp = Fmt.of_to_string (fun s -> Evmc.Result.StatusCode.to_string s)
-    let equal = Stdlib.( = )
   end : Alcotest.TESTABLE
     with type t = Evmc.Result.StatusCode.t )
 
