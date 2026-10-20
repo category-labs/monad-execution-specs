@@ -1,0 +1,14 @@
+(executable
+ (name comparison_audit)
+ (libraries compiler-libs.common))
+
+(rule
+ (alias runtest)
+ (deps
+  (:cmts
+   (glob_files ../../lib/.monad_lib.objs/byte/*.cmt))
+  (glob_files ../../lib/.monad_lib.objs/byte/*.cmi))
+ (action
+  (chdir
+   %{workspace_root}
+   (run %{exe:comparison_audit.exe} %{cmts}))))
