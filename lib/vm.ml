@@ -451,7 +451,7 @@ struct
         else
           let w = execution_environment.bytecode.[i] in
           let valid_destinations =
-            if w = '\x5b' then U256.(Set.add ~$i valid_destinations) else valid_destinations
+            if Char.equal w '\x5b' then U256.(Set.add ~$i valid_destinations) else valid_destinations
           in
           (* YP (162) *)
           let i = match w with '\x60' .. '\x7f' -> i + Char.code w - 0x60 + 2 | _ -> i + 1 in
@@ -485,7 +485,7 @@ struct
           let$ _ =
             List.fold_leftM
               ~f:(fun i x ->
-                let v = if x < magic then U256.(x + one) else x in
+                let v = if U256.(x < magic) then U256.(x + one) else x in
                 let$ _ = HostAPI.set_transient_storage self (U256.to_repr i) (U256.to_repr v) in
                 return U256.(i + one) )
               base stack
@@ -696,7 +696,7 @@ struct
       let$ () = spend Gas.very_low in
 
       (* Operation *)
-      let$ () = push (U256.of_bool (x < y)) in
+      let$ () = push (U256.of_bool I256.(x < y)) in
 
       (* PC *)
       increase_pc_and_continue
@@ -710,7 +710,7 @@ struct
       let$ () = spend Gas.very_low in
 
       (* Operation *)
-      let$ () = push (U256.of_bool (x > y)) in
+      let$ () = push (U256.of_bool I256.(x > y)) in
 
       (* PC *)
       increase_pc_and_continue
@@ -1490,7 +1490,7 @@ struct
 
     let merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund =
       let$ () = update_field gas (fun g -> Uint.(g + of_uint64 gas_left)) in
-      if status_code = Evmc.Result.StatusCode.Success then
+      if Evmc.Result.StatusCode.equal status_code Evmc.Result.StatusCode.Success then
         update_field MachineState.gas_refund (fun g -> Integer.(g + of_int64 gas_refund))
       else return (assert (Int64.(gas_refund = zero)))
 
@@ -1555,7 +1555,7 @@ struct
           in
           update_field memory (Memory.write_block_at output_start truncated_output)
         in
-        push (if status_code = Success then U256.one else U256.zero)
+        push (if Evmc.Result.StatusCode.equal status_code Success then U256.one else U256.zero)
 
     let access_delegation (addr : Address.t) : delegation M.t =
       let$ code = HostAPI.copy_code addr ~offset:0 ~size:Delegation.eoa_delegated_code_length in
@@ -1587,7 +1587,7 @@ struct
         match delegation with Delegated _ -> fail Create_from_delegated_eoa | Direct _ -> return ()
       in
 
-      if self_balance < endowment || new_depth > max_stack_depth then
+      if U256.(self_balance < endowment) || new_depth > max_stack_depth then
         let$ () = output_buffer := Bytes.empty in
         push U256.zero
       else
@@ -1616,7 +1616,7 @@ struct
         in
         let$ {status_code; gas_left; gas_refund; output_data; create_address} = HostAPI.call message in
         let$ () = merge_child_gas_and_refund ~status_code ~gas_left ~gas_refund in
-        if status_code = Evmc.Result.StatusCode.Success then
+        if Evmc.Result.StatusCode.equal status_code Evmc.Result.StatusCode.Success then
           let$ () = output_buffer := Bytes.empty in
           push (Address.to_u256 create_address)
         else
@@ -1671,7 +1671,9 @@ struct
         | Delegated {delegation_access_gas; _} -> Gas.(access_gas + delegation_access_gas)
       in
 
-      let transfer_value = kind <> Evmc.Message.CallKind.DelegateCall && U256.(value <> zero) in
+      let transfer_value =
+        (not (Evmc.Message.CallKind.equal kind Evmc.Message.CallKind.DelegateCall)) && U256.(value <> zero)
+      in
 
       let$ target_is_alive = HostAPI.account_exists recipient in
       let create_gas = Gas.(if transfer_value && not target_is_alive then new_account_cost else zero) in
@@ -1687,7 +1689,11 @@ struct
       let$ () = spend Gas.(caller_spent_gas + memory_extension_gas) in
 
       (* Operation *)
-      let$ () = when_ (kind = Evmc.Message.CallKind.Call && transfer_value) check_write_permissions in
+      let$ () =
+        when_
+          (Evmc.Message.CallKind.equal kind Evmc.Message.CallKind.Call && transfer_value)
+          check_write_permissions
+      in
 
       let in_static_context = not execution_environment.write_permission in
       let static = static_call || in_static_context in

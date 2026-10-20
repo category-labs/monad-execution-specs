@@ -4,6 +4,11 @@
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))
 
 (test
+ (name equality)
+ (modules equality)
+ (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest yojson))
+
+(test
  (name rlp)
  (modules rlp)
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest))

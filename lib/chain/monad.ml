@@ -21,6 +21,21 @@ module Revision = struct
   let all_revisions : t list =
     [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Ten; `Next]
 
+  let equal (x : t) (y : t) =
+    match x with
+    | `Zero -> ( match y with `Zero -> true | _ -> false )
+    | `One -> ( match y with `One -> true | _ -> false )
+    | `Two -> ( match y with `Two -> true | _ -> false )
+    | `Three -> ( match y with `Three -> true | _ -> false )
+    | `Four -> ( match y with `Four -> true | _ -> false )
+    | `Five -> ( match y with `Five -> true | _ -> false )
+    | `Six -> ( match y with `Six -> true | _ -> false )
+    | `Seven -> ( match y with `Seven -> true | _ -> false )
+    | `Eight -> ( match y with `Eight -> true | _ -> false )
+    | `Nine -> ( match y with `Nine -> true | _ -> false )
+    | `Ten -> ( match y with `Ten -> true | _ -> false )
+    | `Next -> ( match y with `Next -> true | _ -> false )
+
   let to_string : t -> string = function
     | `Zero -> "MONAD_ZERO"
     | `One -> "MONAD_ONE"

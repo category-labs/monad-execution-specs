@@ -15,6 +15,7 @@ module type SIG = sig
   type t
 
   val zero : t
+  val is_zero : t -> bool
   val ( + ) : t -> t -> t
   val ( * ) : Uint.t -> t -> t
   val of_coords : Underlying.t -> Underlying.t -> t option
@@ -39,6 +40,7 @@ struct
   type t = Point of F.t * F.t | Infinity
 
   let zero = Infinity
+  let is_zero = function Infinity -> true | Point _ -> false
 
   let three = F.(~$3)
   let two = F.(~$2)
@@ -106,6 +108,7 @@ struct
       val ( * ) : Uint.t -> t -> t
       val neg : t -> t
       val zero : t
+      val is_zero : t -> bool
       val in_subgroup : curve -> t option
     end = struct
       type nonrec t = t
@@ -113,7 +116,8 @@ struct
       let ( * ) (n : Uint.t) (v : t) : t = n * v
       let neg = neg
       let zero = zero
-      let in_subgroup p = if p = zero || order * p = zero then Some p else None
+      let is_zero = is_zero
+      let in_subgroup p = if is_zero p || is_zero (order * p) then Some p else None
     end
     include Impl
 
@@ -200,7 +204,7 @@ struct
     let y = y * y1 in
     let x = if is_gx1_square then tv3 else x in
     let y = if is_gx1_square then y1 else y in
-    let e1 = Stdlib.(sgn0 u = sgn0 y) in
+    let e1 = Bool.equal (sgn0 u) (sgn0 y) in
     let y = if e1 then y else zero - y in
     let x = x / tv4 in
     Option.get (C.of_coords x y)

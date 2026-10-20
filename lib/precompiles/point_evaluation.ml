@@ -67,7 +67,7 @@ let decompress_G1 (bs : B48.t) : G_1.t option =
       let$ y : F_p.t =
         let$ y_abs = F_p.(sqrt_opt ((x * x * x) + ~$4)) in
         let y_is_large = Integer.((y_abs :> Integer.t) * ~$2 >= Uint.as_signed p) in
-        return (if y_is_large <> negative then F_p.(zero - y_abs) else y_abs)
+        return (if not (Bool.equal y_is_large negative) then F_p.(zero - y_abs) else y_abs)
       in
       G_1.of_coords x y )
 
@@ -96,7 +96,7 @@ let decompress_G2 (bs : B96.t) : G_2.t option =
         let F_p2.{im = y_im; re = y_re} = y_abs in
         let dominant = if F_p.(y_im <> zero) then y_im else y_re in
         let sign_y = Integer.((dominant :> Integer.t) * ~$2 >= Uint.as_signed p) in
-        return (if sign_y <> negative then F_p2.(zero - y_abs) else y_abs)
+        return (if not (Bool.equal sign_y negative) then F_p2.(zero - y_abs) else y_abs)
       in
       G_2.of_coords x y )
 

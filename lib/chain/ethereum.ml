@@ -79,6 +79,9 @@ module Transaction = struct
     type t = {address : Address.t (* E_a *); storage_keys : B32.t list (* E_s *) [@key "storageKeys"]}
     [@@deriving yojson]
 
+    let equal {address; storage_keys} other =
+      Address.equal address other.address && List.equal B32.equal storage_keys other.storage_keys
+
     let to_rlp {address; storage_keys} =
       Rlp.List [Address.to_rlp address; Rlp.List (List.map Rlp.of_bytes32 storage_keys)]
   end
@@ -93,6 +96,14 @@ module Transaction = struct
       ; r : U256.t
       ; s : U256.t }
     [@@deriving yojson {strict = false}]
+
+    let equal {chain_id; address; nonce; y_parity; r; s} other =
+      U256.equal chain_id other.chain_id
+      && Address.equal address other.address
+      && U64.equal nonce other.nonce
+      && U8.equal y_parity other.y_parity
+      && U256.equal r other.r
+      && U256.equal s other.s
 
     let to_rlp {chain_id; nonce; address; y_parity; r; s} =
       Rlp.List
@@ -184,6 +195,95 @@ module Transaction = struct
     | AccessList of access_list_tx
     | FeeMarket of fee_market_tx
     | SetCode of set_code_tx
+
+  let equal (x : t) (y : t) =
+    match x with
+    | Legacy {nonce; gas_limit; value; r; s; to_; data; gas_price; v} -> (
+      match y with
+      | Legacy y ->
+          U64.equal nonce y.nonce
+          && Uint.equal gas_limit y.gas_limit
+          && U256.equal value y.value
+          && U256.equal r y.r
+          && U256.equal s y.s
+          && Option.equal Address.equal to_ y.to_
+          && Bytes.equal data y.data
+          && Uint.equal gas_price y.gas_price
+          && U256.equal v y.v
+      | _ -> false )
+    | AccessList {nonce; gas_limit; value; r; s; to_; data; gas_price; access_list; chain_id; y_parity} -> (
+      match y with
+      | AccessList y ->
+          U64.equal nonce y.nonce
+          && Uint.equal gas_limit y.gas_limit
+          && U256.equal value y.value
+          && U256.equal r y.r
+          && U256.equal s y.s
+          && Option.equal Address.equal to_ y.to_
+          && Bytes.equal data y.data
+          && Uint.equal gas_price y.gas_price
+          && List.equal Access.equal access_list y.access_list
+          && Uint.equal chain_id y.chain_id
+          && U8.equal y_parity y.y_parity
+      | _ -> false )
+    | FeeMarket
+        { nonce
+        ; gas_limit
+        ; value
+        ; r
+        ; s
+        ; to_
+        ; data
+        ; max_fee_per_gas
+        ; max_priority_fee_per_gas
+        ; access_list
+        ; chain_id
+        ; y_parity } -> (
+      match y with
+      | FeeMarket y ->
+          U64.equal nonce y.nonce
+          && Uint.equal gas_limit y.gas_limit
+          && U256.equal value y.value
+          && U256.equal r y.r
+          && U256.equal s y.s
+          && Option.equal Address.equal to_ y.to_
+          && Bytes.equal data y.data
+          && Uint.equal max_fee_per_gas y.max_fee_per_gas
+          && Uint.equal max_priority_fee_per_gas y.max_priority_fee_per_gas
+          && List.equal Access.equal access_list y.access_list
+          && Uint.equal chain_id y.chain_id
+          && U8.equal y_parity y.y_parity
+      | _ -> false )
+    | SetCode
+        { nonce
+        ; gas_limit
+        ; value
+        ; r
+        ; s
+        ; to_
+        ; data
+        ; max_fee_per_gas
+        ; max_priority_fee_per_gas
+        ; access_list
+        ; authorization_list
+        ; chain_id
+        ; y_parity } -> (
+      match y with
+      | SetCode y ->
+          U64.equal nonce y.nonce
+          && Uint.equal gas_limit y.gas_limit
+          && U256.equal value y.value
+          && U256.equal r y.r
+          && U256.equal s y.s
+          && Address.equal to_ y.to_
+          && Bytes.equal data y.data
+          && Uint.equal max_fee_per_gas y.max_fee_per_gas
+          && Uint.equal max_priority_fee_per_gas y.max_priority_fee_per_gas
+          && List.equal Access.equal access_list y.access_list
+          && List.equal Authorization.equal authorization_list y.authorization_list
+          && Uint.equal chain_id y.chain_id
+          && U8.equal y_parity y.y_parity
+      | _ -> false )
 
   type kind_tag = [`Legacy | `AccessList | `FeeMarket | `SetCode]
   let kind_tag tx : kind_tag =
@@ -487,6 +587,12 @@ module Withdrawal = struct
     ; amount : U64.t [@key "amount"]  (** W_a, the amount to be withdrawn, in MON-Gwei. *) }
   [@@deriving yojson]
 
+  let equal {global_index; validator_index; recipient; amount} other =
+    U64.equal global_index other.global_index
+    && U64.equal validator_index other.validator_index
+    && Address.equal recipient other.recipient
+    && U64.equal amount other.amount
+
   (* YP (21) *)
   let to_rlp {global_index; validator_index; recipient; amount} =
     Rlp.List [U64.to_rlp global_index; U64.to_rlp validator_index; Address.to_rlp recipient; U64.to_rlp amount]
@@ -539,6 +645,51 @@ module Block = struct
       ; requests_hash : B32.t [@key "requestsHash"]
             (** [sha_256] of all the EIP-7685 requests in this block. *) }
     [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: hash *)}, lens]
+
+    let equal
+        { parent_hash
+        ; ommers_hash
+        ; beneficiary
+        ; state_root
+        ; transactions_root
+        ; receipts_root
+        ; logs_bloom
+        ; difficulty
+        ; number
+        ; gas_limit
+        ; gas_used
+        ; timestamp
+        ; extra_data
+        ; prev_randao
+        ; nonce
+        ; base_fee_per_gas
+        ; withdrawals_root
+        ; blob_gas_used
+        ; excess_blob_gas
+        ; parent_beacon_block_root
+        ; requests_hash }
+        other =
+      B32.equal parent_hash other.parent_hash
+      && B32.equal ommers_hash other.ommers_hash
+      && Address.equal beneficiary other.beneficiary
+      && B32.equal state_root other.state_root
+      && B32.equal transactions_root other.transactions_root
+      && B32.equal receipts_root other.receipts_root
+      && Bloom.equal logs_bloom other.logs_bloom
+      && Uint.equal difficulty other.difficulty
+      && Uint.equal number other.number
+      && Uint.equal gas_limit other.gas_limit
+      && Uint.equal gas_used other.gas_used
+      && U256.equal timestamp other.timestamp
+      && Bytes.equal extra_data other.extra_data
+      && B32.equal prev_randao other.prev_randao
+      && B8.equal nonce other.nonce
+      && Uint.equal base_fee_per_gas other.base_fee_per_gas
+      && B32.equal withdrawals_root other.withdrawals_root
+      && U64.equal blob_gas_used other.blob_gas_used
+      && U64.equal excess_blob_gas other.excess_blob_gas
+      && B32.equal parent_beacon_block_root other.parent_beacon_block_root
+      && B32.equal requests_hash other.requests_hash
 
     (** [to_rlp h] RLP-encodes a block header according to YP (40) *)
     let to_rlp h =
@@ -605,6 +756,12 @@ module Block = struct
   [@@deriving yojson {strict = false (* Additional fields in Ethereum test fixtures: chainname, rlp *)}, lens]
 
   let empty = {header = empty; transactions = []; ommers = []; withdrawals = []}
+
+  let equal {header; transactions; ommers; withdrawals} other =
+    Header.equal header other.header
+    && List.equal Transaction.equal transactions other.transactions
+    && List.equal Header.equal ommers other.ommers
+    && List.equal Withdrawal.equal withdrawals other.withdrawals
 
   (** [to_rlp b] RLP-encodes a block according to YP (41) *)
   let to_rlp b =

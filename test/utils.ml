@@ -91,7 +91,6 @@ let status_code =
   ( module struct
     include Evmc.Result.StatusCode
     let pp = Fmt.of_to_string (fun s -> Evmc.Result.StatusCode.to_string s)
-    let equal = Stdlib.( = )
   end : Alcotest.TESTABLE
     with type t = Evmc.Result.StatusCode.t )
 

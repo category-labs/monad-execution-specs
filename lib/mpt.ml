@@ -45,8 +45,7 @@ module Nibbles = struct
   (** [is_prefix_at_depth ~prefix key ~depth] checks whether [key\[depth..(depth + length prefix)) = prefix] *)
   let is_prefix_at_depth ~(prefix : t) (key : t) ~(depth : int) =
     Seq.(zip (to_seq prefix) (drop depth (to_seq key)))
-    |> Seq.map (function p_i, k_i -> Stdlib.compare p_i k_i)
-    |> Seq.find (( <> ) 0)
+    |> Seq.find (fun (p_i, k_i) -> not (Char.equal p_i k_i))
     |> function None -> true | Some _ -> false
 
   (** [hex_prefix_encode n flag] encodes a nibble array plus an extra flag into a byte array, following the
@@ -133,6 +132,8 @@ module PatriciaTrie = struct
     | Leaf of {path : Nibbles.t; value : Rlp.t}
     | Extension of {path_segment : Nibbles.t; subtree : t}
 
+  let is_empty = function Empty -> true | Branch _ | Leaf _ | Extension _ -> false
+
   let rec of_trie (t : Trie.t) =
     match t with
     | Empty -> Empty
@@ -141,14 +142,14 @@ module PatriciaTrie = struct
         let branches = Iarray.map of_trie branches in
         let first_non_empty_nibble =
           Iarray.find_mapi
-            (fun index branch -> if branch <> Empty then Some (index, branch) else None)
+            (fun index branch -> if is_empty branch then None else Some (index, branch))
             branches
         in
         let non_empty_nibbles =
-          Iarray.fold_left (fun n branch -> n + if branch <> Empty then 1 else 0) 0 branches
+          Iarray.fold_left (fun n branch -> n + if is_empty branch then 0 else 1) 0 branches
         in
         match (first_non_empty_nibble, non_empty_nibbles) with
-        | Some (k_i, b), 1 when v = Bytes "" -> (
+        | Some (k_i, b), 1 when Rlp.equal v (Bytes "") -> (
           (* Exactly one non-empty branch: we can compress the entry, but only if it didn't contain a value. *)
           match b with
           | Empty -> Empty
@@ -159,7 +160,7 @@ module PatriciaTrie = struct
               Extension {path_segment = Nibbles.prepend (Char.unsafe_chr k_i) path_segment; subtree} )
         | None, 0 ->
             (* Terminal: we can compress the entry to a Leaf, or Empty if v = "" *)
-            if v = Rlp.Bytes "" then Empty else Leaf {path = Nibbles.empty; value = v}
+            if Rlp.equal v (Rlp.Bytes "") then Empty else Leaf {path = Nibbles.empty; value = v}
         | _ -> Branch (branches, v) )
 
   let rec find (k : Nibbles.t) ?(depth = 0) (trie : t) =
@@ -208,7 +209,7 @@ module Node = struct
     | Hash h -> Rlp.Bytes (B32.to_bytes h)
 
   let rec of_rlp = function
-    | Rlp.Bytes bs when bs = "" -> Empty
+    | Rlp.Bytes bs when Bytes.equal bs "" -> Empty
     | Rlp.List [Bytes p; v] ->
         let ns, is_leaf = Nibbles.hex_prefix_decode p in
         if is_leaf then Leaf {path = ns; value = v}
@@ -235,7 +236,7 @@ module Node = struct
     | _ -> assert false
 
   and small_node_or_hash_of_rlp = function
-    | Rlp.Bytes bs when bs = "" -> Small Empty
+    | Rlp.Bytes bs when Bytes.equal bs "" -> Small Empty
     | Rlp.Bytes bs ->
         assert (Bytes.length bs = 32) ;
         Hash (B32.of_bytes_exn bs)

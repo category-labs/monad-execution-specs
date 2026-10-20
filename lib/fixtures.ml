@@ -10,7 +10,7 @@ open Yojson.Safe.Util
 let ( .$() ) json key = member key json
 let ( .$()<- ) obj k v =
   let rec loop = function
-    | (k', _) :: rest when k' = k -> (k, v) :: rest
+    | (k', _) :: rest when String.equal k' k -> (k, v) :: rest
     | (k', v') :: rest -> (k', v') :: loop rest
     | [] -> [(k, v)]
   in
@@ -47,6 +47,19 @@ module BlockchainTest = struct
        unrepresentable. *)
     | Single of Chain.Monad.Revision.t
     | Transition of {pre : Chain.Monad.Revision.t; post : Chain.Monad.Revision.t; timestamp : U256.t}
+
+  let equal_revision x y =
+    match x with
+    | Invalid -> ( match y with Invalid -> true | _ -> false )
+    | Single x -> ( match y with Single y -> Chain.Monad.Revision.equal x y | _ -> false )
+    | Transition {pre; post; timestamp} -> (
+      match y with
+      | Transition y ->
+          Chain.Monad.Revision.equal pre y.pre
+          && Chain.Monad.Revision.equal post y.post
+          && U256.equal timestamp y.timestamp
+      | _ -> false )
+
   let revision_of_yojson (json : Yojson.Safe.t) : (revision, string) result =
     match json with
     | `String "PragueToMONAD_EIGHTAtTime15k" ->
@@ -154,7 +167,8 @@ module BlockchainTest = struct
                    source is test_case.config.network. If present, we expect it to be identical to the network
                    in the config field. *)
                 match test_case.network with
-                | Some network when network <> test_case.config.network -> fail "Fixtures.BlockchainTest.t"
+                | Some network when not (equal_revision network test_case.config.network) ->
+                    fail "Fixtures.BlockchainTest.t"
                 | _ -> return (Some (name, test_case)) )
               | Error _ when skip_invalid -> return None
               | Error err -> fail err )
@@ -211,7 +225,9 @@ module TrieTest = struct
     Result.(
       let of_kv (name, entry) =
         let$ hex_encoded = [%of_yojson: bool option] entry.$("hexEncoded") in
-        let$ test_case = test_case_of_yojson ~hex_encoded:(hex_encoded = Some true) ~hash_keys entry in
+        let$ test_case =
+          test_case_of_yojson ~hex_encoded:(Option.value ~default:false hex_encoded) ~hash_keys entry
+        in
         return (name, test_case)
       in
       match entries with `Assoc kv -> List.mapM kv ~f:of_kv | _ -> fail "Fixtures.TrieTest.t" )

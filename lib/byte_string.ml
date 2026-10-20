@@ -36,10 +36,11 @@ module Bytes = struct
       Iarray.init 256 (fun i ->
           let open Stdlib in
           let i_c = Char.(chr i) in
-          if i_c >= '0' && i_c <= '9' then i - Char.code '0'
-          else if i_c >= 'a' && i_c <= 'f' then 10 + i - Char.code 'a'
-          else if i_c >= 'A' && i_c <= 'F' then 10 + i - Char.code 'A'
-          else -256 )
+          match i_c with
+          | '0' .. '9' -> i - Char.code '0'
+          | 'a' .. 'f' -> 10 + i - Char.code 'a'
+          | 'A' .. 'F' -> 10 + i - Char.code 'A'
+          | _ -> -256 )
     in
     fun ?width str ->
       assert (String.length str mod 2 = 0) ;
@@ -69,7 +70,7 @@ module Bytes = struct
   let count_zero_and_nonzero_bytes (bs : t) =
     fold_left
       (fun counts byte ->
-        if byte = '\x00' then {counts with zero_bytes = counts.zero_bytes + 1}
+        if Char.equal byte '\x00' then {counts with zero_bytes = counts.zero_bytes + 1}
         else {counts with nonzero_bytes = counts.nonzero_bytes + 1} )
       {zero_bytes = 0; nonzero_bytes = 0} bs
 

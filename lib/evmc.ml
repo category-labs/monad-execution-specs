@@ -45,6 +45,33 @@ module Result = struct
          VM error conditions with this granularity. *)
       | Create_from_delegated_eoa
 
+    let equal (x : t) (y : t) =
+      match x with
+      | Success -> ( match y with Success -> true | _ -> false )
+      | Failure -> ( match y with Failure -> true | _ -> false )
+      | Revert -> ( match y with Revert -> true | _ -> false )
+      | Out_of_gas -> ( match y with Out_of_gas -> true | _ -> false )
+      | Invalid_instruction -> ( match y with Invalid_instruction -> true | _ -> false )
+      | Undefined_instruction -> ( match y with Undefined_instruction -> true | _ -> false )
+      | Stack_overflow -> ( match y with Stack_overflow -> true | _ -> false )
+      | Stack_underflow -> ( match y with Stack_underflow -> true | _ -> false )
+      | Bad_jump_destination -> ( match y with Bad_jump_destination -> true | _ -> false )
+      | Invalid_memory_access -> ( match y with Invalid_memory_access -> true | _ -> false )
+      | Call_depth_exceeded -> ( match y with Call_depth_exceeded -> true | _ -> false )
+      | Static_mode_violation -> ( match y with Static_mode_violation -> true | _ -> false )
+      | Precompile_failure -> ( match y with Precompile_failure -> true | _ -> false )
+      | Contract_validation_failure -> ( match y with Contract_validation_failure -> true | _ -> false )
+      | Argument_out_of_range -> ( match y with Argument_out_of_range -> true | _ -> false )
+      | Wasm_unreachable_instruction -> ( match y with Wasm_unreachable_instruction -> true | _ -> false )
+      | Wasm_trap -> ( match y with Wasm_trap -> true | _ -> false )
+      | Insufficient_balance -> ( match y with Insufficient_balance -> true | _ -> false )
+      | Monad_reserve_balance_violation -> (
+        match y with Monad_reserve_balance_violation -> true | _ -> false )
+      | Internal_error -> ( match y with Internal_error -> true | _ -> false )
+      | Rejected -> ( match y with Rejected -> true | _ -> false )
+      | Out_of_memory -> ( match y with Out_of_memory -> true | _ -> false )
+      | Create_from_delegated_eoa -> ( match y with Create_from_delegated_eoa -> true | _ -> false )
+
     let to_string = function
       | Success -> "Success"
       | Failure -> "Failure"
@@ -82,7 +109,7 @@ module Result = struct
   (** [failure error_code] constructs a result representing termination due to execution failure (but not
       deliberate termination due to a [REVERT] instruction). *)
   let failure error_code =
-    assert (StatusCode.(error_code <> Success && error_code <> Revert)) ;
+    assert (StatusCode.(not (equal error_code Success || equal error_code Revert))) ;
     { status_code = error_code
     ; gas_left = 0L
     ; gas_refund = 0L
@@ -96,6 +123,14 @@ module Message = struct
       that the [EVMC_EOFCREATE] call kind is not provided. *)
   module CallKind = struct
     type t = Call | DelegateCall | CallCode | Create | Create2
+
+    let equal (x : t) (y : t) =
+      match x with
+      | Call -> ( match y with Call -> true | _ -> false )
+      | DelegateCall -> ( match y with DelegateCall -> true | _ -> false )
+      | CallCode -> ( match y with CallCode -> true | _ -> false )
+      | Create -> ( match y with Create -> true | _ -> false )
+      | Create2 -> ( match y with Create2 -> true | _ -> false )
   end
 
   (** An EVMC message represents a call to the EVM, corresponding to a contract creation or message call in

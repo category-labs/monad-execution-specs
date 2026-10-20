@@ -15,7 +15,11 @@ let rec to_string x =
   | Bytes bs -> Format.sprintf "Bytes(\"%s\")" (Bytes.to_hex_string bs)
   | List elts -> List.map to_string elts |> String.concat ", " |> Format.sprintf "List(%s)"
 
-let equal (x : t) (y : t) = x = y
+let rec equal (x : t) (y : t) =
+  match (x, y) with
+  | Bytes x, Bytes y -> Bytes.equal x y
+  | List xs, List ys -> List.equal equal xs ys
+  | Bytes _, List _ | List _, Bytes _ -> false
 
 (** [be x] encodes an integer as a big-endian byte array of minimal length. YP (195) *)
 let be (x : int) =
