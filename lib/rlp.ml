@@ -6,6 +6,9 @@ open Byte_string
     define encoding and decoding functions into this type. YP (190), YP (191), YP (192) *)
 type t = Bytes of Bytes.t | List of t list [@@deriving eq]
 
+(** Malformed encodings are ordinary errors, not runtime exceptions. *)
+type decode_error = Empty_input | Truncated_input | Non_canonical | Length_overflow | Trailing_bytes
+
 let of_bytes (bs : Bytes.t) = Bytes bs
 let of_bytes32 (bs : B32.t) = Bytes (B32.to_bytes bs)
 
@@ -24,14 +27,13 @@ let be (x : int) =
   Bytes.init x_bytes byte_i
 
 (** [decode_be bs] decodes a big-endian byte array of minimal length as an integer. This is the inverse
-    of {!be}. If the input byte array is not of minimal length, a runtime error is raised. *)
+    of {!be}. If the input byte array is not of minimal length, [Error Non_canonical] is returned. *)
 let decode_be (bs : Bytes.t) =
   let bs_le = Bytes.reverse bs in
   let num = Z.of_bits bs_le in
   let significant_bytes = (Z.numbits num + 7) / 8 in
   (* The byte array should be minimal. *)
-  assert (significant_bytes = Bytes.length bs) ;
-  num
+  if significant_bytes = Bytes.length bs then Ok num else Error Non_canonical
 
 let max_short_payload_len = 55
 
@@ -68,52 +70,67 @@ let rec encode (obj : t) : Bytes.t =
       encode_payload bs ~short_payload_prefix:short_list_prefix ~long_payload_prefix:long_list_prefix
 
 (** [decode_first bs] decodes the first RLP-encoded object in the byte array [bs] and returns it and any
-    remaining bytes. [bs] must be non-empty, otherwise a runtime error is raised. *)
-let rec decode_first (bs : Bytes.t) : t * Bytes.t =
+    remaining bytes. Empty or malformed input returns [Error]. *)
+let rec decode_first (bs : Bytes.t) : (t * Bytes.t, decode_error) result =
+  let open Result in
   let len = Bytes.length bs in
   (* The empty byte-string is not a valid RLP-encoded object. *)
-  assert (len > 0) ;
+  let$ () = ensure (len > 0) ~or_error:Empty_input in
   let tag = Char.code bs.[0] in
-  let payload_start, payload_len =
+  let$ payload_start, payload_len =
     match tag with
-    | b when b < short_bytes_prefix -> (0, 1)
+    | b when b < short_bytes_prefix -> Ok (0, 1)
     | b when b >= short_bytes_prefix && b <= long_bytes_prefix ->
         let len = b - short_bytes_prefix in
         (* Single bytes under 128 should be encoded as themselves. *)
-        if len = 1 then assert (Char.code bs.[1] >= short_bytes_prefix) ;
-        (1, len)
+        let$ () = ensure (len <> 1 || Bytes.length bs > 1) ~or_error:Truncated_input in
+        let$ () = ensure (len <> 1 || Char.code bs.[1] >= short_bytes_prefix) ~or_error:Non_canonical in
+        Ok (1, len)
     | b when b > long_bytes_prefix && b < short_list_prefix ->
         let payload_len_len = b - long_bytes_prefix in
-        let payload_len = Z.to_int (decode_be (Bytes.sub bs 1 payload_len_len)) in
+        let$ () = ensure (payload_len_len < len) ~or_error:Truncated_input in
+        let$ payload_len = decode_be (Bytes.sub bs 1 payload_len_len) in
+        let$ () = ensure (Z.fits_int payload_len) ~or_error:Length_overflow in
+        let payload_len = Z.to_int payload_len in
         (* Short payloads should encode the length as part of the tag. *)
-        assert (payload_len > max_short_payload_len) ;
-        (1 + payload_len_len, payload_len)
-    | b when b >= short_list_prefix && b <= long_list_prefix -> (1, b - short_list_prefix)
+        let$ () = ensure (payload_len > max_short_payload_len) ~or_error:Non_canonical in
+        Ok (1 + payload_len_len, payload_len)
+    | b when b >= short_list_prefix && b <= long_list_prefix -> Ok (1, b - short_list_prefix)
     | b ->
         let payload_len_len = b - long_list_prefix in
-        let payload_len = Z.to_int (decode_be (Bytes.sub bs 1 payload_len_len)) in
+        let$ () = ensure (payload_len_len < len) ~or_error:Truncated_input in
+        let$ payload_len = decode_be (Bytes.sub bs 1 payload_len_len) in
+        let$ () = ensure (Z.fits_int payload_len) ~or_error:Length_overflow in
+        let payload_len = Z.to_int payload_len in
         (* Short payloads should encode the length as part of the tag. *)
-        assert (payload_len > max_short_payload_len) ;
-        (1 + payload_len_len, payload_len)
+        let$ () = ensure (payload_len > max_short_payload_len) ~or_error:Non_canonical in
+        Ok (1 + payload_len_len, payload_len)
   in
+  (* Subtract before comparing: adding an untrusted length could overflow. *)
+  let$ () = ensure (payload_start <= len && payload_len <= len - payload_start) ~or_error:Truncated_input in
   let payload = Bytes.sub bs payload_start payload_len in
   let rest = Bytes.sub bs (payload_start + payload_len) (len - payload_start - payload_len) in
-  if tag < short_list_prefix then (Bytes payload, rest) else (List (decode_all payload), rest)
+  if tag < short_list_prefix then Ok (Bytes payload, rest)
+  else
+    let$ objects = decode_all payload in
+    Ok (List objects, rest)
 
 (** [decode_all bs] repeatedly applies [decode_first] to the byte array [bs] until it is empty, returning
-    a list containing the decoded objects. *)
-and decode_all (bs : Bytes.t) : t list =
-  if Bytes.length bs = 0 then []
+    a list containing the decoded objects, or the first decoding error. *)
+and decode_all (bs : Bytes.t) : (t list, decode_error) result =
+  let open Result in
+  if Bytes.length bs = 0 then Ok []
   else
-    let fst, rest = decode_first bs in
-    fst :: decode_all rest
+    let$ fst, rest = decode_first bs in
+    let$ objects = decode_all rest in
+    Ok (fst :: objects)
 
 (** [decode bs] behaves as [decode_first bs] except the input [bs] must contain exactly one RLP-encoded object,
-    otherwise a runtime error is raised. *)
+    otherwise [Error Trailing_bytes] is returned. *)
 let decode (bytes : Bytes.t) =
-  let obj, rest = decode_first bytes in
-  assert (Bytes.length rest = 0) ;
-  obj
+  let open Result in
+  let$ obj, rest = decode_first bytes in
+  if Bytes.length rest = 0 then Ok obj else Error Trailing_bytes
 
 let ( = ) = equal
 let ( <> ) x y = not (equal x y)
