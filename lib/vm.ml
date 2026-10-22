@@ -3,6 +3,9 @@
 open Numeric
 open Byte_string
 
+(* MIP-3 caps Monad Nine VM memory at 8 MiB. *)
+let max_memory_usage_for_revision = function `Eight -> Uint.zero | `Nine -> Uint.of_int (8 * 1024 * 1024)
+
 module Make
     (Params : sig
       include Chain.Monad.PARAMS
@@ -47,12 +50,7 @@ struct
       ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *)
       ; memory_capacity : Uint.t (* Total memory capacity in bytes. *) }
 
-    let max_memory_usage =
-      match Params.revision with
-      | `Eight -> Uint.zero
-      | `Nine ->
-          (* MIP-3. *)
-          Uint.of_int (8 * 1024 * 1024)
+    let max_memory_usage = max_memory_usage_for_revision Params.revision
 
     (** Check that the index start + size - 1 does not exceed the active bytes. This should never fail, since
         memory must be extended by a call to {!extend_to} beforehand.
@@ -119,11 +117,13 @@ struct
             let last = B32.to_bytes (read_aligned (start + ((n_words - 1) * 32)) mem) in
             Bytes.sub last (32 - suffix_len) suffix_len
         in
-        (* [buffer] is exactly [n_words] aligned words laid end to end. *)
+        (* [buffer] is exactly [n_words] aligned words laid end to end, without padding. *)
         let buffer = Bytes.concat Bytes.empty [prefix; bytes; suffix] in
-        List.fold_left
-          (fun mem w_index -> write_aligned (start + (w_index * 32)) (B32.sub buffer (w_index * 32)) mem)
-          mem (List.init n_words Fun.id)
+        let updates =
+          List.init n_words Fun.id
+          |> List.map (fun w_index -> (start + (w_index * 32), B32.sub buffer (w_index * 32)))
+        in
+        {mem with contents = M.add_seq (List.to_seq updates) mem.contents}
 
     let write_word_at (pos : U256.t) (w : U256.t) (mem : t) : t =
       let pos' = U256.to_int pos in
@@ -167,8 +167,9 @@ struct
 
     let dump mem =
       (* Write one word at a time *)
+      let active_bytes = mem.active_bytes in
       let rec loop pos =
-        if Uint.(pos < mem.active_bytes) then (
+        if Uint.(pos < active_bytes) then (
           Format.printf "%s: %s\n" (Uint.to_hex_string pos)
             (Bytes.to_hex_string (read_block_at (U256.of_uint_exn pos) U256.(~$32) mem)) ;
           loop Uint.(pos + ~$32) )
@@ -353,7 +354,19 @@ struct
         trace (fun () ->
             Format.sprintf "\tReturned %s\n" (Evmc.Result.StatusCode.to_string result.status_code) ) ;
         trace (fun () -> Format.sprintf "\tOutput buffer %s\n" (Bytes.to_hex_string result.output_data)) ;
-        return result
+        (* Native Int64.t is already in this signed range. The Rocq translation
+           models Int64.t as Z, so these checks carry the native range bound
+           across the host boundary in the generated model. *)
+        let message_below_min = match Int64.compare msg.gas Int64.min_int with -1 -> true | _ -> false in
+        let message_above_max = match Int64.compare msg.gas Int64.max_int with 1 -> true | _ -> false in
+        let result_above_max =
+          match Int64.compare result.gas_left Int64.max_int with 1 -> true | _ -> false
+        in
+        let negative_gas = match Int64.compare result.gas_left Int64.zero with -1 -> true | _ -> false in
+        let excess_gas = match Int64.unsigned_compare result.gas_left msg.gas with 1 -> true | _ -> false in
+        if message_below_min || message_above_max || result_above_max || negative_gas || excess_gas then
+          fail Evmc.Result.StatusCode.Internal_error
+        else return result
 
       let selfdestruct ~address ~beneficiary =
         host_trace (fun () ->
@@ -431,6 +444,15 @@ struct
 
   type opcode_impl = bool M.t
 
+  (** Select the opcode at the current program counter. This is kept separate
+      from [Executor.run] so native/model comparisons exercise the same code
+      as the dispatch loop. *)
+  let select_opcode (bytecode : Bytes.t) (pc : U256.t) : Opcode.t =
+    (* YP (157), YP (327) *)
+    match U256.to_int_opt pc with
+    | Some pc when pc < Bytes.length bytecode -> Opcode.of_byte bytecode.[pc]
+    | _ -> Opcode.Stop
+
   (** All opcode implementations require an execution environment to be provided. Instead of explicitly
       parameterizing each individual implementation, the entire implementation is lifted into a functor
       [Executor] which closes over the shared environment. *)
@@ -445,11 +467,13 @@ struct
 
     (* YP (160) *)
     let jump_destinations : U256.Set.t =
+      let bytecode = execution_environment.bytecode in
+      let bytecode_length = Bytes.length bytecode in
       (* YP (161) *)
       let rec loop i valid_destinations =
-        if i >= Bytes.length execution_environment.bytecode then valid_destinations
+        if i >= bytecode_length then valid_destinations
         else
-          let w = execution_environment.bytecode.[i] in
+          let w = bytecode.[i] in
           let valid_destinations =
             if w = '\x5b' then U256.(Set.add ~$i valid_destinations) else valid_destinations
           in
@@ -485,7 +509,7 @@ struct
           let$ _ =
             List.fold_leftM
               ~f:(fun i x ->
-                let v = if x < magic then U256.(x + one) else x in
+                let v = if U256.(x < magic) then U256.(x + one) else x in
                 let$ _ = HostAPI.set_transient_storage self (U256.to_repr i) (U256.to_repr v) in
                 return U256.(i + one) )
               base stack
@@ -696,7 +720,7 @@ struct
       let$ () = spend Gas.very_low in
 
       (* Operation *)
-      let$ () = push (U256.of_bool (x < y)) in
+      let$ () = push (U256.of_bool I256.(x < y)) in
 
       (* PC *)
       increase_pc_and_continue
@@ -710,7 +734,7 @@ struct
       let$ () = spend Gas.very_low in
 
       (* Operation *)
-      let$ () = push (U256.of_bool (x > y)) in
+      let$ () = push (U256.of_bool I256.(x > y)) in
 
       (* PC *)
       increase_pc_and_continue
@@ -1037,7 +1061,7 @@ struct
         | _, Some 0 -> return (0, Bytes.empty) (* No need for the copy_code call *)
         | Some offset, Some size -> (fun x -> (size, x)) <$> HostAPI.copy_code address ~offset ~size
         | None, Some size -> return (size, Bytes.make size '\x00')
-        | _, None -> assert false (* This should have caused an OOG error. *)
+        | _, None -> fail Out_of_gas
       in
       let$ () = update_field memory (Memory.write_block_at dst_start block) in
       let n = Bytes.length block in
@@ -1587,7 +1611,7 @@ struct
         match delegation with Delegated _ -> fail Create_from_delegated_eoa | Direct _ -> return ()
       in
 
-      if self_balance < endowment || new_depth > max_stack_depth then
+      if U256.(self_balance < endowment) || new_depth > max_stack_depth then
         let$ () = output_buffer := Bytes.empty in
         push U256.zero
       else
@@ -2025,15 +2049,9 @@ struct
         initial state [s], executing one opcode at a time until a termination condition is reached. *)
     let rec run (s : MachineState.t) =
       (* The dispatch loop runs on each opcode so it's written in direct style for performance. *)
+      let gas_before = s.gas in
       trace_state s ;
-      let pc = s.pc in
-      let opcode =
-        (* YP (157), YP (327)  *)
-        match U256.to_int_opt pc with
-        | Some pc when pc < Bytes.length execution_environment.bytecode ->
-            Opcode.of_byte execution_environment.bytecode.[pc]
-        | _ -> Opcode.Stop
-      in
+      let opcode = select_opcode execution_environment.bytecode s.pc in
       trace (fun () ->
           let info = Opcode.info opcode in
           Format.sprintf "Executing opcode 0x%x(%s)\n" (Char.code info.byte) info.name ) ;
@@ -2042,7 +2060,7 @@ struct
       | Ok continue ->
           if continue then
             (* YP (152) case 4 *)
-            run s
+            if Gas.(s.gas < gas_before) then run s else invalid_arg "Vm.Executor.run: non-decreasing gas"
           else
             (* YP (152) case 3 *)
             (Ok (), s)

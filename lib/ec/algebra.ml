@@ -115,10 +115,12 @@ end = struct
     let rec loop (r : impl) a (r' : impl) a' =
       if r' = zero then (a, r)
       else
+        let divisor_degree = degree r' in
         let quotient, remainder = div_rem r r' in
         let r, r' = (r', remainder) in
         let a, a' = (a', a - (quotient * a')) in
-        loop r a r' a'
+        if Stdlib.(divisor_degree >= 0 && degree r' < divisor_degree) then loop r a r' a'
+        else invalid_arg "Quotient_field.bezout_coeffs: non-decreasing remainder degree"
     in
     loop u one v zero
 
@@ -283,7 +285,9 @@ module Polynomial_ring (F : FIELD) = struct
       else
         let u_m = u.$(degree u) in
         let q = monomial F.(u_m * v_n_inv) Stdlib.(m - n) in
-        loop (u - (q * v)) (quot_acc + q)
+        let next_u = u - (q * v) in
+        if Stdlib.(m >= 0 && degree next_u < m) then loop next_u (quot_acc + q)
+        else invalid_arg "Polynomial_ring.div_rem: non-decreasing degree"
     in
     loop u zero
 
@@ -329,8 +333,9 @@ struct
       Underlying_ring.(
         let p = (p :> t) in
         let powers = (powers :> t iarray) in
+        let p_degree = degree p in
         let rec loop (i : int) (acc : t) =
-          if Stdlib.(i > degree p) then acc
+          if Stdlib.(i > p_degree) then acc
           else loop Stdlib.(i + 1) (acc + (Iarray.get powers i * const p.$(i)))
         in
         loop 0 zero )

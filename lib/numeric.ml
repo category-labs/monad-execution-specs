@@ -35,16 +35,20 @@ module Make (Byte_width : Traits.Byte_width.SIG) (Signedness : Traits.Signedness
 
     let bit_width = match Byte_width.byte_width with `Fixed n -> Some (8 * n) | `Variable -> None
 
+    (* A nonnegative power of two is a left shift. Keep the original Zarith
+       operation for invalid negative widths, including its exception. *)
+    let pow2_for_bound bits = if bits < 0 then Z.(~$2 ** bits) else Z.shift_left Z.one bits
+
     let max_t =
       match (bit_width, signed) with
       | None, _ -> None
-      | Some bits, true -> Some Z.((~$2 ** Stdlib.(bits - 1)) - one)
-      | Some bits, false -> Some Z.((~$2 ** bits) - one)
+      | Some bits, true -> Some Z.(pow2_for_bound Stdlib.(bits - 1) - one)
+      | Some bits, false -> Some Z.(pow2_for_bound bits - one)
 
     let min_t =
       match (bit_width, signed) with
       | _, false -> Some Z.zero
-      | Some bits, true -> Some Z.(zero - (~$2 ** Stdlib.(bits - 1)))
+      | Some bits, true -> Some Z.(zero - pow2_for_bound Stdlib.(bits - 1))
       | None, true -> None
 
     let in_range =

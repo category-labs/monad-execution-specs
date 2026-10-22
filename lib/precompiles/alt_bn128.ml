@@ -64,7 +64,7 @@ let pairing_check (msg : Evmc.Message.t) : Evmc.Result.t =
        let$ () = spend_gas Gas.(~$5 * ((~$34_000 * ~$k) + ~$45_000)) in
 
        (* YP (275), YP (276), YP (277), YP (278) *)
-       let$ pairs : (G_1.t * G_2.t) list = list k (pair point_g1 point_g2) in
+       let$ pairs : (G_1.t * G_2.t) list = list (Uint.of_int k) (pair point_g1 point_g2) in
 
        (* YP (273), YP (274) *)
        let result = pairing_check pairs in

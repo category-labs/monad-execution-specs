@@ -63,12 +63,47 @@ let test_non_canonical (name, hex) =
               (Rlp.to_string obj)
               Bytes.(to_hex_string Rlp.(encode obj)) ) )
 
+let malformed_encodings =
+  [ ("missing byte payload", "81")
+  ; ("missing list payload", "c1")
+  ; ("nested truncated list", "c2c1")
+  ; ("missing long byte length", "b8")
+  ; ("missing long list length", "f8")
+  ; ("truncated long byte payload", "b83800")
+  ; ("truncated long list payload", "f83800")
+  ; ("overflowing list length", "ffffffffffffffffff") ]
+
+let test_malformed (name, hex) =
+  Alcotest.(
+    test_case name `Quick (fun () ->
+        match decode_opt (Bytes.of_hex_string hex) with
+        | None -> ()
+        | Some _ -> failf "Accepted malformed encoding 0x%s" hex ) )
+
+let decode_first_progress bs =
+  match try Some (Rlp.decode_first bs) with _ -> None with
+  | None -> true
+  | Some (obj, rest) -> Bytes.length rest < Bytes.length bs && Rlp.encode obj ^ rest = bs
+
 let () =
   let open Alcotest in
   run "Unit tests on RLP encodings"
     [ ("Encoding examples", List.map (fun (obj, encoded) -> test_encoding obj encoded) examples)
     ; ("Decoding examples", List.map (fun (obj, encoded) -> test_decoding encoded obj) examples)
     ; ("Non-canonical encodings", List.map test_non_canonical non_canonical_encodings)
+    ; ("Malformed encodings", List.map test_malformed malformed_encodings)
+    ; ( "Streaming progress"
+      , [ check_prop ~print:Print.byte_string ~name:"accepted prefixes consume bytes and preserve the suffix"
+            Gen.(string_size ~gen:uint8 (int_range 0 64))
+            decode_first_progress
+        ; check_prop
+            ~print:Print.(pair rlp rlp)
+            ~name:"decode_first stops after the first object"
+            Gen.(pair (rlp ~nonempty:false) (rlp ~nonempty:false))
+            (fun (first, second) ->
+              let suffix = Rlp.encode second in
+              let decoded, rest = Rlp.decode_first (Rlp.encode first ^ suffix) in
+              decoded = first && rest = suffix ) ] )
     ; ( "Round-trip"
       , [ check_prop ~print:Print.rlp ~name:"x = decode (encode x)" (Gen.rlp ~nonempty:false) (fun obj ->
               Rlp.(obj = decode (encode obj)) ) ] )

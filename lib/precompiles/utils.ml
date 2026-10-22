@@ -87,12 +87,12 @@ module Precompile = struct
     let$ e2 = e2 in
     return (e1, e2)
 
-  let list (n : int) (elt : 'a t) : 'a list t =
+  let list (n : Uint.t) (elt : 'a t) : 'a list t =
     let rec loop i =
-      if i = 0 then return []
+      if Uint.is_zero i then return []
       else
         let$ hd = elt in
-        let$ tl = loop (i - 1) in
+        let$ tl = loop Uint.(i - one) in
         return (hd :: tl)
     in
     loop n

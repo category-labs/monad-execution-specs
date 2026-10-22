@@ -127,26 +127,30 @@ let blockchain_tests =
         |> List.mapi (fun i (path, filename) ->
             let path = path $/ filename in
             Alcotest.test_case filename `Quick (fun subtest_filter ->
-                let matches_subtest_filter : string -> bool =
-                  match subtest_filter with
-                  | None -> fun _ -> true
-                  | Some filter -> fun s -> Option.is_some (String.find_substring ~substring:filter s)
-                in
-                let matches_rev_filter : Fixtures.BlockchainTest.revision -> bool =
-                  let enabled_revisions =
-                    (enabled_revisions_for_test (group_name, i) :> Chain.Monad.Revision.t list)
+                (* A suppressed fixture may be unparseable, so skip it before
+                   [of_yojson], as well as through Alcotest's file filter. *)
+                if List.is_empty (enabled_revisions_for_test (group_name, i)) then ()
+                else
+                  let matches_subtest_filter : string -> bool =
+                    match subtest_filter with
+                    | None -> fun _ -> true
+                    | Some filter -> fun s -> Option.is_some (String.find_substring ~substring:filter s)
                   in
-                  function
-                  | Fixtures.BlockchainTest.Single rev -> List.mem rev enabled_revisions
-                  | Transition {pre; post; _} ->
-                      List.mem pre enabled_revisions && List.mem post enabled_revisions
-                  | Invalid -> false
-                in
-                Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path)
-                |> Result.get_ok'
-                |> List.filter (fun (name, (test : Fixtures.BlockchainTest.test_case)) ->
-                    matches_subtest_filter name && matches_rev_filter test.config.network )
-                |> List.iter run_blockchain_test ) )
+                  let matches_rev_filter : Fixtures.BlockchainTest.revision -> bool =
+                    let enabled_revisions =
+                      (enabled_revisions_for_test (group_name, i) :> Chain.Monad.Revision.t list)
+                    in
+                    function
+                    | Fixtures.BlockchainTest.Single rev -> List.mem rev enabled_revisions
+                    | Transition {pre; post; _} ->
+                        List.mem pre enabled_revisions && List.mem post enabled_revisions
+                    | Invalid -> false
+                  in
+                  Fixtures.BlockchainTest.of_yojson ~skip_invalid:false (Yojson.Safe.from_file path)
+                  |> Result.get_ok'
+                  |> List.filter (fun (name, (test : Fixtures.BlockchainTest.test_case)) ->
+                      matches_subtest_filter name && matches_rev_filter test.config.network )
+                  |> List.iter run_blockchain_test ) )
       in
       (group_name, tests) )
   |> List.of_seq

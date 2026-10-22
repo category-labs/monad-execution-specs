@@ -100,7 +100,12 @@ let rec decode_first (bs : Bytes.t) : t * Bytes.t =
   in
   let payload = Bytes.sub bs payload_start payload_len in
   let rest = Bytes.sub bs (payload_start + payload_len) (len - payload_start - payload_len) in
-  if tag < short_list_prefix then (Bytes payload, rest) else (List (decode_all payload), rest)
+  if tag < short_list_prefix then (Bytes payload, rest)
+  else if Bytes.length payload < len then (List (decode_all payload), rest)
+  else
+    (* A list payload omits at least its tag. Make progress explicit at the recursive boundary;
+       an exceptional byte operation must not feed a non-shrinking input back into the decoder. *)
+    invalid_arg "Rlp.decode_first: non-shrinking list payload"
 
 (** [decode_all bs] repeatedly applies [decode_first] to the byte array [bs] until it is empty, returning
     a list containing the decoded objects. *)
@@ -108,7 +113,8 @@ and decode_all (bs : Bytes.t) : t list =
   if Bytes.length bs = 0 then []
   else
     let fst, rest = decode_first bs in
-    fst :: decode_all rest
+    if Bytes.length rest < Bytes.length bs then fst :: decode_all rest
+    else invalid_arg "Rlp.decode_all: non-shrinking remainder"
 
 (** [decode bs] behaves as [decode_first bs] except the input [bs] must contain exactly one RLP-encoded object,
     otherwise a runtime error is raised. *)

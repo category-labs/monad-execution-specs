@@ -63,6 +63,7 @@ struct
     include Params
     let debug_tstore = false
   end
+  let vm_max_memory_usage = Vm.max_memory_usage_for_revision Params.revision
   module Instantiation = Host.Instantiate (Params) (Vm.Make (VmParams))
   module Host = Instantiation.Host
   module Vm = Vm.Make (VmParams) (Host)
@@ -89,7 +90,7 @@ struct
       ; input_data = data
       ; depth = 0l
       ; create2_salt = B32.zeros
-      ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
+      ; memory_capacity = Uint.to_uint32 vm_max_memory_usage }
 
   let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
     (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her
@@ -445,7 +446,7 @@ struct
           ; create2_salt = B32.zeros
           ; code_address = addr
           ; code
-          ; memory_capacity = Uint.to_uint32 Vm.Memory.max_memory_usage }
+          ; memory_capacity = Uint.to_uint32 vm_max_memory_usage }
       in
       let transaction_state =
         TransactionState.

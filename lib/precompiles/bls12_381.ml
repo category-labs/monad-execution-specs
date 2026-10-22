@@ -320,7 +320,7 @@ let g1_msm (msg : Evmc.Message.t) : Evmc.Result.t =
 
        let$ () = spend_gas Gas.(~$k * g1_mul_cost * g1_discount k / multiplier) in
 
-       let$ points = list k (pair point_g1 u256) in
+       let$ points = list (Uint.of_int k) (pair point_g1 u256) in
 
        (* TODO: this can be done faster with Pippenger's algorithm. *)
        let sum = List.fold_left (fun acc (pt, s) -> G_1.(acc + (U256.to_uint s * pt))) G_1.zero points in
@@ -350,7 +350,7 @@ let g2_msm (msg : Evmc.Message.t) : Evmc.Result.t =
 
        let$ () = spend_gas Gas.(~$k * g2_mul_cost * g2_discount k / multiplier) in
 
-       let$ points = list k (pair point_g2 u256) in
+       let$ points = list (Uint.of_int k) (pair point_g2 u256) in
 
        (* TODO: this can be done faster with Pippenger's algorithm. *)
        let sum = List.fold_left (fun acc (pt, s) -> G_2.(acc + (U256.to_uint s * pt))) G_2.zero points in
@@ -366,7 +366,7 @@ let pairing_check (msg : Evmc.Message.t) : Evmc.Result.t =
 
        let$ () = spend_gas Gas.((~$k * ~$32_600) + ~$37_700) in
 
-       let$ points = list k (pair point_g1 point_g2) in
+       let$ points = list (Uint.of_int k) (pair point_g1 point_g2) in
 
        return
          (if Ec.Bls12_381.pairing_check points then U256.(to_repr_bytes one) else U256.(to_repr_bytes zero))

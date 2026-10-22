@@ -86,9 +86,9 @@ let blake2f (msg : Evmc.Message.t) : Evmc.Result.t =
        let$ r = Option.or_fail (U32.to_int_opt r) in
 
        (* YP (298), YP (299), YP (300) *)
-       let$ h = Iarray.of_list <$> list 8 uint64_le in
+       let$ h = Iarray.of_list <$> list Uint.(~$8) uint64_le in
        (* YP (301), YP (302), YP (303) *)
-       let$ m = Iarray.of_list <$> list 16 uint64_le in
+       let$ m = Iarray.of_list <$> list Uint.(~$16) uint64_le in
 
        (* YP (304) *)
        let$ t_low = uint64_le in

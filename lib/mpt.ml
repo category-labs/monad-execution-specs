@@ -96,12 +96,20 @@ module Trie = struct
 
   type t = Empty | Branch of t Iarray.t * Rlp.t
 
+  (* Native key access raises before a progress guard can fail. Keep the bound
+     explicit so an exceptional model fallback cannot recur past the key. *)
   let rec insert (k : Nibbles.t) ?(depth = 0) (v : Rlp.t) = function
     | Branch (branches, _) when depth = Nibbles.length k -> Branch (branches, v)
     | Branch (branches, v') ->
         let k_i = Char.code k.[depth] in
         let branches =
-          Iarray.mapi (fun i b -> if i = k_i then insert k ~depth:(depth + 1) v b else b) branches
+          Iarray.mapi
+            (fun i b ->
+              if i = k_i then
+                if depth < Nibbles.length k then insert k ~depth:(depth + 1) v b
+                else invalid_arg "Mpt.Trie.insert: exhausted key"
+              else b )
+            branches
         in
         Branch (branches, v')
     | Empty when depth = Nibbles.length k -> Branch (Iarray.init branching_factor (fun _ -> Empty), v)
@@ -109,7 +117,10 @@ module Trie = struct
         let k_i = Char.code k.[depth] in
         Branch
           ( Iarray.init branching_factor (fun i ->
-                if i = k_i then insert k ~depth:(depth + 1) v Empty else Empty )
+                if i = k_i then
+                  if depth < Nibbles.length k then insert k ~depth:(depth + 1) v Empty
+                  else invalid_arg "Mpt.Trie.insert: exhausted key"
+                else Empty )
           , Rlp.Bytes Bytes.empty )
 
   let of_seq (entries : (Nibbles.t * Rlp.t) Seq.t) : t =
@@ -121,7 +132,8 @@ module Trie = struct
     | Branch (_branches, v) when depth = Nibbles.length k -> Some v
     | Branch (branches, _) ->
         let k_i = Char.code k.[depth] in
-        find k ~depth:(depth + 1) (Iarray.get branches k_i)
+        if depth < Nibbles.length k then find k ~depth:(depth + 1) (Iarray.get branches k_i)
+        else invalid_arg "Mpt.Trie.find: exhausted key"
 end
 
 (** Patricia tries indexed by nibble sequences. A Patricia trie is constructed from a prefix trie by merging
@@ -162,22 +174,30 @@ module PatriciaTrie = struct
             if v = Rlp.Bytes "" then Empty else Leaf {path = Nibbles.empty; value = v}
         | _ -> Branch (branches, v) )
 
-  let rec find (k : Nibbles.t) ?(depth = 0) (trie : t) =
-    match trie with
-    | Empty -> None
-    | Branch (_branches, v) when depth = Nibbles.length k -> Some v
-    | Branch (branches, _) ->
-        let k_i = Char.code k.[depth] in
-        find k ~depth:(depth + 1) (Iarray.get branches k_i)
-    | Leaf {path; value} ->
-        if depth + Nibbles.length path <> Nibbles.length k then None
-        else if Nibbles.is_prefix_at_depth ~prefix:path k ~depth then Some value
-        else None
-    | Extension {path_segment; subtree} ->
-        if depth + Nibbles.length path_segment > Nibbles.length k then None
-        else if Nibbles.is_prefix_at_depth ~prefix:path_segment k ~depth then
-          find k ~depth:(depth + Nibbles.length path_segment) subtree
-        else None
+  let find (k : Nibbles.t) ?(depth = 0) (trie : t) =
+    (* Expose the finite subtree to the recursive certificate separately from
+       the optional-argument wrapper. Empty extensions still consume a node. *)
+    let rec loop depth (trie : t) =
+      match trie with
+      | Empty -> None
+      | Branch (_branches, v) when depth = Nibbles.length k -> Some v
+      | Branch (branches, _) ->
+          let k_i = Char.code k.[depth] in
+          let child = Iarray.get branches k_i in
+          (* A successful native access already establishes this bound. *)
+          if 0 <= k_i && k_i < Iarray.length branches then loop (depth + 1) child
+          else invalid_arg "Mpt.PatriciaTrie.find: branch index out of bounds"
+      | Leaf {path; value} ->
+          if depth + Nibbles.length path <> Nibbles.length k then None
+          else if Nibbles.is_prefix_at_depth ~prefix:path k ~depth then Some value
+          else None
+      | Extension {path_segment; subtree} ->
+          if depth + Nibbles.length path_segment > Nibbles.length k then None
+          else if Nibbles.is_prefix_at_depth ~prefix:path_segment k ~depth then
+            loop (depth + Nibbles.length path_segment) subtree
+          else None
+    in
+    loop depth trie
 end
 
 (** Merkle trie nodes. A node in a Merkle Patricia trie is identical to a node in a Patricia trie, except
@@ -272,9 +292,9 @@ let rec of_patricia trie =
   | PatriciaTrie.Empty -> return Node.Empty
   | Branch (branches, value) ->
       let$ branches =
-        Iarray.to_seq branches
-        |> Seq.mapM ~f:(fun branch -> of_patricia branch >>= to_small_node_or_hash)
-        |> M.fmap Iarray.of_seq
+        Iarray.to_list branches
+        |> List.mapM ~f:(fun branch -> of_patricia branch >>= to_small_node_or_hash)
+        |> M.fmap Iarray.of_list
       in
       return (Node.Branch (branches, value))
   | Leaf {path; value} -> return (Node.Leaf {path; value})
