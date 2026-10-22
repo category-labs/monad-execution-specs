@@ -31,9 +31,29 @@ setup.log
 
 # Dune generated files
 *.install
+*.aux
+*.glob
+*.vo
+*.vok
+*.vos
+*.v.d
+.coqdeps.d
+.lia.cache
 
 # Local OPAM switch
 _opam/
+.opam-rocq-of-ocaml/
+
+# Pinned Rocq translation tool and generated Gallina
+.rocq-tools/
+rocq/generated/
+.gas-build/
+.gas-logs/
+.gas-tmp/
+
+# Python workflow caches
+__pycache__/
+*.pyc
 
 # Blockchain-test fixtures downloaded by scripts/download_mf_tests.sh
 test/execution/fixtures/blockchain_tests/mf_tests/

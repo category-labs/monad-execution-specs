@@ -1,0 +1,15 @@
+-Q . MonadExecutionSpecs
+
+Termination/StringFindSubstring.v
+Termination/Rlp.v
+Termination/TrieDepth.v
+Termination/PatriciaTrie.v
+Termination/Natural.v
+Termination/IntegerLoops.v
+Termination/FiniteSeq.v
+Termination/PrecompileList.v
+Termination/VmLoops.v
+Termination/Ec.v
+Unreachable/CryptoBlake2.v
+Refinement/UintRlp.v
+Refinement/UintArithmetic.v

@@ -1,0 +1,30 @@
+(** Reproduce the assumption audit in every aggregate build. *)
+Require Import MonadExecutionSpecs.Refinement.UintRlp.
+Require Import MonadExecutionSpecs.Refinement.UintArithmetic.
+Require Import MonadExecutionSpecs.Refinement.VmHostLift.
+Require Import MonadExecutionSpecs.Refinement.VmPartialObservation.
+
+Print Assumptions of_rlp_bytes_spec.
+Print Assumptions of_rlp_fallback_independent.
+Print Assumptions of_bytes_be_to_bytes_be.
+Print Assumptions to_bytes_be_length.
+Print Assumptions of_rlp_to_rlp.
+Print Assumptions to_rlp_of_rlp.
+Print Assumptions to_z_div.
+Print Assumptions to_z_modulo.
+Print Assumptions to_z_rem.
+Print Assumptions to_z_addmod.
+Print Assumptions to_z_mulmod.
+Print Assumptions to_z_pow.
+Print Assumptions bytes_to_whole_words_source_formula.
+Print Assumptions to_z_minus_1_64th.
+Print Assumptions to_z_div_rem.
+Print Assumptions to_z_shift_left.
+Print Assumptions to_z_shift_right.
+Print Assumptions shift_left_negative.
+Print Assumptions shift_right_negative.
+Print Assumptions host_lift_return.
+Print Assumptions host_lift_bind.
+Print Assumptions machine_bind_respects.
+Print Assumptions run_host_lift.
+Print Assumptions observe_machine_run.

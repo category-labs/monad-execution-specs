@@ -1,0 +1,25 @@
+#+title: Guarded translation baseline
+
+* Baseline
+This branch starts at public source =a5a25f9=. Commit =8410cc8= preserves
+the earlier guarded OCaml implementation; its lib and test trees are
+byte-identical to the previously checked snapshot. These guards are not
+proposed mainline changes. Translator pin: =d3afb526=.
+
+* Validation (2026-10-21)
+- All 66 native numeric, RLP, and MPT unit tests passed.
+- Fresh generation of all 42 modules matched =rocq/generated.sha256=.
+- =rocq/check-translation.sh= passed on that fresh output: full compilation,
+  sidecar proofs, 83 native/parser comparisons, the 697-theorem assumption
+  census, and the runtime-axiom bundle audit.
+- Independent kernel checking confirmed predicative Set, no type-in-type,
+  no unsafe (co)fixpoints, and no assumed positivity. This does not claim
+  axiom-freedom or semantic equivalence of the translation.
+- Tested in a fresh worktree with the existing pinned opam switch and a
+  new build directory, not a fresh clone or freshly installed switch.
+
+* Development
+Keep generated output in ignored =rocq/generated/next/=. Maintain proofs
+in =proofs/rocq/= and translation settings in =rocq/config/translation.json=.
+The translator repository's =WIP.md= describes the commands, architecture,
+and the separate unfinished public-main integration branch.

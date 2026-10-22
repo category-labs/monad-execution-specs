@@ -1,0 +1,3 @@
+(executable
+ (name uint_parser)
+ (libraries monad_lib))

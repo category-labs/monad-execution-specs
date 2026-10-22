@@ -1,0 +1,398 @@
+{
+  "require": [
+    ["Monad_lib", "MonadVM"]
+  ],
+  "module_overrides": [
+    [
+      "lib/numeric.ml",
+      "Uint",
+      "MonadVM.Numeric.Uint",
+      "MonadVM.Support.UintN"
+    ]
+  ],
+  "assumption_metadata_exclusions": [
+    ["lib/evmc.ml", "Instantiate"]
+  ],
+  "renaming_type_constructor": [
+    ["iarray", "RocqOfOCaml.OCamlIarray.t"],
+    ["*.Seq.t", "RocqOfOCaml.OCamlSeq.t"],
+    ["*.Seq.node", "RocqOfOCaml.OCamlSeq.node"]
+  ],
+  "excluded_definitions": [
+    ["lib/int64.ml", "*Hashtbl"],
+    ["lib/uint64.ml", "*Hashtbl"],
+    ["lib/numeric.ml", "*Hashtbl"],
+    ["lib/gas.ml", "*Hashtbl"],
+    ["lib/rlp.ml", "equal"],
+    ["lib/bloom.ml", "*to_yojson"],
+    ["lib/bloom.ml", "*of_yojson"],
+    ["lib/byte_string.ml", "*to_yojson"],
+    ["lib/byte_string.ml", "*of_yojson"],
+    ["lib/byte_string.ml", "*of_yojson_exn"],
+    ["lib/crypto.ml", "blake2f"],
+    ["lib/chain/ethereum.ml", "*to_yojson"],
+    ["lib/chain/ethereum.ml", "*of_yojson"],
+    ["lib/chain/ethereum.ml", "*of_yojson_exn"],
+    ["lib/chain/monad.ml", "*to_yojson"],
+    ["lib/chain/monad.ml", "*of_yojson"],
+    ["lib/execution.ml", "*to_yojson"],
+    ["lib/execution.ml", "Error.to_string"],
+    ["lib/gas.ml", "*to_yojson"],
+    ["lib/gas.ml", "*of_yojson"],
+    ["lib/gas.ml", "*of_yojson_exn"],
+    ["lib/host.ml", "*to_yojson"],
+    ["lib/host.ml", "*of_yojson"],
+    ["lib/host.ml", "WorldState.dump_accounts"],
+    ["lib/host.ml", "Make.dump_account"],
+    ["lib/execution.ml", "Make.Host.dump_account"],
+    ["lib/mpt.ml", "*to_yojson"],
+    ["lib/mpt.ml", "*of_yojson"],
+    ["lib/numeric.ml", "*to_yojson"],
+    ["lib/numeric.ml", "*of_yojson"],
+    ["lib/numeric.ml", "*of_yojson_exn"],
+    ["lib/vm.ml", "*to_yojson"],
+    ["lib/vm.ml", "*of_yojson"],
+
+    ["*", "*Seq.unfold"],
+    ["*", "*Seq.repeat"],
+    ["*", "*Seq.forever"],
+    ["*", "*Seq.cycle"],
+    ["*", "*Seq.iterate"],
+    ["*", "*Seq.group"],
+    ["*", "*Seq.memoize"],
+    ["*", "*Seq.Forced_twice"],
+    ["*", "*Seq.once"],
+    ["*", "*Seq.transpose"],
+    ["*", "*Seq.interleave"],
+    ["*", "*Seq.sorted_merge"],
+    ["*", "*Seq.of_dispenser"],
+    ["*", "*Seq.to_dispenser"],
+    ["*", "*Seq.ints"],
+    ["*", "*Seq.init"],
+    ["*", "*Seq.take"],
+    ["*", "*Seq.drop"]
+  ],
+  "file_head_suffixes": [
+    [
+      "lib/rlp.ml",
+      "Require Import MonadExecutionSpecs.Termination.Rlp."
+    ],
+    [
+      "lib/execution.ml",
+      "Require Import MonadVM.Support.BlockEquality."
+    ],
+    [
+      "lib/string.ml",
+      "Require Import MonadExecutionSpecs.Termination.StringFindSubstring."
+    ],
+    [
+      "lib/ec/algebra.ml",
+      "Require Import MonadExecutionSpecs.Termination.Natural.\nRequire Import MonadExecutionSpecs.Termination.IntegerLoops.\nRequire Import MonadExecutionSpecs.Termination.Ec."
+    ],
+    [
+      "lib/ec/curve.ml",
+      "Require Import MonadExecutionSpecs.Termination.Natural."
+    ],
+    [
+      "lib/ec/pairing.ml",
+      "Require Import MonadExecutionSpecs.Termination.Natural.\nRequire Import MonadExecutionSpecs.Termination.IntegerLoops."
+    ],
+    [
+      "lib/monad.ml",
+      "Require Import MonadExecutionSpecs.Termination.FiniteSeq."
+    ],
+    [
+      "lib/mpt.ml",
+      "Require Import MonadExecutionSpecs.Termination.Mpt.\nRequire Import MonadExecutionSpecs.Termination.TrieDepth.\nRequire Import MonadExecutionSpecs.Termination.PatriciaTrie."
+    ],
+    [
+      "lib/precompiles/utils.ml",
+      "Require Import MonadExecutionSpecs.Termination.Natural.\nRequire Import MonadExecutionSpecs.Termination.PrecompileList."
+    ],
+    [
+      "lib/vm.ml",
+      "Require Import MonadExecutionSpecs.Termination.Natural.\nRequire Import MonadExecutionSpecs.Termination.IntegerLoops.\nRequire Import MonadExecutionSpecs.Termination.VmLoops.\nRequire Import MonadExecutionSpecs.Termination.VmGas."
+    ]
+  ],
+  "equality_overrides": [
+    [
+      "lib/execution.ml",
+      "Make.validate_input_block_against_output",
+      "MonadVM.Support.BlockEquality.equal"
+    ]
+  ],
+  "head_suffix": "Require Import MonadVM.Support.Variants.\nRequire MonadVM.Support.CryptoBlake2.",
+  "renaming_rules": [
+    ["*.Crypto.blake2f", "MonadVM.Support.CryptoBlake2.blake2f"]
+  ],
+  "normalize_included_roots": [
+    "MonadVM_Monad_Result_state_include",
+    "Numeric:Impl"
+  ],
+  "normalize_direct_monomorphic_function_roots": [
+    "MonadVM_Comparable_Make_include"
+  ],
+  "variant_constructors": [
+    ["Fixed", "MonadVM.Support.Variants.ByteWidth.Fixed"],
+    ["Variable", "MonadVM.Support.Variants.ByteWidth.VariableWidth"],
+    ["Signed", "MonadVM.Support.Variants.Signedness.Signed"],
+    ["Unsigned", "MonadVM.Support.Variants.Signedness.Unsigned"],
+    ["Warm", "MonadVM.Support.Variants.AccessStatus.Warm"],
+    ["Cold", "MonadVM.Support.Variants.AccessStatus.Cold"],
+    ["Zero", "MonadVM.Support.Variants.Revision.Zero"],
+    ["One", "MonadVM.Support.Variants.Revision.One"],
+    ["Two", "MonadVM.Support.Variants.Revision.Two"],
+    ["Three", "MonadVM.Support.Variants.Revision.Three"],
+    ["Four", "MonadVM.Support.Variants.Revision.Four"],
+    ["Five", "MonadVM.Support.Variants.Revision.Five"],
+    ["Six", "MonadVM.Support.Variants.Revision.Six"],
+    ["Seven", "MonadVM.Support.Variants.Revision.Seven"],
+    ["Eight", "MonadVM.Support.Variants.Revision.Eight"],
+    ["Nine", "MonadVM.Support.Variants.Revision.Nine"],
+    ["Ten", "MonadVM.Support.Variants.Revision.Ten"],
+    ["Next", "MonadVM.Support.Variants.Revision.Next"],
+    ["Transactions", "MonadVM.Support.Variants.MerkleKind.Transactions"],
+    ["Withdrawals", "MonadVM.Support.Variants.MerkleKind.Withdrawals"],
+    ["State", "MonadVM.Support.Variants.MerkleKind.State"],
+    ["Receipts", "MonadVM.Support.Variants.MerkleKind.Receipts"],
+    ["Legacy", "MonadVM.Support.Variants.TransactionKind.Legacy"],
+    ["AccessList", "MonadVM.Support.Variants.TransactionKind.AccessList"],
+    ["FeeMarket", "MonadVM.Support.Variants.TransactionKind.FeeMarket"],
+    ["SetCode", "MonadVM.Support.Variants.TransactionKind.SetCode"],
+    ["Null", "RocqOfOCaml.OCamlYojson.Null"],
+    ["Bool", "RocqOfOCaml.OCamlYojson.Bool"],
+    ["Int", "RocqOfOCaml.OCamlYojson.Int"],
+    ["Float", "RocqOfOCaml.OCamlYojson.Float"],
+    ["String", "RocqOfOCaml.OCamlYojson.String"],
+    ["Assoc", "RocqOfOCaml.OCamlYojson.Assoc"],
+    ["List", "RocqOfOCaml.OCamlYojson.List"],
+    ["Intlit", "RocqOfOCaml.OCamlYojson.Intlit"],
+    ["Tuple", "RocqOfOCaml.OCamlYojson.Tuple"],
+    ["Variant", "RocqOfOCaml.OCamlYojson.Variant"]
+  ],
+  "variant_types": [
+    ["Fixed", "MonadVM.Support.Variants.ByteWidth.t"],
+    ["Variable", "MonadVM.Support.Variants.ByteWidth.t"],
+    ["Signed", "MonadVM.Support.Variants.Signedness.t"],
+    ["Unsigned", "MonadVM.Support.Variants.Signedness.t"],
+    ["Warm", "MonadVM.Support.Variants.AccessStatus.t"],
+    ["Cold", "MonadVM.Support.Variants.AccessStatus.t"],
+    ["Zero", "MonadVM.Support.Variants.Revision.t"],
+    ["One", "MonadVM.Support.Variants.Revision.t"],
+    ["Two", "MonadVM.Support.Variants.Revision.t"],
+    ["Three", "MonadVM.Support.Variants.Revision.t"],
+    ["Four", "MonadVM.Support.Variants.Revision.t"],
+    ["Five", "MonadVM.Support.Variants.Revision.t"],
+    ["Six", "MonadVM.Support.Variants.Revision.t"],
+    ["Seven", "MonadVM.Support.Variants.Revision.t"],
+    ["Eight", "MonadVM.Support.Variants.Revision.t"],
+    ["Nine", "MonadVM.Support.Variants.Revision.t"],
+    ["Ten", "MonadVM.Support.Variants.Revision.t"],
+    ["Next", "MonadVM.Support.Variants.Revision.t"],
+    ["Transactions", "MonadVM.Support.Variants.MerkleKind.t"],
+    ["Withdrawals", "MonadVM.Support.Variants.MerkleKind.t"],
+    ["State", "MonadVM.Support.Variants.MerkleKind.t"],
+    ["Receipts", "MonadVM.Support.Variants.MerkleKind.t"],
+    ["Legacy", "MonadVM.Support.Variants.TransactionKind.t"],
+    ["AccessList", "MonadVM.Support.Variants.TransactionKind.t"],
+    ["FeeMarket", "MonadVM.Support.Variants.TransactionKind.t"],
+    ["SetCode", "MonadVM.Support.Variants.TransactionKind.t"],
+    ["Null", "RocqOfOCaml.OCamlYojson.t"],
+    ["Bool", "RocqOfOCaml.OCamlYojson.t"],
+    ["Int", "RocqOfOCaml.OCamlYojson.t"],
+    ["Float", "RocqOfOCaml.OCamlYojson.t"],
+    ["String", "RocqOfOCaml.OCamlYojson.t"],
+    ["Assoc", "RocqOfOCaml.OCamlYojson.t"],
+    ["List", "RocqOfOCaml.OCamlYojson.t"],
+    ["Intlit", "RocqOfOCaml.OCamlYojson.t"],
+    ["Tuple", "RocqOfOCaml.OCamlYojson.t"],
+    ["Variant", "RocqOfOCaml.OCamlYojson.t"]
+  ],
+  "recursion_strategies": [
+    ["lib/ec/algebra.ml", "Quotient_field.bezout_coeffs.loop", "well_founded"],
+    ["lib/ec/algebra.ml", "Polynomial_ring.Impl.of_coeffs.loop", "well_founded"],
+    ["lib/ec/algebra.ml", "Polynomial_ring.*.loop", "well_founded"],
+    ["lib/ec/algebra.ml", "Polynomial_ring.div_rem.loop", "well_founded"],
+    ["lib/ec/algebra.ml", "Polynomial_extension.automorphism.loop", "well_founded"],
+    ["lib/ec/algebra.ml", "Polynomial_extension.**.loop", "well_founded"],
+    ["lib/ec/curve.ml", "Make.*.loop", "well_founded"],
+    ["lib/ec/pairing.ml", "Make.**.loop", "well_founded"],
+    ["lib/ec/pairing.ml", "Make.miller_loop.loop", "well_founded"],
+    ["lib/monad.ml", "Make.Seq.sequence", "well_founded"],
+    ["lib/monad.ml", "Make.Seq.fold_leftM", "well_founded"],
+    ["lib/monad.ml", "Make.Seq.iterM", "well_founded"],
+    ["lib/monad.ml", "Make.Seq.foldM", "well_founded"],
+    ["lib/monad.ml", "Make2.Seq.sequence", "well_founded"],
+    ["lib/monad.ml", "Make2.Seq.iterM", "well_founded"],
+    ["lib/monad.ml", "Make2.Seq.foldM", "well_founded"],
+    ["lib/mpt.ml", "Trie.insert", "well_founded"],
+    ["lib/mpt.ml", "Trie.find", "well_founded"],
+    ["lib/mpt.ml", "PatriciaTrie.find.loop", "well_founded"],
+    ["lib/mpt.ml", "Node.of_rlp", "well_founded"],
+    ["lib/mpt.ml", "find.loop", "partial"],
+    ["lib/precompiles/utils.ml", "Precompile.list.loop", "well_founded"],
+    ["lib/rlp.ml", "decode_first", "well_founded"],
+    ["lib/string.ml", "find_substring.matches_at", "well_founded"],
+    ["lib/vm.ml", "Make.Memory.dump.loop", "well_founded"],
+    ["lib/vm.ml", "Make.Executor.jump_destinations.loop", "well_founded"],
+    ["lib/vm.ml", "Make.Executor.run", "well_founded"]
+  ],
+  "termination_certificates": [
+    [
+      "lib/ec/algebra.ml",
+      "Quotient_field.bezout_coeffs.loop",
+      "let '(_, _, divisor, _) := _rocq_state in MonadExecutionSpecs.Termination.Ec.degree_rank (D.(EUCLIDEAN_DOMAIN.degree) divisor)",
+      "MonadExecutionSpecs.Termination.Ec.solve_guarded_degree_decrease"
+    ],
+    [
+      "lib/ec/algebra.ml",
+      "Polynomial_ring.div_rem.loop",
+      "let '(dividend, _) := _rocq_state in MonadExecutionSpecs.Termination.Ec.degree_rank (degree dividend)",
+      "MonadExecutionSpecs.Termination.Ec.solve_guarded_degree_decrease"
+    ],
+    [
+      "lib/mpt.ml",
+      "Trie.insert",
+      "let '(key, depth) := _rocq_state in MonadExecutionSpecs.Termination.TrieDepth.key_depth_rank key depth",
+      "MonadExecutionSpecs.Termination.TrieDepth.solve_key_depth_decrease"
+    ],
+    [
+      "lib/mpt.ml",
+      "Trie.find",
+      "let '(key, depth) := _rocq_state in MonadExecutionSpecs.Termination.TrieDepth.key_depth_rank key depth",
+      "MonadExecutionSpecs.Termination.TrieDepth.solve_key_depth_decrease"
+    ],
+    [
+      "lib/mpt.ml",
+      "PatriciaTrie.find.loop",
+      "let fix tree_size (trie : t) : nat := match trie with | Empty => 1%nat | Branch children _ => S (Stdlib.Lists.List.fold_right (fun child total => (tree_size child + total)%nat) 0%nat children) | Leaf _ => 1%nat | Extension node => S (tree_size node.(t.Extension.subtree)) end in let '(_, trie) := _rocq_state in tree_size trie",
+      "MonadExecutionSpecs.Termination.PatriciaTrie.solve_patricia_decrease"
+    ],
+    [
+      "lib/rlp.ml",
+      "decode_first",
+      "MonadExecutionSpecs.Termination.Rlp.decode_rank _rocq_call",
+      "MonadExecutionSpecs.Termination.Rlp.solve_decode_decrease"
+    ],
+    [
+      "lib/string.ml",
+      "find_substring.matches_at",
+      "let '(i_value, j_value) := _rocq_state in MonadExecutionSpecs.Termination.StringFindSubstring.matches_at_rank str_len substr_len i_value j_value",
+      "MonadExecutionSpecs.Termination.StringFindSubstring.solve_matches_at_decrease"
+    ],
+    [
+      "lib/ec/algebra.ml",
+      "Polynomial_ring.Impl.of_coeffs.loop",
+      "MonadExecutionSpecs.Termination.IntegerLoops.countdown_rank _rocq_state",
+      "MonadExecutionSpecs.Termination.IntegerLoops.solve_countdown_decrease"
+    ],
+    [
+      "lib/ec/algebra.ml",
+      "Polynomial_ring.*.loop",
+      "let '(j_value, _) := _rocq_state in MonadExecutionSpecs.Termination.IntegerLoops.countdown_rank j_value",
+      "MonadExecutionSpecs.Termination.IntegerLoops.solve_countdown_decrease"
+    ],
+    [
+      "lib/ec/algebra.ml",
+      "Polynomial_extension.automorphism.loop",
+      "let '(i_value, _) := _rocq_state in MonadExecutionSpecs.Termination.Ec.automorphism_rank p_degree i_value",
+      "MonadExecutionSpecs.Termination.Ec.solve_automorphism_decrease"
+    ],
+    [
+      "lib/ec/algebra.ml",
+      "Polynomial_extension.**.loop",
+      "let '(n_value, _, _) := _rocq_state in MonadExecutionSpecs.Termination.Natural.n_rank n_value",
+      "MonadExecutionSpecs.Termination.Natural.solve_uint_halving_decrease"
+    ],
+    [
+      "lib/ec/curve.ml",
+      "Make.*.loop",
+      "let '(n_value, _, _) := _rocq_state in MonadExecutionSpecs.Termination.Natural.n_rank n_value",
+      "MonadExecutionSpecs.Termination.Natural.solve_uint_halving_decrease"
+    ],
+    [
+      "lib/ec/pairing.ml",
+      "Make.**.loop",
+      "let '(n_value, _, _) := _rocq_state in MonadExecutionSpecs.Termination.Natural.n_rank n_value",
+      "MonadExecutionSpecs.Termination.Natural.solve_uint_halving_decrease"
+    ],
+    [
+      "lib/ec/pairing.ml",
+      "Make.miller_loop.loop",
+      "let '(i_value, _, _) := _rocq_state in MonadExecutionSpecs.Termination.IntegerLoops.countdown_rank i_value",
+      "MonadExecutionSpecs.Termination.IntegerLoops.solve_countdown_decrease"
+    ],
+    [
+      "lib/monad.ml",
+      "Make.Seq.sequence",
+      "MonadExecutionSpecs.Termination.FiniteSeq.finite_seq_rank _rocq_state",
+      "MonadExecutionSpecs.Termination.FiniteSeq.solve_finite_seq_decrease"
+    ],
+    [
+      "lib/monad.ml",
+      "Make.Seq.fold_leftM",
+      "let '(_, _, seq) := _rocq_state in MonadExecutionSpecs.Termination.FiniteSeq.finite_seq_rank seq",
+      "MonadExecutionSpecs.Termination.FiniteSeq.solve_finite_seq_decrease"
+    ],
+    [
+      "lib/monad.ml",
+      "Make.Seq.iterM",
+      "let '(_, seq) := _rocq_state in MonadExecutionSpecs.Termination.FiniteSeq.finite_seq_rank seq",
+      "MonadExecutionSpecs.Termination.FiniteSeq.solve_finite_seq_decrease"
+    ],
+    [
+      "lib/monad.ml",
+      "Make.Seq.foldM",
+      "let '(_, _, seq) := _rocq_state in MonadExecutionSpecs.Termination.FiniteSeq.finite_seq_rank seq",
+      "MonadExecutionSpecs.Termination.FiniteSeq.solve_finite_seq_decrease"
+    ],
+    [
+      "lib/monad.ml",
+      "Make2.Seq.sequence",
+      "MonadExecutionSpecs.Termination.FiniteSeq.finite_seq_rank _rocq_state",
+      "MonadExecutionSpecs.Termination.FiniteSeq.solve_finite_seq_decrease"
+    ],
+    [
+      "lib/monad.ml",
+      "Make2.Seq.iterM",
+      "let '(_, seq) := _rocq_state in MonadExecutionSpecs.Termination.FiniteSeq.finite_seq_rank seq",
+      "MonadExecutionSpecs.Termination.FiniteSeq.solve_finite_seq_decrease"
+    ],
+    [
+      "lib/monad.ml",
+      "Make2.Seq.foldM",
+      "let '(_, _, seq) := _rocq_state in MonadExecutionSpecs.Termination.FiniteSeq.finite_seq_rank seq",
+      "MonadExecutionSpecs.Termination.FiniteSeq.solve_finite_seq_decrease"
+    ],
+    [
+      "lib/mpt.ml",
+      "Node.of_rlp",
+      "MonadExecutionSpecs.Termination.Mpt.node_of_rlp_rank _rocq_call",
+      "MonadExecutionSpecs.Termination.Mpt.solve_node_of_rlp_decrease"
+    ],
+    [
+      "lib/precompiles/utils.ml",
+      "Precompile.list.loop",
+      "MonadExecutionSpecs.Termination.PrecompileList.precompile_list_rank _rocq_state",
+      "MonadExecutionSpecs.Termination.Natural.solve_uint_countdown_decrease"
+    ],
+    [
+      "lib/vm.ml",
+      "Make.Memory.dump.loop",
+      "MonadExecutionSpecs.Termination.Natural.n_increasing_index_rank active_bytes _rocq_state",
+      "MonadExecutionSpecs.Termination.Natural.solve_uint_increasing_index_decrease"
+    ],
+    [
+      "lib/vm.ml",
+      "Make.Executor.jump_destinations.loop",
+      "let '(i_value, _) := _rocq_state in RocqOfOCaml.Termination.IncreasingIndex.increasing_index_rank bytecode_length i_value",
+      "MonadExecutionSpecs.Termination.VmLoops.solve_jump_destinations_decrease"
+    ],
+    [
+      "lib/vm.ml",
+      "Make.Executor.run",
+      "MonadExecutionSpecs.Termination.Natural.n_rank _rocq_state.(MonadVM.Vm.Make.MachineState.t.gas)",
+      "MonadExecutionSpecs.Termination.VmGas.solve_run_decrease"
+    ]
+  ]
+}

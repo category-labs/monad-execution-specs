@@ -1,0 +1,44 @@
+--- a/proofs/Basics.v
++++ b/proofs/Basics.v
+@@ -5,7 +5,7 @@
+ Import ListNotations.
+ Set Implicit Arguments.
+
+-Inductive sigS (A : Type) (P : A -> Set) : Set :=
++Polymorphic Inductive sigS (A : Type) (P : A -> Type) : Type :=
+ | existS : forall (x : A), P x -> sigS P.
+
+ Reserved Notation "{ x @ P }" (at level 0, x at level 99).
+@@ -18,7 +18,7 @@
+ Notation "{ ' pat : A @ P }" := (sigS (A := A) (fun pat => P)) : type_scope.
+
+ (** Conversion from a module to a first-class module. *)
+-Definition pack {A : Type} {P : A -> Set}
++Polymorphic Definition pack {A : Type} {P : A -> Type}
+     (M : {x : A & P x}) : {x : A @ P x} :=
+   let 'existT _ _ M := M in
+   existS _ _ M.
+@@ -117,13 +117,13 @@
+     (_ : Context) (Result : Set) : Set :=
+   Result.
+
+-Inductive extensible_type : Set :=
++Inductive extensible_type : Type :=
+ | Build_extensible : string -> forall (A : Set), A -> extensible_type.
+ Arguments Build_extensible : clear implicits.
+
+ (** Polymorphic variants. *)
+ Module Variant.
+-  Inductive t : Set :=
++  Inductive t : Type :=
+   | Build : string -> forall (A : Set), A -> t.
+
+   Arguments Build : clear implicits.
+--- a/proofs/_CoqProject
++++ b/proofs/_CoqProject
+@@ -1,5 +1,4 @@
+ -R . RocqOfOCaml
+--arg -impredicative-set
+
+ Basics.v
+ Partial.v

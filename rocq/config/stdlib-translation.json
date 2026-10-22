@@ -1,0 +1,13 @@
+{
+  "without_default_imports": true,
+  "head_suffix": "Require Import RocqOfOCaml.Libraries.\nRequire Import RocqOfOCaml.Basics.\nRequire Import RocqOfOCaml.Settings.\nRequire Import RocqOfOCaml.OCamlSeq.\nImport ListNotations.\nLocal Open Scope Z_scope.",
+  "without_guard_checking": [
+    ".opam-rocq-of-ocaml/_opam/lib/ocaml/list.ml"
+  ],
+  "renaming_rules": [
+    [
+      "Stdlib.compare",
+      "RocqOfOCaml.Basics.Stdlib.polymorphic_compare"
+    ]
+  ]
+}

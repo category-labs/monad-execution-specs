@@ -1,0 +1,17 @@
+{
+  "without_default_imports": true,
+  "head_suffix": "Require Import RocqOfOCaml.Libraries.\nRequire Import RocqOfOCaml.Basics.\nRequire Import RocqOfOCaml.Settings.\nImport ListNotations.\nLocal Open Scope Z_scope.",
+  "without_guard_checking": [
+    ".opam-rocq-of-ocaml/_opam/lib/ocaml/seq.ml"
+  ],
+  "renaming_rules": [
+    [
+      "Stdlib.Seq.t",
+      "t"
+    ],
+    [
+      "Stdlib.Seq.node",
+      "node"
+    ]
+  ]
+}
