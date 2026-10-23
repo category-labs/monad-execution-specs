@@ -219,9 +219,10 @@ module Polynomial_ring (F : FIELD) = struct
     type t = impl
 
     let of_coeffs (coeffs : impl) =
-      let rec loop i = if i >= 0 && F.(Iarray.get coeffs i = zero) then loop (i - 1) else i in
       (* Here, the zero polynomial is given degree -1. *)
-      let degree = loop (Iarray.length coeffs - 1) in
+      let degree, _ =
+        Iarray.fold_left (fun (degree, i) c -> ((if F.(c = zero) then degree else i), i + 1)) (-1, 0) coeffs
+      in
       if degree = Iarray.length coeffs - 1 then coeffs
       else Iarray.init (degree + 1) (fun i -> Iarray.get coeffs i)
   end
@@ -327,13 +328,8 @@ struct
     fun p ->
       (* Do the entire computation in the underlying ring, then reduce. *)
       Underlying_ring.(
-        let p = (p :> t) in
         let powers = (powers :> t iarray) in
-        let rec loop (i : int) (acc : t) =
-          if Stdlib.(i > degree p) then acc
-          else loop Stdlib.(i + 1) (acc + (Iarray.get powers i * const p.$(i)))
-        in
-        loop 0 zero )
+        Iarray.mapi (fun i p_i -> Iarray.get powers i * const p_i) (p :> impl) |> Iarray.fold_left ( + ) zero )
       |> reduce
 
   (** Power function, used for computing Frobenius automorphisms. *)
