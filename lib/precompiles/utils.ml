@@ -87,15 +87,7 @@ module Precompile = struct
     let$ e2 = e2 in
     return (e1, e2)
 
-  let list (n : int) (elt : 'a t) : 'a list t =
-    let rec loop i =
-      if i = 0 then return []
-      else
-        let$ hd = elt in
-        let$ tl = loop (i - 1) in
-        return (hd :: tl)
-    in
-    loop n
+  let list (n : int) (elt : 'a t) : 'a list t = List.sequence (List.init n (fun _ -> elt))
 
   (** Gas checks. *)
   let spend_gas (gas : Gas.t) : unit t =
