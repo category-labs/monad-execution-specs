@@ -11,23 +11,12 @@ struct
   open Chain.Ethereum
   open Utils
 
-  (* Modexp gas cost calculation functions. YP (237), adjusted for EIP-2565. *)
-  let calculate_multiplication_complexity =
-    match revision with
-    | `Eight ->
-        (* EIP-2565. *)
-        fun ~base_length ~modulus_length ->
-          Uint.(
-            let max_length = max base_length modulus_length in
-            let words = ceil_div max_length ~$8 in
-            words ** 2 )
-    | `Nine ->
-        (* EIP-7883. *)
-        fun ~base_length ~modulus_length ->
-          Uint.(
-            let max_length = max base_length modulus_length in
-            let words = ceil_div max_length ~$8 in
-            if max_length > ~$32 then ~$2 * (words ** 2) else ~$16 )
+  (* Modexp gas cost calculation functions. YP (237), adjusted for EIP-7883. *)
+  let calculate_multiplication_complexity ~base_length ~modulus_length =
+    Uint.(
+      let max_length = max base_length modulus_length in
+      let words = ceil_div max_length ~$8 in
+      if max_length > ~$32 then ~$2 * (words ** 2) else ~$16 )
 
   let calculate_iteration_count =
     (* EIP-2565 and EIP-7883 use n.bit_length()-1. However, they implicitly take 0.bit_length() = 1. This is
@@ -37,47 +26,25 @@ struct
         (let b = Uint.significant_bits n in
          if b = 0 then 0 else b - 1 )
     in
-    match revision with
-    | `Eight ->
-        (* EIP-2565. *)
-        fun ~exponent_length ~exponent_upper_256_bits ->
-          let k =
-            (* YP (238), adjusted for EIP-2565 *)
-            match () with
-            | () when Uint.(exponent_length <= ~$32 && exponent_upper_256_bits = zero) -> Uint.zero
-            | () when Uint.(exponent_length <= ~$32) -> bit_length_minus_one exponent_upper_256_bits
-            | () -> Uint.((~$8 * (exponent_length - ~$32)) + bit_length_minus_one exponent_upper_256_bits)
-          in
-          Uint.(max k one)
-    | `Nine ->
-        (* EIP-7883. *)
-        fun ~exponent_length ~exponent_upper_256_bits ->
-          let k =
-            (* YP (238), adjusted for EIP-7883 *)
-            match () with
-            | () when Uint.(exponent_length <= ~$32 && exponent_upper_256_bits = zero) -> Uint.zero
-            | () when Uint.(exponent_length <= ~$32) -> bit_length_minus_one exponent_upper_256_bits
-            | () -> Uint.((~$16 * (exponent_length - ~$32)) + bit_length_minus_one exponent_upper_256_bits)
-          in
-          Uint.(max k one)
+    (* EIP-7883. *)
+    fun ~exponent_length ~exponent_upper_256_bits ->
+      let k =
+        (* YP (238), adjusted for EIP-7883 *)
+        match () with
+        | () when Uint.(exponent_length <= ~$32 && exponent_upper_256_bits = zero) -> Uint.zero
+        | () when Uint.(exponent_length <= ~$32) -> bit_length_minus_one exponent_upper_256_bits
+        | () -> Uint.((~$16 * (exponent_length - ~$32)) + bit_length_minus_one exponent_upper_256_bits)
+      in
+      Uint.(max k one)
 
   (* YP (236) *)
   let gas_quad_divisor = Gas.(~$3)
 
-  let calculate_gas_cost =
-    match revision with
-    | `Eight ->
-        (* EIP-2565. *)
-        fun ~base_length ~modulus_length ~exponent_length ~exponent_upper_256_bits ->
-          let multiplication_complexity = calculate_multiplication_complexity ~base_length ~modulus_length in
-          let iteration_count = calculate_iteration_count ~exponent_length ~exponent_upper_256_bits in
-          Uint.(max ~$200 (multiplication_complexity * iteration_count / gas_quad_divisor))
-    | `Nine ->
-        (* EIP-7883. *)
-        fun ~base_length ~modulus_length ~exponent_length ~exponent_upper_256_bits ->
-          let multiplication_complexity = calculate_multiplication_complexity ~base_length ~modulus_length in
-          let iteration_count = calculate_iteration_count ~exponent_length ~exponent_upper_256_bits in
-          Uint.(max ~$500 (multiplication_complexity * iteration_count))
+  (* EIP-7883. *)
+  let calculate_gas_cost ~base_length ~modulus_length ~exponent_length ~exponent_upper_256_bits =
+    let multiplication_complexity = calculate_multiplication_complexity ~base_length ~modulus_length in
+    let iteration_count = calculate_iteration_count ~exponent_length ~exponent_upper_256_bits in
+    Uint.(max ~$500 (multiplication_complexity * iteration_count))
 
   (* Read at most 256 most significant bits from a buffer, at an arbitrary position which may exceed the length
      of the buffer. This is used for reading the top word of the exponent, which is required for gas
@@ -98,15 +65,10 @@ struct
   (* Input length bounds checking. *)
   let parameter_length =
     let open Precompile in
-    match revision with
-    | `Eight ->
-        (* EIP-2565. *)
-        U256.to_uint <$> u256
-    | `Nine ->
-        (* EIP-7823. *)
-        let$ len = U256.to_uint <$> u256 in
-        let$ () = when_ Uint.(len > ~$1_024) precompile_failure in
-        return len
+    (* EIP-7823. *)
+    let$ len = U256.to_uint <$> u256 in
+    let$ () = when_ Uint.(len > ~$1_024) precompile_failure in
+    return len
 
   let address = Address.of_hex_string "0x05"
 

@@ -1,5 +1,5 @@
 {
-  "./updated_2/selfdestructBalance.json::selfdestructBalance_MONAD_EIGHT": {
+  "./updated_2/selfdestructBalance.json::selfdestructBalance_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcStateTests/selfdestructBalanceFiller.yml",
       "sourceHash": "0x66218b0bf1319ddad278a571beef86389d1fcbcd6cac51f1fb4d2cd40d2306eb"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -69,14 +69,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

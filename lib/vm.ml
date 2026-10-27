@@ -47,12 +47,8 @@ struct
       ; active_bytes : Uint.t (* Corresponds to μ_i * 32 *)
       ; memory_capacity : Uint.t (* Total memory capacity in bytes. *) }
 
-    let max_memory_usage =
-      match Params.revision with
-      | `Eight -> Uint.zero
-      | `Nine ->
-          (* MIP-3. *)
-          Uint.of_int (8 * 1024 * 1024)
+    (* MIP-3. *)
+    let max_memory_usage = Uint.of_int (8 * 1024 * 1024)
 
     (** Check that the index start + size - 1 does not exceed the active bytes. This should never fail, since
         memory must be extended by a call to {!extend_to} beforehand.
@@ -138,22 +134,10 @@ struct
 
     let active_words mem = Uint.(bytes_to_whole_words mem.active_bytes)
 
-    let available_memory_size =
-      match Params.revision with
-      | `Eight -> fun _mem -> max_memory_usage
-      | `Nine -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
-
-    (* YP (330) *)
-    let extend_to_monad_eight ~start ~size_bytes mem =
-      if U256.(size_bytes = zero) then Some mem
-      else
-        (* Round up to whole words. *)
-        let active_words = Uint.(bytes_to_whole_words (U256.to_uint start + U256.to_uint size_bytes)) in
-        let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
-        Some {mem with active_bytes}
+    let available_memory_size mem = Uint.(mem.memory_capacity - mem.active_bytes)
 
     (* YP (330), accounting for the MIP-3 memory limit. *)
-    let extend_to_monad_nine ~start ~size_bytes mem =
+    let extend_to ~start ~size_bytes mem =
       if U256.(size_bytes = zero) then Some mem
       else
         (* Round up to whole words. *)
@@ -161,9 +145,6 @@ struct
         let active_bytes = Uint.(max mem.active_bytes (active_words * ~$32)) in
         (* MIP-3: enforce the per-call budget, not the global 8 MB ceiling. *)
         if Uint.(active_bytes <= mem.memory_capacity) then Some {mem with active_bytes} else None
-
-    let extend_to =
-      match Params.revision with `Eight -> extend_to_monad_eight | `Nine -> extend_to_monad_nine
 
     let dump mem =
       (* Write one word at a time *)
@@ -858,21 +839,18 @@ struct
       increase_pc_and_continue
 
     let clz =
-      match Params.revision with
-      | `Eight -> undefined
-      | `Nine ->
-          (* Stack *)
-          let$ value = pop in
+      (* Stack *)
+      let$ value = pop in
 
-          (* Gas *)
-          let$ () = spend Gas.low in
+      (* Gas *)
+      let$ () = spend Gas.low in
 
-          (* Operation *)
-          let result = U256.of_int (U256.bit_width - U256.significant_bits value) in
-          let$ () = push result in
+      (* Operation *)
+      let result = U256.of_int (U256.bit_width - U256.significant_bits value) in
+      let$ () = push result in
 
-          (* PC *)
-          increase_pc_and_continue
+      (* PC *)
+      increase_pc_and_continue
 
     let extend_memory_to ~start ~size_bytes : Uint.t M.t =
       if U256.(size_bytes = zero) then return Uint.zero
@@ -883,10 +861,7 @@ struct
         let$ () = memory := extended in
         let$ new_active_words = Memory.active_words <$> !memory in
         if Uint.(current_active_words >= new_active_words) then return Uint.zero
-        else
-          return
-            Gas.(
-              memory_cost Params.revision new_active_words - memory_cost Params.revision current_active_words )
+        else return Gas.(memory_cost new_active_words - memory_cost current_active_words)
 
     let keccak =
       (* Stack *)

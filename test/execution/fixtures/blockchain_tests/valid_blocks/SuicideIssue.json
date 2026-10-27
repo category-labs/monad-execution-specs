@@ -1,5 +1,5 @@
 {
-  "./updated_2/SuicideIssue.json::SuicideIssue_MONAD_EIGHT": {
+  "./updated_2/SuicideIssue.json::SuicideIssue_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "src/BlockchainTestsFiller/ValidBlocks/bcExploitTest/SuicideIssueFiller.json",
       "sourceHash": "0xb1dddf63a7d9d94aac50d328e922a330ef7bdedb89eac9b0c7f36d8a4f4e7db4"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -58,14 +58,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

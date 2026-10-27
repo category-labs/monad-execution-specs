@@ -1,5 +1,5 @@
 {
-  "./updated_2/ReturndatacopyBoundsOverflow.json::ReturndatacopyBoundsOverflow_MONAD_EIGHT": {
+  "./updated_2/ReturndatacopyBoundsOverflow.json::ReturndatacopyBoundsOverflow_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 3d13f1e",
       "filling-tool-version": "",
@@ -11,7 +11,7 @@
       "source": "Regression test for YP (158): RETURNDATACOPY source range check must not overflow before reporting Invalid_memory_access",
       "sourceHash": "0x0"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -58,14 +58,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
