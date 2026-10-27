@@ -90,3 +90,8 @@
  (name procedural_tests)
  (modules procedural_tests)
  (libraries monad_lib test_utils alcotest))
+
+(test
+ (name rejected_authorization_reserve)
+ (modules rejected_authorization_reserve)
+ (libraries monad_lib test_utils alcotest))
