@@ -140,7 +140,7 @@ struct
     let module Reserve_balance_introspection = Reserve_balance_introspection.Make (Revision) in
     match revision with
     | `Eight -> Address.Map.empty
-    | `Nine -> Address.Map.of_list [Reserve_balance_introspection.(address, precompile)]
+    | `Nine | `Ten -> Address.Map.of_list [Reserve_balance_introspection.(address, precompile)]
 
   (* π in YP (142). *)
   let precompile_addresses : Address.Set.t =
