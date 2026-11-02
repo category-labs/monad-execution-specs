@@ -4,6 +4,12 @@
 
 This repository contains the specification of the Monad Execution layer implemented as OCaml code.
 
+The experimental pre-MCP [account-configurable reserve design](docs/account-configurable-reserve.md)
+is available under explicitly selected revision `MONAD_ELEVEN`; network activation
+schedules are unchanged. All executable revisions now reject excessive gas
+fees in the reserve check for non-emptying senders; reserve configuration
+remains exclusive to Eleven.
+
 ## Building the source
 
 ### Requirements

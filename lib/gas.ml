@@ -163,7 +163,7 @@ let memory_cost (revision : Chain.Monad.Revision.active) =
       let memory_cost_per_word = ~$3 in
       fun (active_memory_words : Uint.t) ->
         Uint.(((active_memory_words ** 2) / ~$512) + (memory_cost_per_word * active_memory_words))
-  | `Nine ->
+  | `Nine | `Eleven ->
       (* MIP-3 *)
       fun (active_memory_words : Uint.t) -> Uint.(active_memory_words / ~$2)
 
