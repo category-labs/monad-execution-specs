@@ -17,10 +17,11 @@ module Revision = struct
     | `Eight
     | `Nine  (** Defined in {{:https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-6.md}MIP-6} *)
     | `Ten
+    | `Eleven  (** Experimental QEDK activation; otherwise inherits Nine, not all C++ MONAD_NEXT features. *)
     | `Next ]
   [@@deriving eq]
   let all_revisions : t list =
-    [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Ten; `Next]
+    [`Zero; `One; `Two; `Three; `Four; `Five; `Six; `Seven; `Eight; `Nine; `Ten; `Eleven; `Next]
 
   let to_string : t -> string = function
     | `Zero -> "MONAD_ZERO"
@@ -34,6 +35,7 @@ module Revision = struct
     | `Eight -> "MONAD_EIGHT"
     | `Nine -> "MONAD_NINE"
     | `Ten -> "MONAD_TEN"
+    | `Eleven -> "MONAD_ELEVEN"
     | `Next -> "MONAD_NEXT"
   let to_yojson (rev : t) : Yojson.Safe.t = `String (to_string rev)
 
@@ -49,6 +51,7 @@ module Revision = struct
     | "MONAD_EIGHT" -> Some `Eight
     | "MONAD_NINE" -> Some `Nine
     | "MONAD_TEN" -> Some `Ten
+    | "MONAD_ELEVEN" -> Some `Eleven
     | "MONAD_NEXT" -> Some `Next
     | _ -> None
   let of_yojson (json : Yojson.Safe.t) : (t, string) result =
@@ -56,9 +59,9 @@ module Revision = struct
     | `String str -> ( match of_string str with Some rev -> Ok rev | None -> Error "Revision.t" )
     | _ -> Error "Revision.t"
 
-  (** The monad revisions supported by the current version of the spec. By design, the spec only supports
-      two revisions at a time. *)
-  type active = [`Eight | `Nine]
+  (** Keep both supported historical revisions alongside the experimental QEDK revision.
+      Eleven is selected explicitly; the network timestamp schedules are unchanged. *)
+  type active = [`Eight | `Nine | `Eleven]
 
   let is_active (rev : t) : active option = match rev with #active as rev -> Some rev | _ -> None
   let all_active_revisions : active list = List.filter_map is_active all_revisions
