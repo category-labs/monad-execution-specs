@@ -80,46 +80,6 @@ module Make (M : SIG) = struct
             let$ xs' = mapM ~f xs in
             return (x' :: xs') )
   end
-
-  module Seq = struct
-    include Seq
-
-    let rec sequence (seq : 'a M.t Seq.t) : 'a Seq.t M.t =
-      let open M in
-      match Seq.uncons seq with
-      | None -> return Seq.empty
-      | Some (mx, mxs) ->
-          let$ x = mx in
-          let$ xs = sequence mxs in
-          M.return (Seq.cons x xs)
-
-    let mapM ~(f : 'a -> 'b M.t) (seq : 'a Seq.t) : 'b Seq.t M.t = sequence (map f seq)
-
-    let rec fold_leftM ~(f : 'acc -> 'a -> 'acc M.t) (acc : 'acc) (seq : 'a t) : 'acc M.t =
-      match Seq.uncons seq with
-      | Some (hd, tl) ->
-          let$ acc = f acc hd in
-          fold_leftM ~f acc tl
-      | None -> M.return acc
-
-    let rec iterM ~(f : 'a -> unit M.t) (seq : 'a Seq.t) : unit M.t =
-      let open M in
-      match Seq.uncons seq with
-      | None -> return ()
-      | Some (x, xs) ->
-          let$ () = f x in
-          iterM ~f xs
-
-    let rec foldM ~(f : 'acc -> 'x -> 'acc M.t) (acc : 'acc) (seq : 'a Seq.t) : 'acc M.t =
-      let open M in
-      match Seq.uncons seq with
-      | None -> return acc
-      | Some (x, xs) ->
-          let$ acc = f acc x in
-          foldM ~f acc xs
-
-    include Seq
-  end
 end
 [@@inline]
 
@@ -196,39 +156,6 @@ module Make2 (M : SIG2) = struct
             | Some x' ->
                 let$ xs' = filter_mapM ~f xs in
                 return (x' :: xs') ) )
-  end
-
-  module Seq = struct
-    include Seq
-
-    let rec sequence seq =
-      let open M in
-      match Seq.uncons seq with
-      | None -> return Seq.empty
-      | Some (mx, mxs) ->
-          let$ x = mx in
-          let$ xs = sequence mxs in
-          M.return (Seq.cons x xs)
-
-    let mapM ~f seq = sequence (map (fun x -> x >>= f) seq)
-
-    let rec iterM ~f seq =
-      let open M in
-      match Seq.uncons seq with
-      | None -> return ()
-      | Some (x, xs) ->
-          let$ () = f x in
-          iterM ~f xs
-
-    let rec foldM ~f (acc : 'acc) (seq : 'a Seq.t) =
-      let open M in
-      match Seq.uncons seq with
-      | None -> return acc
-      | Some (x, xs) ->
-          let$ acc = f acc x in
-          foldM ~f acc xs
-
-    include Seq
   end
 end
 [@@inline]
