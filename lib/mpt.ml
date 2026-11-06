@@ -274,9 +274,9 @@ let rec of_patricia trie =
   | PatriciaTrie.Empty -> return Node.Empty
   | Branch (branches, value) ->
       let$ branches =
-        Iarray.to_seq branches
-        |> Seq.mapM ~f:(fun branch -> of_patricia branch >>= to_small_node_or_hash)
-        |> M.fmap Iarray.of_seq
+        Iarray.to_list branches
+        |> List.mapM ~f:(fun branch -> of_patricia branch >>= to_small_node_or_hash)
+        |> M.fmap Iarray.of_list
       in
       return (Node.Branch (branches, value))
   | Leaf {path; value} -> return (Node.Leaf {path; value})

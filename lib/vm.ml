@@ -1464,9 +1464,7 @@ struct
       (* Stack *)
       let$ start, size_bytes = pop2 in
 
-      let$ topics : B32.t list =
-        List.of_seq <$> (Seq.(take n_topics (ints 0)) |> Seq.mapM ~f:(fun _ -> U256.to_repr <$> pop))
-      in
+      let$ topics : B32.t list = List.init n_topics Fun.id |> List.mapM ~f:(fun _ -> U256.to_repr <$> pop) in
 
       (* Gas *)
       let$ memory_extension_gas = extend_memory_to ~start ~size_bytes in
