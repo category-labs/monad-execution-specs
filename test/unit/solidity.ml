@@ -87,7 +87,7 @@ let rec val_to_string : type a. a typ -> a -> string =
   | Array typ -> list_to_string (val_to_string typ)
   | Fixed_bytes _ -> fun v -> Format.sprintf "\"0x%s\"" (Bytes.to_hex_string v)
   | Bytes -> fun v -> Format.sprintf "\"0x%s\"" (Bytes.to_hex_string v)
-  | Map _ -> assert false
+  | Map m -> fun v -> val_to_string m.repr (m.encode v)
 
 let e_val_to_string (Pack_val (typ, v)) = Format.sprintf "%s : %s" (val_to_string typ v) (type_name typ)
 
@@ -111,15 +111,15 @@ and tuple_codec : type a. a tup -> a Codec.tup = function
         (Codec.cons (codec hd) (tuple_codec tl))
 
 let old_error = function
-  | Input_too_short -> "short"
-  | Input_too_long -> "long"
-  | Length_overflow -> "overflow"
-  | Map_error {name; message} -> name ^ ":" ^ message
+  | Input_too_short -> `Short
+  | Input_too_long -> `Long
+  | Length_overflow -> `Overflow
+  | Map_error {name; message} -> `Map (name, message)
 let new_error = function
-  | Codec.Input_too_short -> "short"
-  | Codec.Input_too_long -> "long"
-  | Codec.Length_overflow -> "overflow"
-  | Codec.Map_error {name; message} -> name ^ ":" ^ message
+  | Codec.Input_too_short -> `Short
+  | Codec.Input_too_long -> `Long
+  | Codec.Length_overflow -> `Overflow
+  | Codec.Map_error {name; message} -> `Map (name, message)
 let same_result old fresh = Result.map_error old_error old = Result.map_error new_error fresh
 
 let round_trip (Pack_val (typ, v)) =
@@ -148,9 +148,135 @@ let round_trip (Pack_val (typ, v)) =
      let truncated = String.sub encoded 0 (String.length encoded - 1) in
      same_result (dec_bytes typ truncated) (Codec.dec_bytes fresh truncated) )
 
+let check_same_decode typ input =
+  Alcotest.(check bool)
+    "same value or exact decode error" true
+    (same_result (dec_bytes typ input) (Codec.dec_bytes (codec typ) input))
+
+let word n = Numeric.U256.(to_repr ~$n) |> B32.to_bytes
+
+let test_boundaries () =
+  List.iter
+    (fun width ->
+      List.iter
+        (fun alignment ->
+          let fixed = Fixed_bytes {alignment; byte_width = width} in
+          let typ = Tuple [fixed; Bytes; Array fixed] in
+          let v = String.make width 'a' in
+          let value = Tuple.[v; "dynamic"; List.[v; v]] in
+          Alcotest.(check bool) "word boundary" true (round_trip (Pack_val (typ, value))) ;
+          let encoded = enc_bytes typ value in
+          for n = 0 to String.length encoded do
+            check_same_decode typ (String.sub encoded 0 n)
+          done ;
+          let packed = Packed.t (Tuple [fixed; fixed]) in
+          Alcotest.(check bool) "packed word boundary" true (round_trip (Pack_val (packed, Tuple.[v; v]))) )
+        [Left; Right] )
+    [0; 1; 31; 32; 33; 63; 64; 65]
+
+let test_tuple_offsets () =
+  let typ = Tuple [Bytes; Bytes] in
+  let encoded = enc_bytes typ Tuple.["abc"; "def"] in
+  (* The existing ABI ignores in-range offsets, rather than seeking to them. *)
+  let altered = word 0 ^ word 1 ^ String.sub encoded 64 (String.length encoded - 64) in
+  Alcotest.(check bool)
+    "original accepts altered offsets" true
+    (dec_bytes typ altered = Ok Tuple.["abc"; "def"]) ;
+  check_same_decode typ altered ;
+  let overflow = String.make 32 '\255' ^ String.sub encoded 32 (String.length encoded - 32) in
+  Alcotest.(check bool)
+    "offset overflow remains an error" true
+    (dec_bytes typ overflow = Error Length_overflow) ;
+  check_same_decode typ overflow
+
+let test_length_errors () =
+  let samples : string list =
+    [""; "x"; String.make 31 '\000'; word 1; word 33 ^ word 0; String.make 32 '\255']
+  in
+  List.iter (check_same_decode Bytes) samples ;
+  List.iter (check_same_decode (Array U64.t)) samples
+
+let test_mapping_errors () =
+  let typ =
+    Map
+      { name = "nonzero"
+      ; repr = U8.t
+      ; encode = Fun.id
+      ; decode = (fun n -> if Numeric.U8.(n = zero) then Error "zero is invalid" else Ok n) }
+  in
+  let zero = word 0 in
+  Alcotest.(check bool)
+    "mapped error retains name and message" true
+    (dec_bytes typ zero = Error (Map_error {name = "nonzero"; message = "zero is invalid"})) ;
+  check_same_decode typ zero ;
+  check_same_decode (Packed.t typ) zero ;
+  check_same_decode (Map {name = "outer"; repr = typ; encode = Fun.id; decode = (fun n -> Ok n)}) zero
+
+let test_padding_and_bool () =
+  let dirty = String.make 32 '\255' in
+  check_same_decode (Fixed_bytes {alignment = Left; byte_width = 1}) dirty ;
+  check_same_decode (Fixed_bytes {alignment = Right; byte_width = 1}) dirty ;
+  List.iter (fun n -> check_same_decode bool (word n)) [0; 1; 2; 255] ;
+  List.iter (fun n -> check_same_decode U64.t_option (word n)) [0; 1; 255]
+
+let test_packed_failure () =
+  let failure f =
+    try
+      ignore (f ()) ;
+      None
+    with Failure message -> Some message
+  in
+  Alcotest.(check (option string))
+    "packing dynamic bytes still fails"
+    (failure (fun () -> Packed.t Bytes))
+    (failure (fun () -> Codec.Packed.t Codec.bytes)) ;
+  Alcotest.(check (option string))
+    "packing a dynamic tuple still fails"
+    (failure (fun () -> Packed.t (Tuple [U64.t; Bytes])))
+    (failure (fun () -> Codec.Packed.t (Codec.tuple (Codec.tup2 (Codec.U64.t, Codec.bytes)))))
+
+let test_flat_tuple_and_topics () =
+  let old_types = [U64.t; Address.t] in
+  let fresh_types = Codec.tup2 (Codec.U64.t, Codec.Address.t) in
+  let n = Numeric.U64.of_int 17 and a = Chain.Ethereum.Address.zero in
+  Alcotest.(check string)
+    "flat tuple encoding"
+    (enc_bytes (Tuple old_types) Tuple.[n; a])
+    (Codec.enc_bytes (Codec.tuple fresh_types) (n, a)) ;
+  Alcotest.(check (list string))
+    "canonical names" ["uint64"; "address"]
+    (Codec.tuple_to_canonical_type_names fresh_types) ;
+  Alcotest.(check (list string))
+    "indexed topics"
+    (List.map B32.to_bytes (enc U64.t n @ enc Address.t a))
+    (List.map B32.to_bytes (Codec.encode_indexed_parameters fresh_types (n, a))) ;
+  let asserts f =
+    try
+      ignore (f ()) ;
+      false
+    with Assert_failure _ -> true
+  in
+  Alcotest.(check bool)
+    "multiword indexed topic remains unsupported" true
+    (asserts (fun () -> Codec.encode_indexed_parameters (Codec.tup1 Codec.bytes) "abc")) ;
+  Alcotest.(check string)
+    "nested tuple layout"
+    (enc_bytes (Tuple [Tuple old_types; Bytes]) Tuple.[Tuple.[n; a]; "tail"])
+    (Codec.enc_bytes (Codec.tuple (Codec.tup2 (Codec.tuple fresh_types, Codec.bytes))) ((n, a), "tail"))
+
 let () =
   let open Alcotest in
   run "Unit tests on Solidity-encoded data"
     [ ( "Original versus typed codecs"
       , [ check_prop ~count:100_000 ~print:e_val_to_string
-            ~name:"same layout, bytes, values and decoding errors" (gen_e_val ~static:false) round_trip ] ) ]
+            ~name:"same layout, bytes, values and decoding errors" (gen_e_val ~static:false) round_trip ] )
+    ; ( "ABI compatibility boundaries"
+      , List.map
+          (fun (name, test) -> test_case name `Quick test)
+          [ ("word boundaries and every truncation", test_boundaries)
+          ; ("ignored tuple offsets and overflow", test_tuple_offsets)
+          ; ("length errors", test_length_errors)
+          ; ("mapped decoding errors", test_mapping_errors)
+          ; ("padding, bool and optional values", test_padding_and_bool)
+          ; ("reject dynamic packed types", test_packed_failure)
+          ; ("flat tuples, nested layout and indexed topics", test_flat_tuple_and_topics) ] ) ]
