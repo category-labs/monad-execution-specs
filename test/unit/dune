@@ -15,7 +15,7 @@
 
 (test
  (name solidity)
- (modules solidity)
+ (modules solidity abi_reference)
  (libraries monad_lib test_utils alcotest qcheck-core qcheck-alcotest yojson))
 
 (test

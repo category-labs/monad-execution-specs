@@ -4,6 +4,25 @@
 
 This repository contains the specification of the Monad Execution layer, as an OCaml program.
 
+## Contract ABI
+
+The [typed codec API](lib/contract/type.mli) describes ABI values without GADTs.
+For example, `Type.tup2 (Type.Address.t, Type.U256.t)` describes two parameters
+whose OCaml value is the ordinary pair `(recipient, amount)`. `Type.tuple`
+embeds those fields as one ABI value; `Type.mapped` adapts a codec to a domain
+type. Codec records are hidden so callers construct them through the typed
+combinators rather than supply layout and encoding operations independently.
+
+`Function.pack` closes over a function's typed codecs and handler to produce
+the uniform message handler stored in a contract's dispatch table. This avoids
+existential function packages without removing input/output type checking.
+
+The [ABI tests](test/unit/solidity.ml) compare the codecs against the frozen
+pre-refactor implementation, including malformed input behavior and packed
+storage layouts. The old GADTs remain only in that test oracle, not in the
+execution model. This source refactor does not itself establish a verified
+Rocq translation or complete the staking proofs.
+
 ## Building the source
 
 ### Requirements

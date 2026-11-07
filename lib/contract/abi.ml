@@ -6,9 +6,7 @@ open Type
 
 (** Convert a tuple of types into a list of their canonical type names. This is used to get cryptographic
       signatures of function prototypes and events. *)
-let rec tuple_to_canonical_type_names : type a. a tup -> string list = function
-  | [] -> []
-  | ty :: tys -> type_name ty :: tuple_to_canonical_type_names tys
+let tuple_to_canonical_type_names = Type.tuple_to_canonical_type_names
 
 module Event = struct
   type ('i, 'ni) t =
@@ -23,16 +21,7 @@ module Event = struct
     in
     Crypto.keccak_256 (Format.sprintf "%s(%s)" ev.name params)
 
-  let rec encode_indexed_parameters : type i. i tup -> i -> B32.t list =
-   fun tys vals ->
-    match (tys, vals) with
-    | t :: tys, v :: vals ->
-        let v_enc = enc t v in
-        (* Non-word-sized types in indexed topics are encoded via a different scheme. For now it is not
-               necessary to implement this. *)
-        assert (List.length v_enc = 1) ;
-        List.hd v_enc :: encode_indexed_parameters tys vals
-    | [], [] -> []
+  let encode_indexed_parameters = Type.encode_indexed_parameters
 
   let to_log (ev : ('i, 'ni) t) (address : Address.t) (indexed_parameters : 'i) (non_indexed_parameters : 'ni)
       : Log.t =
@@ -82,7 +71,7 @@ module Signature = struct
       (s : ('i, 'o) t)
       (input : 'i) : Evmc.Message.t =
     let selector = if prepend_selector then Selector.to_bytes s.selector else Bytes.empty in
-    let input = enc (Tuple s.input) input in
+    let input = enc (tuple s.input) input in
     let input_data = Bytes.(concat empty (selector :: List.map B32.to_bytes input)) in
     Evmc.Message.
       { kind
