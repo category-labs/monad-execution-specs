@@ -560,17 +560,16 @@ struct
         (System_transaction_type.of_transaction new_tx)
     in
     let open System_transaction_type in
+    let$ () =
+      when_
+        (new_tx_ty = Reward && U256.(Transaction.value new_tx > Staking.max_block_reward))
+        (invalid_block block Invalid_reward_value)
+    in
     match seen_tx_tys with
     | last_tx_ty :: _ when last_tx_ty = new_tx_ty -> invalid_block block Duplicate_system_transaction
     | last_tx_ty :: _ when not (can_come_before last_tx_ty new_tx_ty) ->
         invalid_block block System_transaction_out_of_order
-    | _ ->
-        let$ () =
-          when_
-            (new_tx_ty = Reward && U256.(Transaction.value new_tx > Staking.max_block_reward))
-            (invalid_block block Invalid_reward_value)
-        in
-        return (new_tx_ty :: seen_tx_tys)
+    | _ -> return (new_tx_ty :: seen_tx_tys)
 
   let validate_monad_block (block : Block.t) : unit or_error =
     let open Result in
