@@ -2,7 +2,8 @@ open Monad_lib
 open Byte_string
 open Test_utils.Utils
 open QCheck2
-open Contract.Type
+module Codec = Contract.Type
+open Abi_reference
 
 type e_typ = Pack_typ : 'a typ -> e_typ
 type e_tup = Pack_tup : 'a Tuple.t tup -> e_tup
@@ -90,13 +91,66 @@ let rec val_to_string : type a. a typ -> a -> string =
 
 let e_val_to_string (Pack_val (typ, v)) = Format.sprintf "%s : %s" (val_to_string typ v) (type_name typ)
 
+(* Interpret the frozen descriptor into the new codec API, preserving the
+   original OCaml value type only inside this test oracle. *)
+let rec codec : type a. a typ -> a Codec.typ = function
+  | Tuple tup -> Codec.tuple (tuple_codec tup)
+  | Fixed_bytes {alignment; byte_width} ->
+      Codec.fixed_bytes
+        {alignment = (match alignment with Left -> Codec.Left | Right -> Codec.Right); byte_width}
+  | Bytes -> Codec.bytes
+  | Array typ -> Codec.array (codec typ)
+  | Map m -> Codec.mapped {name = m.name; repr = codec m.repr; encode = m.encode; decode = m.decode}
+
+and tuple_codec : type a. a tup -> a Codec.tup = function
+  | [] -> Codec.map_tuple ~encode:(fun Tuple.[] -> ()) ~decode:(fun () -> Tuple.[]) Codec.tup0
+  | hd :: tl ->
+      Codec.map_tuple
+        ~encode:(fun Tuple.(v :: vs) -> (v, vs))
+        ~decode:(fun (v, vs) -> Tuple.(v :: vs))
+        (Codec.cons (codec hd) (tuple_codec tl))
+
+let old_error = function
+  | Input_too_short -> "short"
+  | Input_too_long -> "long"
+  | Length_overflow -> "overflow"
+  | Map_error {name; message} -> name ^ ":" ^ message
+let new_error = function
+  | Codec.Input_too_short -> "short"
+  | Codec.Input_too_long -> "long"
+  | Codec.Length_overflow -> "overflow"
+  | Codec.Map_error {name; message} -> name ^ ":" ^ message
+let same_result old fresh = Result.map_error old_error old = Result.map_error new_error fresh
+
 let round_trip (Pack_val (typ, v)) =
-  let encoded = Bytes.(concat empty (List.map B32.to_bytes (enc typ v))) in
-  match dec_bytes typ encoded with Ok decoded -> v = decoded | Error _ -> false
+  let fresh = codec typ in
+  let encoded = enc_bytes typ v in
+  let fresh_encoded = Codec.enc_bytes fresh v in
+  let old = dec_bytes typ encoded in
+  let decoded = Codec.dec_bytes fresh encoded in
+  let same_layout =
+    match (kind typ, Codec.kind fresh) with
+    | Static a, Codec.Static b -> a.word_width = b.word_width
+    | Dynamic, Codec.Dynamic -> true
+    | _ -> false
+  in
+  same_layout
+  && type_name typ = Codec.type_name fresh
+  && encoded = fresh_encoded
+  && old = Ok v
+  && same_result old decoded
+  && same_result (dec_bytes typ (encoded ^ "x")) (Codec.dec_bytes fresh (encoded ^ "x"))
+  && same_result
+       (dec_bytes ~allow_trailing:true typ (encoded ^ "x"))
+       (Codec.dec_bytes ~allow_trailing:true fresh (encoded ^ "x"))
+  && ( String.length encoded = 0
+     ||
+     let truncated = String.sub encoded 0 (String.length encoded - 1) in
+     same_result (dec_bytes typ truncated) (Codec.dec_bytes fresh truncated) )
 
 let () =
   let open Alcotest in
   run "Unit tests on Solidity-encoded data"
-    [ ( "Round-trip encode-decode"
-      , [ check_prop ~count:100_000 ~print:e_val_to_string ~name:"x = dec (enc x)" (gen_e_val ~static:false)
-            round_trip ] ) ]
+    [ ( "Original versus typed codecs"
+      , [ check_prop ~count:100_000 ~print:e_val_to_string
+            ~name:"same layout, bytes, values and decoding errors" (gen_e_val ~static:false) round_trip ] ) ]
