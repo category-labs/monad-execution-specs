@@ -541,18 +541,17 @@ struct
             (Error.Invalid_block {block; reason = Unknown_system_transaction})
             (System_transaction_type.of_transaction new_tx)
         in
+        let$ () =
+          when_
+            (new_tx_ty = Reward && U256.(Transaction.value new_tx > Staking.max_block_reward))
+            (invalid_block block Invalid_reward_value)
+        in
         match seen_tx_tys with
         | [] -> return [new_tx_ty]
         | last_tx_ty :: _ when last_tx_ty = new_tx_ty -> invalid_block block Duplicate_system_transaction
         | last_tx_ty :: _ when not (System_transaction_type.can_come_before last_tx_ty new_tx_ty) ->
             invalid_block block System_transaction_out_of_order
-        | _ ->
-            let$ () =
-              when_
-                (new_tx_ty = Reward && U256.(Transaction.value new_tx > Staking.max_block_reward))
-                (invalid_block block Invalid_reward_value)
-            in
-            return (new_tx_ty :: seen_tx_tys)
+        | _ -> return (new_tx_ty :: seen_tx_tys)
       in
       ignore <$> List.fold_leftM ~f:check_system_transaction [] system_transactions
     in
