@@ -42,6 +42,41 @@
    (run %{gen}))))
 
 (library
+ (name c_evmc_generated)
+ (modules c_evmc_generated)
+ (libraries monomorphic ctypes))
+
+(executable
+ (name c_evmc_check_gen)
+ (modules c_evmc_check_gen)
+ (libraries monomorphic c_evmc_template c_evmc_generated ctypes))
+
+(rule
+ (targets c_evmc_checks.c)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run %{exe:c_evmc_check_gen.exe}))))
+
+(library
  (name c_evmc)
- (libraries monad_lib common c_evmc_template)
- (modules c_evmc c_evmc_generated))
+ (libraries monad_lib common c_evmc_template c_evmc_generated)
+ (modules c_evmc)
+ (foreign_stubs
+  (language c)
+  (names c_evmc_checks)
+  (include_dirs %{project_root}/third_party/evmc/include)))
+
+(rule
+ (alias runtest)
+ (deps
+  test_abi_checks.sh
+  c_evmc_checks.c
+  %{project_root}/third_party/evmc/include/evmc/evmc.h)
+ (action
+  (run
+   bash
+   %{dep:test_abi_checks.sh}
+   %{dep:c_evmc_checks.c}
+   %{dep:../../third_party/evmc/include/evmc/evmc.h}
+   %{cc})))
