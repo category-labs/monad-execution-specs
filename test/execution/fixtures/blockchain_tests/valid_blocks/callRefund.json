@@ -1,11 +1,11 @@
 {
-  "./updated_2/callRefund.json::callRefund_MONAD_EIGHT": {
+  "./updated_2/callRefund.json::callRefund_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "fixture-format": "blockchain_test",
       "hash": "0x745435ee232e98b7727f5854304752dd2bda40b7f215b280aa98509e714b425d"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -52,14 +52,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

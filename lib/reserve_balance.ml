@@ -69,14 +69,11 @@ let dipped_into_reserve (revision : Chain.Monad.Revision.active) : bool Transact
     in
     let original_balances = Address.Map.to_seq original_balances in
     let balances_to_check =
-      match revision with
-      | `Eight -> original_balances
-      | `Nine ->
-          original_balances
-          |> Seq.filter (fun (addr, _) ->
-              (* Monad §TODO: Accounts that are created and self-destructed in this transaction are allowed
+      original_balances
+      |> Seq.filter (fun (addr, _) ->
+          (* Monad §TODO: Accounts that are created and self-destructed in this transaction are allowed
                  to violate reserve balance conditions. *)
-              not (Address.Set.mem addr self_destruct) )
+          not (Address.Set.mem addr self_destruct) )
     in
     balances_to_check
     (* TODO: filter out the staking precompile once that is merged. *)

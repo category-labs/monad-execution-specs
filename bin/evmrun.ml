@@ -6,7 +6,7 @@ open Chain.Monad
 
 let usage_str =
   "Usage: evmrun <options> (--bytecode_file FILE | --bytecode HEX) (--calldata_file FILE | --calldata HEX)"
-let revision : Revision.active ref = ref `Eight
+let revision : Revision.active ref = ref `Nine
 let chain_id : Uint.t ref = ref Testnet.chain_id
 let bytecode_source = ref None
 let calldata_source = ref None
