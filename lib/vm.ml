@@ -50,7 +50,7 @@ struct
     let max_memory_usage =
       match Params.revision with
       | `Eight -> Uint.zero
-      | `Nine ->
+      | `Nine | `Eleven ->
           (* MIP-3. *)
           Uint.of_int (8 * 1024 * 1024)
 
@@ -141,7 +141,7 @@ struct
     let available_memory_size =
       match Params.revision with
       | `Eight -> fun _mem -> max_memory_usage
-      | `Nine -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
+      | `Nine | `Eleven -> fun mem -> Uint.(mem.memory_capacity - mem.active_bytes)
 
     (* YP (330) *)
     let extend_to_monad_eight ~start ~size_bytes mem =
@@ -163,7 +163,7 @@ struct
         if Uint.(active_bytes <= mem.memory_capacity) then Some {mem with active_bytes} else None
 
     let extend_to =
-      match Params.revision with `Eight -> extend_to_monad_eight | `Nine -> extend_to_monad_nine
+      match Params.revision with `Eight -> extend_to_monad_eight | `Nine | `Eleven -> extend_to_monad_nine
 
     let dump mem =
       (* Write one word at a time *)
@@ -860,7 +860,7 @@ struct
     let clz =
       match Params.revision with
       | `Eight -> undefined
-      | `Nine ->
+      | `Nine | `Eleven ->
           (* Stack *)
           let$ value = pop in
 

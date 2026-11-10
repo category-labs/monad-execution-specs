@@ -529,6 +529,12 @@ struct
     let open Result in
     let$ () = validate_block world_state block in
 
+    let world_state =
+      match Params.revision with
+      | `Eight | `Nine -> world_state
+      | `Eleven -> Reserve_balance.activate_precompile world_state
+    in
+
     (* The state at this point corresponds to the initiation state Γ(B) in YP (182) *)
     let block_state = BlockState.make world_state block in
 
