@@ -163,7 +163,7 @@ let memory_cost (revision : Chain.Monad.Revision.active) =
       let memory_cost_per_word = ~$3 in
       fun (active_memory_words : Uint.t) ->
         Uint.(((active_memory_words ** 2) / ~$512) + (memory_cost_per_word * active_memory_words))
-  | `Nine ->
+  | `Nine | `Ten ->
       (* MIP-3 *)
       fun (active_memory_words : Uint.t) -> Uint.(active_memory_words / ~$2)
 
@@ -178,6 +178,18 @@ let sreset_cost = ~$2_900 (* Equal to GAS_STORAGE_UPDATE - GAS_COLD_SLOAD in the
 let create_cost = ~$32_000
 let create_cost_per_initcode_word = ~$2
 let code_deposit_per_byte = ~$200
+
+(** MIP-8 base gas cost for each SLOAD and SSTORE. *)
+let page_base_cost = ~$100
+
+(** MIP-8 gas cost for the first time a storage page is read in a transaction. *)
+let page_load_cost = ~$8_000
+
+(** MIP-8 gas cost for the first time a storage page is written in a transaction. *)
+let page_write_cost = ~$2_800
+
+(** MIP-8 gas cost for when a transaction increases the net state of a page. *)
+let page_state_growth_cost = ~$17_000
 
 (* YP C_gascap *)
 let c_gascap ~gas ~gas_left ~memory_cost ~extra_cost =

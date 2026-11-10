@@ -229,6 +229,16 @@ module Types (F : Ctypes.TYPE) = struct
         ; (ModifiedRestored, modified_restored) ]
   end
 
+  module Page_storage_status = struct
+    (** evmc_page_storage_status *)
+    type repr
+
+    let repr : repr structure typ = structure "evmc_page_storage_status"
+    let first_page_write = field repr "first_page_write" bool
+    let grew_state = field repr "grew_state" bool
+    let () = seal repr
+  end
+
   module Host_context = struct
     (** evmc_host_context *)
     type repr
@@ -308,6 +318,14 @@ module Types (F : Ctypes.TYPE) = struct
     (** evmc_call_fn *)
     let call_fn = ptr Host_context.repr @-> ptr Message.repr @-> returning Result.repr
 
+    (** evmc_update_page_fn *)
+    let update_page_fn =
+      ptr Host_context.repr
+      @-> ptr Address.repr
+      @-> ptr Bytes32.repr
+      @-> Storage_status.t
+      @-> returning Page_storage_status.repr
+
     (** evmc_host_interface *)
     type repr
 
@@ -328,6 +346,7 @@ module Types (F : Ctypes.TYPE) = struct
     let access_storage = field repr "access_storage" (static_funptr access_storage_fn)
     let get_transient_storage = field repr "get_transient_storage" (static_funptr get_transient_storage_fn)
     let set_transient_storage = field repr "set_transient_storage" (static_funptr set_transient_storage_fn)
+    let update_page = field repr "update_page" (static_funptr update_page_fn)
     let () = seal repr
   end
 
