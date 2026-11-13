@@ -1,0 +1,27 @@
+(subdir
+ tests
+ (dirs TrieTests))
+
+(subdir
+ blake3/c
+ (foreign_library
+  (archive_name blake3_vendored)
+  (language c)
+  (names blake3 blake3_dispatch blake3_portable)
+  (flags
+   (:standard
+    -DBLAKE3_USE_NEON=0
+    -DBLAKE3_NO_SSE2
+    -DBLAKE3_NO_SSE41
+    -DBLAKE3_NO_AVX2
+    -DBLAKE3_NO_AVX512))))
+
+(library
+ (name blake3_vendored)
+ (public_name monad-spec.blake3_vendored)
+ (modules)
+ (foreign_archives blake3/c/blake3_vendored)
+ (foreign_stubs
+  (language c)
+  (names blake3_stubs)
+  (include_dirs blake3/c)))

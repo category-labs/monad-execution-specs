@@ -23,6 +23,20 @@ module Error = struct
     | Wrong_merkle_root of {kind : [`Transactions | `Withdrawals | `State | `Receipts]; expected : B32.t}
     | Wrong_gas_used of {expected : Gas.t}
     | Wrong_logs_bloom of {expected : Bloom.t}
+    | System_transaction_not_first
+    | Unknown_system_transaction
+    | Duplicate_system_transaction
+    | System_transaction_out_of_order
+    | Invalid_reward_value
+  [@@deriving to_yojson]
+
+  type invalid_system_transaction =
+    | Bad_sender of Address.t
+    | Bad_transaction_kind of Transaction.kind_tag
+    | Missing_recipient
+    | Invalid_system_contract of Address.t
+    | Non_zero_gas
+    | Execution_error of Evmc.Result.StatusCode.t
   [@@deriving to_yojson]
 
   type invalid_transaction =
@@ -36,8 +50,10 @@ module Error = struct
     | Cannot_pay_floor_gas of {floor_gas : Gas.t}
     | Cannot_pay_intrinsic_gas of {intrinsic_gas : Gas.t}
     | Empty_authorization_list
+    | System_sender_as_authority
     | Transaction_fee_below_base of {base_fee_per_gas : Gas.t}
     | Gas_above_limit
+    | System_transaction_error of invalid_system_transaction
   [@@deriving to_yojson]
 
   type t =
@@ -105,6 +121,26 @@ struct
     in
     {transaction_state with world_state}
 
+  let append_transaction_receipt
+      (block_state : BlockState.t)
+      (tx : Transaction.t)
+      (result : Evmc.Result.t)
+      (transaction_state : TransactionState.t) =
+    let receipt =
+      (* YP (90) *)
+      let logs = List.rev transaction_state.logs in
+      (* YP (91) *)
+      let succeeded = Evmc.Result.StatusCode.is_success result.status_code in
+      let bloom = Bloom.union (Seq.map Log.to_bloom (List.to_seq logs)) in
+      Receipt.
+        { tx_type = Transaction.kind_tag tx
+        ; cumulative_gas_used = (* YP (186) *) block_state.gas_used
+        ; bloom
+        ; succeeded (* YP (188) *)
+        ; logs (* YP (187) *) }
+    in
+    {block_state with transactions_processed = List.append block_state.transactions_processed [(tx, receipt)]}
+
   let validate_authorizations (block : Block.t) (tx : Transaction.t) : unit or_error =
     (* Validate transaction list of EIP-7702 SET_CODE transaction. We do not need to check field bounds her
        as these are implicit in the bit widths of the corresponding types. *)
@@ -113,6 +149,233 @@ struct
     | Transaction.SetCode {authorization_list = []; _} ->
         invalid_transaction block tx Empty_authorization_list
     | _ -> return ()
+
+  (* Monad-specific transaction validity checks. *)
+  let validate_monad_transaction (block : Block.t) (tx : Transaction.t) : unit or_error =
+    let open Result in
+    match tx with
+    | Transaction.SetCode {authorization_list; _} ->
+        (* SetCode transactions must not include the Monad system sender in their authorization list. *)
+        List.fold_leftM
+          ~f:(fun () auth ->
+            match Transaction.Authorization.authority auth with
+            | Some authority when Address.(authority = Chain.Monad.system_sender) ->
+                invalid_transaction block tx System_sender_as_authority
+            | _ -> return () )
+          () authorization_list
+    | _ -> return ()
+
+  type transaction_validation = {total_fee : U256.t; effective_gas_price : Uint.t; intrinsic_gas : Gas.t}
+
+  (* YP (69) (and related EIPs) *)
+  let validate_transaction
+      ?(check_gas = true) (block_state : BlockState.t) (tx : Transaction.t) (sender : Address.t) :
+      transaction_validation or_error =
+    Result.(
+      let block = block_state.current_block in
+
+      (* EIP-155. *)
+      let$ () =
+        match Transaction.chain_id tx with
+        | Some chain_id when Uint.(chain_id <> Params.chain_id) -> invalid_transaction block tx Wrong_chain_id
+        | _ -> return ()
+      in
+
+      (* T_g *)
+      let tx_gas_limit = Transaction.gas_limit tx in
+      (* Tₙ *)
+      let tx_nonce = Transaction.nonce tx in
+
+      (* YP (69), check T_g ≤ B_Hl - 𝓁(B_R)ᵤ. *)
+      let$ () =
+        when_
+          Gas.(tx_gas_limit + block_state.gas_used > block.header.gas_limit)
+          (invalid_transaction block tx Gas_above_limit)
+      in
+
+      let sender_account = block_state.^(BlockState.account sender) in
+
+      (* Basic validity checks. *)
+      (* EIP-2681. *)
+      let$ () = when_ U64.(tx_nonce = max_t) (invalid_transaction block tx Nonce_overflow) in
+      (* YP (71). *)
+      let$ () =
+        when_
+          U64.(sender_account.nonce <> tx_nonce)
+          (invalid_transaction block tx (Invalid_nonce {addr = sender; expected = sender_account.nonce}))
+      in
+
+      (* EIP-3860. *)
+      let$ () =
+        (* YP (71) *)
+        let initcode_size =
+          match Transaction.call_or_create tx with Create {initcode} -> Bytes.length initcode | _ -> 0
+        in
+        when_
+          (initcode_size > Chain.Monad.Constants.max_init_code_size)
+          (invalid_transaction block tx Initcode_too_long)
+      in
+
+      (* YP (64) *)
+      let intrinsic_gas = Gas.tx_intrinsic_gas tx in
+      let$ () =
+        when_
+          (check_gas && Gas.(intrinsic_gas > tx_gas_limit))
+          (invalid_transaction block tx (Cannot_pay_intrinsic_gas {intrinsic_gas}))
+      in
+
+      (* EIP-7825, adjusted for Monad §3. *)
+      let$ () = when_ Gas.(tx_gas_limit > tx_max_gas_limit) (invalid_transaction block tx Gas_above_limit) in
+
+      (* EIP-7623 *)
+      let floor_gas = Gas.tx_floor_gas tx in
+      let$ () =
+        when_
+          (check_gas && Gas.(floor_gas > tx_gas_limit))
+          (invalid_transaction block tx (Cannot_pay_floor_gas {floor_gas}))
+      in
+
+      let header = block.header in
+      let$ () =
+        when_
+          (Bytes.(sender_account.code <> empty) && not (Delegation.is_valid_delegation sender_account.code))
+          (invalid_transaction block tx (Invalid_delegation {code = sender_account.code}))
+      in
+      (* Validate EIP-7702 authorization list if relevant. *)
+      let$ () = validate_authorizations block tx in
+
+      (* Calculate effective gas price and max payable gas fee depending on transaction type. *)
+      let base_fee_per_gas = header.base_fee_per_gas in
+      (* p in YP (66), gas_bid in Monad §2. *)
+      let$ effective_gas_price =
+        match Gas.tx_effective_gas_price base_fee_per_gas tx with
+        | Some effective_gas_price -> Ok effective_gas_price
+        | None -> invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas})
+      in
+      let$ () =
+        (* Check gas_bid ≥ base_fee as per Monad §2.1. Note that this is equivalent to the check m ≥ H_f
+           in YP (69):
+             - For legacy and access list transactions, gas_bid = p = Tₚ = m
+             - For fee market and set code transactions, gas_bid = p = min(T_f + H_f, Tₘ).
+               Since T_f + H_f ≥ H_f, we have min(T_f + H_f, Tₘ) ≥ H_f iff Tₘ = m ≥ H_f.
+         *)
+        when_
+          (check_gas && Gas.(effective_gas_price < base_fee_per_gas))
+          (invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas}))
+      in
+
+      (* Total fee, calculated as T_g × p as in YP (74). As per Monad §2.3, the sender's balance is checked
+         against this quantity instead of the up-front cost v₀ described in YP (68). Note that unlike v₀, this
+         quantity does not include the value transfer: in Monad a transaction only needs to be able to pay the
+         gas fee to considered valid. If the account can pay the gas fees but not the value transfer, the
+         transaction will fail but it will not be considered invalid. In particular, irrevocable changes (fees
+         paid, nonce incremented) will take place. *)
+      let total_fee = Uint.(tx_gas_limit * effective_gas_price) in
+
+      let$ () =
+        when_
+          Uint.(total_fee > U256.to_uint sender_account.balance)
+          (invalid_transaction block tx
+             (Insufficient_balance {balance = sender_account.balance; required = total_fee}) )
+      in
+
+      let total_fee =
+        U256.of_uint_exn Uint.(effective_gas_price * tx_gas_limit)
+        (* Cannot fail as the check above ensures total_fee is bounded by balance. *)
+      in
+
+      (* Monad-specific validity checks. *)
+      let$ () = validate_monad_transaction block tx in
+
+      return {total_fee; effective_gas_price; intrinsic_gas} )
+
+  let validate_monad_system_transaction (block_state : BlockState.t) (tx : Transaction.t) (sender : Address.t)
+      : unit or_error =
+    let block = block_state.current_block in
+    let invalid_system_transaction reason = invalid_transaction block tx (System_transaction_error reason) in
+    Result.(
+      let$ () =
+        (* Sanity check, but note that the only code path that calls this function is under a check that
+           sender = system_sender.*)
+        when_ Address.(sender <> Chain.Monad.system_sender) (invalid_system_transaction (Bad_sender sender))
+      in
+
+      let$ tx_impl =
+        match tx with
+        | Legacy tx -> return tx
+        | _ -> invalid_system_transaction (Bad_transaction_kind (Transaction.kind_tag tx))
+      in
+
+      let$ to_ =
+        match tx_impl.to_ with Some to_ -> return to_ | None -> invalid_system_transaction Missing_recipient
+      in
+
+      let$ () =
+        when_
+          (not Address.Set.(mem to_ Precompiles.syscall_endpoint_addresses))
+          (invalid_system_transaction (Invalid_system_contract to_))
+      in
+
+      (* System transactions must have zero gas limit. The transaction validity check skips gas checks.
+         The C++ implementation checks against a synthetic gas limit of 2_000_000 instead, so the difference
+         could be observable if there are ever system transactions with an intrinsic or floor gas cost above
+         that number, which would be considered valid by the spec but rejected by the C++ client. *)
+      let$ () =
+        when_
+          Gas.(tx_impl.gas_limit <> zero || tx_impl.gas_price <> zero)
+          (invalid_system_transaction Non_zero_gas)
+      in
+
+      (* A Monad system transaction has to satisfy the same validity checks as a regular transaction
+         except for gas checks. In particular, the check here will reject a system transaction that comes
+         from a sender with non-empty code that isn't a valid delegation. This can only diverge from the
+         C++ behavior if the Monad system sender ever has code deployed to it. *)
+      let$ _ = validate_transaction ~check_gas:false block_state tx Chain.Monad.system_sender in
+      return () )
+
+  (** Process a Monad system transaction. Note that this is different from an Ethereum system message,
+      and more closely resembles a regular EOA transaction. In particular:
+      1. The sender's nonce is incremented.
+      2. The transaction produces logs and a receipt. *)
+  let process_monad_system_transaction (block_state : BlockState.t) (tx : Transaction.t) :
+      BlockState.t or_error =
+    let open Result in
+    let sender = Chain.Monad.system_sender in
+    let$ () = validate_monad_system_transaction block_state tx sender in
+
+    (* Execute transaction. *)
+    let result, transaction_state =
+      let transaction_state = TransactionState.make block_state sender tx in
+
+      (* Irrevocable change: increment nonce. YP (73), YP (74), YP (75). *)
+      let transaction_state =
+        transaction_state.^$(TransactionState.account sender) <-
+          (fun sender_account -> {sender_account with nonce = U64.(sender_account.nonce + one)})
+      in
+
+      let transaction_state =
+        TransactionState.initialize_access_sets tx transaction_state Precompiles.precompile_addresses
+      in
+
+      let available_gas = Gas.zero in
+      let message = prepare_message sender available_gas tx block_state.world_state in
+      Host.call_from_monad_system_transaction message transaction_state
+    in
+    (* System transactions must succeed. *)
+    let$ () =
+      when_
+        Evmc.Result.StatusCode.(result.status_code <> Success)
+        (invalid_transaction block_state.current_block tx
+           (System_transaction_error (Execution_error result.status_code)) )
+    in
+
+    (* Propagate state changes. *)
+    let block_state = {block_state with world_state = transaction_state.world_state} in
+
+    (* Append transaction receipt. *)
+    let block_state = append_transaction_receipt block_state tx result transaction_state in
+
+    return block_state
 
   (** [process_authorization s auth] checks the EIP-7702 authorization [auth] for validity and applies
       it to [s] if it is valid. This also bumps the emptying transaction counter for the recovered authority,
@@ -153,124 +416,12 @@ struct
             else s
           else transaction_state
 
-  type transaction_validation =
-    {sender : Address.t; total_fee : U256.t; effective_gas_price : Uint.t; intrinsic_gas : Gas.t}
-
-  (* YP (69) (and related EIPs) *)
-  let validate_transaction (block_state : BlockState.t) (tx : Transaction.t) : transaction_validation or_error
-      =
-    Result.(
-      let block = block_state.current_block in
-
-      let$ () =
-        match Transaction.chain_id tx with
-        | Some chain_id when Uint.(chain_id <> Params.chain_id) -> invalid_transaction block tx Wrong_chain_id
-        | _ -> return ()
-      in
-
-      (* T_g *)
-      let tx_gas_limit = Transaction.gas_limit tx in
-      (* Tₙ *)
-      let tx_nonce = Transaction.nonce tx in
-
-      (* Basic validity checks. *)
-      (* Nonce *)
-      let$ () = when_ U64.(tx_nonce = max_t) (invalid_transaction block tx Nonce_overflow) in
-      let$ sender =
-        match Transaction.sender Params.chain_id tx with
-        | None -> invalid_transaction block tx Invalid_signature
-        | Some sender -> return sender
-      in
-      let sender_account = block_state.world_state.^(WorldState.account sender) in
-      let$ () =
-        when_
-          U64.(sender_account.nonce <> tx_nonce)
-          (invalid_transaction block tx (Invalid_nonce {addr = sender; expected = sender_account.nonce}))
-      in
-      (* Initcode size *)
-      let$ () =
-        (* YP (71) *)
-        let initcode_size =
-          match Transaction.call_or_create tx with Create {initcode} -> Bytes.length initcode | _ -> 0
-        in
-        when_
-          (initcode_size > Chain.Monad.Constants.max_init_code_size)
-          (invalid_transaction block tx Initcode_too_long)
-      in
-
-      (* YP (64) *)
-      let intrinsic_gas = Gas.tx_intrinsic_gas tx in
-      let$ () =
-        when_
-          Gas.(intrinsic_gas > tx_gas_limit)
-          (invalid_transaction block tx (Cannot_pay_intrinsic_gas {intrinsic_gas}))
-      in
-
-      (* EIP-7825, adjusted for Monad §3. *)
-      let$ () = when_ Gas.(tx_gas_limit > tx_max_gas_limit) (invalid_transaction block tx Gas_above_limit) in
-
-      (* EIP-7623 *)
-      let floor_gas = Gas.tx_floor_gas tx in
-      let$ () =
-        when_ Gas.(floor_gas > tx_gas_limit) (invalid_transaction block tx (Cannot_pay_floor_gas {floor_gas}))
-      in
-
-      let header = block.header in
-      let$ () =
-        when_
-          (Bytes.(sender_account.code <> empty) && not (Delegation.is_valid_delegation sender_account.code))
-          (invalid_transaction block tx (Invalid_delegation {code = sender_account.code}))
-      in
-      (* Validate EIP-7702 authorization list if relevant. *)
-      let$ () = validate_authorizations block tx in
-
-      (* Calculate effective gas price and max payable gas fee depending on transaction type. *)
-      let base_fee_per_gas = header.base_fee_per_gas in
-      (* p in YP (66), gas_bid in Monad §2. *)
-      let$ effective_gas_price =
-        match Gas.tx_effective_gas_price base_fee_per_gas tx with
-        | Some effective_gas_price -> Ok effective_gas_price
-        | None -> invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas})
-      in
-      let$ () =
-        (* Check gas_bid ≥ base_fee as per Monad §2.1. Note that this is equivalent to the check m ≥ H_f
-           in YP (69):
-             - For legacy and access list transactions, gas_bid = p = Tₚ = m
-             - For fee market and set code transactions, gas_bid = p = min(T_f + H_f, Tₘ).
-               Since T_f + H_f ≥ H_f, we have min(T_f + H_f, Tₘ) ≥ H_f iff Tₘ = m ≥ H_f.
-         *)
-        when_
-          Gas.(effective_gas_price < base_fee_per_gas)
-          (invalid_transaction block tx (Transaction_fee_below_base {base_fee_per_gas}))
-      in
-
-      (* Total fee, calculated as T_g × p as in YP (74). As per Monad §2.3, the sender's balance is checked
-         against this quantity instead of the up-front cost v₀ described in YP (68). Note that unlike v₀, this
-         quantity does not include the value transfer: in Monad a transaction only needs to be able to pay the
-         gas fee to considered valid. If the account can pay the gas fees but not the value transfer, the
-         transaction will fail but it will not be considered invalid. In particular, irrevocable changes (fees
-         paid, nonce incremented) will take place. *)
-      let total_fee = Uint.(tx_gas_limit * effective_gas_price) in
-
-      let$ () =
-        when_
-          Uint.(total_fee > U256.to_uint sender_account.balance)
-          (invalid_transaction block tx
-             (Insufficient_balance {balance = sender_account.balance; required = total_fee}) )
-      in
-
-      let total_fee =
-        U256.of_uint_exn Uint.(effective_gas_price * tx_gas_limit)
-        (* Cannot fail as the check above ensures total_fee is bounded by balance. *)
-      in
-
-      return {sender; total_fee; effective_gas_price; intrinsic_gas} )
-
   (* YP (1), YP (61), YP (185) *)
-  let process_transaction (block_state : BlockState.t) (tx : Transaction.t) : BlockState.t or_error =
+  let process_transaction (block_state : BlockState.t) (tx : Transaction.t) (sender : Address.t) :
+      BlockState.t or_error =
     let open Result in
     let header = block_state.current_block.header in
-    let$ {sender; total_fee; effective_gas_price; intrinsic_gas} = validate_transaction block_state tx in
+    let$ {total_fee; effective_gas_price; intrinsic_gas} = validate_transaction block_state tx sender in
 
     (* Execute transaction. *)
     let result, transaction_state =
@@ -327,6 +478,10 @@ struct
         (fun balance -> U256.(balance + transaction_fee))
     in
 
+    (* Update gas used by the block. *)
+    let block_gas_used = Gas.(block_state.gas_used + tx_gas_used) in
+    let block_state = {block_state with gas_used = block_gas_used} in
+
     (* Destroy deleted accounts. *)
     (* YP (86), YP (87). YP (88) would happen here as well, but it is implemented eagerly via the
        WorldState.account lens. *)
@@ -339,29 +494,24 @@ struct
            block_state
     in
 
-    (* Update gas used by the block. *)
-    let block_gas_used = Gas.(block_state.gas_used + tx_gas_used) in
-    let block_state = {block_state with gas_used = block_gas_used} in
+    (* Append transaction receipt. *)
+    let block_state = append_transaction_receipt block_state tx result transaction_state in
 
-    (* Add receipt and logs. *)
-    let block_state =
-      let receipt =
-        (* YP (90) *)
-        let logs = List.rev transaction_state.logs in
-        (* YP (91) *)
-        let succeeded = Evmc.Result.StatusCode.is_success result.status_code in
-        let bloom = Bloom.union (Seq.map Log.to_bloom (List.to_seq logs)) in
-        Receipt.
-          { tx_type = Transaction.kind_tag tx
-          ; cumulative_gas_used = (* YP (186) *) block_state.gas_used
-          ; bloom
-          ; succeeded (* YP (188) *)
-          ; logs (* YP (187) *) }
-      in
-      { block_state with
-        transactions_processed = List.append block_state.transactions_processed [(tx, receipt)] }
-    in
     return block_state
+
+  type sender_kind = EOA of Address.t | System
+
+  let sender_kind (tx : Transaction.t) =
+    match Transaction.sender Params.chain_id tx with
+    | None -> None
+    | Some sender when Address.(sender = Chain.Monad.system_sender) -> Some System
+    | Some sender -> Some (EOA sender)
+
+  let dispatch_transaction (block_state : BlockState.t) (tx : Transaction.t) : BlockState.t or_error =
+    match sender_kind tx with
+    | None -> invalid_transaction block_state.current_block tx Invalid_signature
+    | Some System -> process_monad_system_transaction block_state tx
+    | Some (EOA sender) -> process_transaction block_state tx sender
 
   (* YP (177) *)
   let process_withdrawal (block_state : BlockState.t) (wd : Withdrawal.t) : BlockState.t =
@@ -372,6 +522,69 @@ struct
         (fun balance -> U256.(balance + amount))
     in
     {block_state with withdrawals_processed = List.append block_state.withdrawals_processed [wd]}
+
+  (* Monad-specific block validation. *)
+  let is_system_transaction tx = match sender_kind tx with Some System -> true | _ -> false
+  module System_transaction_type = struct
+    type t = Snapshot | On_epoch_change | Reward [@@deriving eq]
+
+    let has_selector bytes (fn : (_, _) Staking.Contract.Function.impl) =
+      Bytes.starts_with ~prefix:(Contract.Abi.Selector.to_bytes fn.signature.selector) bytes
+
+    let can_come_before t1 t2 =
+      match (t1, t2) with
+      | Snapshot, On_epoch_change | Snapshot, Reward | On_epoch_change, Reward -> true
+      | _ -> false
+
+    let of_transaction (tx : Transaction.t) =
+      let data = Transaction.data tx in
+      if has_selector data Staking.syscall_snapshot_function then Some Snapshot
+      else if has_selector data Staking.syscall_on_epoch_change_function then Some On_epoch_change
+      else if has_selector data Staking.syscall_reward_function then Some Reward
+      else None
+
+    let ( = ) = equal
+    let ( <> ) t1 t2 = not (t1 = t2)
+  end
+
+  let check_system_transaction
+      (block : Block.t) (seen_tx_tys : System_transaction_type.t list) (new_tx : Transaction.t) :
+      System_transaction_type.t list or_error =
+    (* A block may include up to one of each system transaction kind, and they must always come in
+       the prescribed order: Snapshot → On_epoch_change → Reward. This function checks that a system
+       transaction kind is valid and compatible with a list of already-executed system transactions. *)
+    let open Result in
+    let$ new_tx_ty =
+      Option.or_fail
+        (Error.Invalid_block {block; reason = Unknown_system_transaction})
+        (System_transaction_type.of_transaction new_tx)
+    in
+    let open System_transaction_type in
+    match seen_tx_tys with
+    | last_tx_ty :: _ when last_tx_ty = new_tx_ty -> invalid_block block Duplicate_system_transaction
+    | last_tx_ty :: _ when not (can_come_before last_tx_ty new_tx_ty) ->
+        invalid_block block System_transaction_out_of_order
+    | _ ->
+        let$ () =
+          when_
+            (new_tx_ty = Reward && U256.(Transaction.value new_tx > Staking.max_block_reward))
+            (invalid_block block Invalid_reward_value)
+        in
+        return (new_tx_ty :: seen_tx_tys)
+
+  let validate_monad_block (block : Block.t) : unit or_error =
+    let open Result in
+    (* System transactions should only come first. *)
+    let system_transactions = List.take_while is_system_transaction block.transactions in
+
+    let$ () =
+      when_
+        (List.exists is_system_transaction (List.drop (List.length system_transactions) block.transactions))
+        (invalid_block block System_transaction_not_first)
+    in
+
+    let$ () = ignore <$> List.fold_leftM ~f:(check_system_transaction block) [] system_transactions in
+    return ()
 
   (* YP (60) *)
   let validate_block (world_state : WorldState.t) (block : Block.t) : unit or_error =
@@ -422,15 +635,14 @@ struct
 
     return ()
 
-  (* Process a system message call as in EIP-2935, EIP-4788. *)
-  let process_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
-    let system_sender_address = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe" in
+  (* Process an Ethereum system message call as in EIP-2935, EIP-4788. *)
+  let process_ethereum_system_message (block_state : BlockState.t) (addr : Address.t) (data : Bytes.t) =
     let code = block_state.^(BlockState.account addr).code in
     if Bytes.(code = empty) then (None, block_state)
     else
       let message =
         Evmc.Message.
-          { sender = system_sender_address
+          { sender = Chain.Ethereum.system_sender
           ; kind = Call
           ; static = false
           ; delegated = false
@@ -451,7 +663,7 @@ struct
           ; current_block = block_state.current_block
           ; transient_storage = Address.Map.empty
           ; accounts_created_in_current_transaction = Address.Set.empty
-          ; tx_origin = system_sender_address
+          ; tx_origin = Chain.Ethereum.system_sender
           ; tx_gas_price = Uint.zero
           ; tx_gas_limit = Uint.zero
           ; self_destruct = Address.Set.empty
@@ -521,6 +733,18 @@ struct
 
     return ()
 
+  (** Monad-specific block-level updates, executed after Ethereum system messages and before any
+      transactions in the block. Currently this only consists of clearing the proposer id from the
+      staking contract's storage. *)
+  let process_monad_block_updates (block_state : BlockState.t) : BlockState.t =
+    match block_state.^(BlockState.account_opt Staking.address) with
+    | None -> block_state
+    | Some _ ->
+        block_state.^(BlockState.account Staking.address
+                      |-- Account.storage
+                      |-- Staking.Storage.Loc.storage_lens Staking.Variables.proposer_val_id) <-
+          Staking.Val_id.zero
+
   (** Monad state transition function (YP (2)). [process_block ~verify state block] returns the new state
       after executing the Monad block [block] from initial state [state]. If [verify] is [true], the final
       state roots are compared with the state roots in the input block and an error is returned in case of
@@ -528,6 +752,9 @@ struct
   let process_block ~verify (world_state : WorldState.t) (block : Block.t) : WorldState.t or_error =
     let open Result in
     let$ () = validate_block world_state block in
+
+    (* Monad-specific validity conditions. *)
+    let$ () = validate_monad_block block in
 
     (* The state at this point corresponds to the initiation state Γ(B) in YP (182) *)
     let block_state = BlockState.make world_state block in
@@ -537,7 +764,8 @@ struct
       let parent_beacon_block_root = block_state.current_block.header.parent_beacon_block_root in
       (* Ignore call result as per EIP-4788. *)
       let _, block_state =
-        process_system_message block_state beacon_roots_address (B32.to_bytes parent_beacon_block_root)
+        process_ethereum_system_message block_state beacon_roots_address
+          (B32.to_bytes parent_beacon_block_root)
       in
       block_state
     in
@@ -547,14 +775,17 @@ struct
       let parent_hash = Block.hash (List.hd world_state.history) in
       (* Ignore call result as per EIP-2935. *)
       let _, block_state =
-        process_system_message block_state history_storage_address (B32.to_bytes parent_hash)
+        process_ethereum_system_message block_state history_storage_address (B32.to_bytes parent_hash)
       in
       block_state
     in
 
+    (* Monad-specific block-level updates. *)
+    let block_state = process_monad_block_updates block_state in
+
     (* Process block transactions. *)
     (* YP (4), YP (189). The result of the fold is 𝓁(σ) as defined in YP (6). *)
-    let$ block_state = List.fold_leftM ~f:process_transaction block_state block.transactions in
+    let$ block_state = List.fold_leftM ~f:dispatch_transaction block_state block.transactions in
 
     (* Process block withdrawals. *)
     (* YP (180) *)
@@ -562,7 +793,6 @@ struct
 
     (* Compute roots and add the finalized block to the blockchain. *)
     let finalized_block = BlockState.finalize_current_block block_state in
-    let$ () = validate_block world_state finalized_block in
 
     let$ () =
       if verify then validate_input_block_against_output ~input_block:block ~output_block:finalized_block

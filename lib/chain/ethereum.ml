@@ -43,6 +43,9 @@ module Address = struct
   let t_opt_to_rlp (addr : t option) = match addr with None -> Rlp.Bytes "" | Some addr -> to_rlp addr
 end
 
+(* Sender for system transactions as in e.g. EIP-2935, EIP-4788. *)
+let system_sender = Address.of_hex_string "0xfffffffffffffffffffffffffffffffffffffffe"
+
 module Revision = struct
   (** Ethereum forks, not relevant to Monad but provided here for reference. *)
 
@@ -365,12 +368,11 @@ module Transaction = struct
                ; U256.(to_rlp zero)
                ; U256.(to_rlp zero) ] )
       | AccessList tx ->
-          assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-2930 *)
           kind_tag_to_bytes `AccessList
           ^ Rlp.encode
               (Rlp.List
-                 [ Uint.to_rlp chain_id
+                 [ Uint.to_rlp tx.chain_id
                  ; U64.to_rlp tx.nonce
                  ; Uint.to_rlp tx.gas_price
                  ; Uint.to_rlp tx.gas_limit
@@ -379,12 +381,11 @@ module Transaction = struct
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
       | FeeMarket tx ->
-          assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-1559 *)
           kind_tag_to_bytes `FeeMarket
           ^ Rlp.encode
               (Rlp.List
-                 [ Uint.to_rlp chain_id
+                 [ Uint.to_rlp tx.chain_id
                  ; U64.to_rlp tx.nonce
                  ; Uint.to_rlp tx.max_priority_fee_per_gas
                  ; Uint.to_rlp tx.max_fee_per_gas
@@ -394,12 +395,11 @@ module Transaction = struct
                  ; Rlp.Bytes tx.data
                  ; Rlp.List (List.map Access.to_rlp tx.access_list) ] )
       | SetCode tx ->
-          assert (Uint.(tx.chain_id = chain_id)) ;
           (* EIP-7702 *)
           kind_tag_to_bytes `SetCode
           ^ Rlp.encode
               (Rlp.List
-                 [ Uint.to_rlp chain_id
+                 [ Uint.to_rlp tx.chain_id
                  ; U64.to_rlp tx.nonce
                  ; Uint.to_rlp tx.max_priority_fee_per_gas
                  ; Uint.to_rlp tx.max_fee_per_gas
@@ -700,12 +700,59 @@ module Receipt = struct
     | tag -> Transaction.kind_tag_to_bytes tag ^ Rlp.encode (to_rlp receipt)
 end
 
+(** Storage is a thin abstraction layer over B32-indexed maps that implicitly reads zeros from absent entries
+   (and deletes any entries set to zero). *)
+module Storage : sig
+  type t
+  type key = B32.t
+  type value = B32.t
+
+  val equal : t -> t -> bool
+  val ( = ) : t -> t -> bool
+  val ( <> ) : t -> t -> bool
+
+  val find : key -> t -> value
+  val add : key -> value -> t -> t
+  val at : key -> (t, value) Lens.t
+
+  val empty : t
+
+  val to_seq : t -> (key * value) Seq.t
+  val keys : t -> B32.Set.t
+
+  val to_yojson : t -> Yojson.Safe.t
+  val of_yojson : Yojson.Safe.t -> (t, string) result
+end = struct
+  type t = B32.t B32.Map.t
+  type key = B32.t
+  type value = B32.t
+
+  let empty = B32.Map.empty
+
+  let equal s1 s2 = B32.Map.compare B32.compare s1 s2 = 0
+
+  let find key s = Option.value (B32.Map.find_opt key s) ~default:B32.zeros
+  let add key value s = if B32.(value = zeros) then B32.Map.remove key s else B32.Map.add key value s
+  let at key = Lens.{get = find key; set = add key}
+
+  let to_seq = B32.Map.to_seq
+  let keys = B32.Map.keys
+
+  let to_yojson = B32.Map.to_yojson B32.to_yojson
+  let of_yojson json =
+    B32.Map.of_yojson B32.of_yojson json
+    |> Result.map (B32.Map.filter_map (fun _k v -> if B32.(v = zeros) then None else Some v))
+
+  let ( = ) s1 s2 = equal s1 s2
+  let ( <> ) s1 s2 = B32.Map.compare B32.compare s1 s2 <> 0
+end
+
 module Account = struct
   (** The state associated with an Ethereum address. YP (13), but storage and code are stored directly. *)
   type t =
     { nonce : U64.t  (** σ\[a\]ₙ, the account nonce - 64 bits wide as per EIP-2681. *)
     ; balance : U256.t  (** σ\[a\]_b *)
-    ; storage : B32.t B32.Map.t
+    ; storage : Storage.t
           (** σ\[a\]ₛ, the account storage, represented directly as a map rather than a state root. *)
     ; code : Bytes.t  (** σ\[a\]_c, the account code, represented directly as bytecode rather than a hash. *)
     }
@@ -716,7 +763,7 @@ module Account = struct
   let ( = ) = equal
   let ( <> ) x y = not (equal x y)
 
-  let empty = {balance = U256.zero; storage = B32.Map.empty; code = Bytes.empty; nonce = U64.zero}
+  let empty = {balance = U256.zero; storage = Storage.empty; code = Bytes.empty; nonce = U64.zero}
 
   (** Account emptiness check as per YP (14). Note that an account with zero balance, nonce and code is
       considered empty independently of its storage, but empty accounts with non-empty storage cannot be
@@ -735,7 +782,7 @@ module Account = struct
          used here in reverse to calculate the storage root from the storage KV pairs. *)
       let mpt =
         storage
-        |> B32.Map.to_seq
+        |> Storage.to_seq
         |> Seq.map (fun (k, v) ->
             (* YP (8), YP (9) *)
             let k = B32.to_bytes (Crypto.keccak_256 (B32.to_bytes k)) in

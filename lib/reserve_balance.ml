@@ -79,10 +79,10 @@ let dipped_into_reserve (revision : Chain.Monad.Revision.active) : bool Transact
               not (Address.Set.mem addr self_destruct) )
     in
     balances_to_check
-    (* TODO: filter out the staking precompile once that is merged. *)
     |> Seq.filter_map (fun (addr, orig_account) ->
         let new_account = Address.Map.find_opt addr new_state |> Option.value ~default:Account.empty in
-        if Account.is_smart_contract new_account then None else Some (addr, orig_account, new_account) )
+        if Account.is_smart_contract new_account || Address.(addr = Staking.staking_address) then None
+        else Some (addr, orig_account, new_account) )
     |> Seq.exists (fun (addr, orig_account, new_account) ->
         account_reserve_violated addr orig_account new_account )
     |> return )
