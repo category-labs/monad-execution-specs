@@ -1,47 +1,26 @@
 (library
- (name c_evmc_template)
- (libraries monad_lib common ctypes ctypes-foreign)
- (modules c_evmc_template))
-
-(executable
- (name c_evmc_gen_gen)
- (libraries monad_lib c_evmc_template common ctypes)
- (modules c_evmc_gen_gen))
-
-(rule
- (deps c_evmc_gen_gen.exe)
- (targets c_evmc_gen.c)
- (action
-  (run %{exe:c_evmc_gen_gen.exe} %{targets})))
-
-(rule
- (deps
-  (:src c_evmc_gen.c)
-  (source_tree %{project_root}/third_party/evmc/include/))
- (targets c_evmc_gen.exe)
- (action
-  (run
-   %{cc}
-   -I
-   %{ocaml_where}
-   -I
-   %{lib:ctypes:./}
-   -I
-   %{project_root}/third_party/evmc/include
-   -o
-   %{targets}
-   %{src})))
-
-(rule
- (deps
-  (:gen c_evmc_gen.exe))
- (targets c_evmc_generated.ml)
- (action
-  (with-stdout-to
-   %{targets}
-   (run %{gen}))))
-
-(library
  (name c_evmc)
- (libraries monad_lib common c_evmc_template)
- (modules c_evmc c_evmc_generated))
+ ; digestif is a virtual library that Dune resolves to either digestif.c (the default) or
+ ; digestif.ocaml when linking an executable. Ctypes' intermediate executables don't go through this
+ ; resolution step so they fail to link if we don't explicitly include digestif.c as a dependency.
+ (libraries digestif.c monad_lib common ctypes ctypes-foreign)
+ (ctypes
+  (external_library_name evmc)
+  (build_flags_resolver
+   (vendored
+    (c_flags
+     (-I %{project_root}/third_party/evmc/include))))
+  (deps
+   (source_tree %{project_root}/third_party/evmc/include)
+   ; Dune 3.25 runs the ctypes generators in a sandbox, but does not copy the stdlib of a compiler
+   ; installed by package management into it, so the generators fail to link and compile unless
+   ; the dependency is explicit.
+   (glob_files %{ocaml_where}/*)
+   (glob_files %{ocaml_where}/caml/*))
+  (headers
+   (include "evmc/evmc.h"))
+  (type_description
+   (instance Types)
+   (functor C_evmc_template))
+  (generated_types C_evmc_generated)
+  (generated_entry_point C_evmc_stubs)))

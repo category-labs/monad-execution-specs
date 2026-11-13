@@ -1,5 +1,7 @@
 (lang dune 3.24)
 
+ (using ctypes 0.3)
+
 (name monad-spec)
 
 ; Run `dune promote` to update .opam file
