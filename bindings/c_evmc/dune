@@ -11,7 +11,12 @@
     (c_flags
      (-I %{project_root}/third_party/evmc/include))))
   (deps
-   (source_tree %{project_root}/third_party/evmc/include))
+   (source_tree %{project_root}/third_party/evmc/include)
+   ; Dune 3.25 runs the ctypes generators in a sandbox, but does not copy the stdlib of a compiler
+   ; installed by package management into it, so the generators fail to link and compile unless
+   ; the dependency is explicit.
+   (glob_files %{ocaml_where}/*)
+   (glob_files %{ocaml_where}/caml/*))
   (headers
    (include "evmc/evmc.h"))
   (type_description
