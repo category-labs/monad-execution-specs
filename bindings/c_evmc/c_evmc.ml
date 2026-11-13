@@ -1,4 +1,4 @@
-module Base = C_evmc_template.Types (C_evmc_generated)
+module Base = C_evmc_stubs.Types
 include Base
 open Monad_lib
 open Ctypes
