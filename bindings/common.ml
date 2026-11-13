@@ -92,14 +92,6 @@ end
 (* Ad-hoc monad for handling `with_open` *)
 let ( let$ ) (k : ('h -> 'o) -> 'o) (f : 'h -> 'o) = k f
 
-let gen_struct_generator
-    ~(filename : string) ~(includes : string list) (bindings : (module Cstubs_structs.BINDINGS)) =
-  let$ out_fd = Out_channel.with_open_text filename in
-  let out_fmt = Format.formatter_of_out_channel out_fd in
-
-  List.iter (fun lib -> Format.fprintf out_fmt "#include <%s>\n" lib) includes ;
-  Cstubs_structs.write_c out_fmt bindings
-
 (** Cstubs_inverted works by passing a module of type [Cstubs_inverted.INTERNAL] to a template module. The
     [INTERNAL] instance allows the template to register types and functions to be exposed to C. However, when
     registering a C function through [Cstubs_inverted.INTERNAL.internal], its address is not available to the
