@@ -1,175 +1,5 @@
-(** Solidity encodings of OCaml values. *)
-
 open Byte_string
 open Numeric
-
-(** Right-associative tuples. This is useful as syntactic sugar. *)
-module Tuple = struct
-  type 'a t = [] : unit t | ( :: ) : 'a * 'b t -> ('a * 'b) t
-end
-
-type alignment = Left | Right
-
-(* It's tempting to encode whether a type is static or dynamic as a phantom parameter. However, because
-   GADTs cannot have a variance, it becomes very hard to express that "every static type is a dynamic type". *)
-type 'a typ =
-  | Tuple : 'a tup -> 'a typ
-  | Fixed_bytes : {alignment : alignment; byte_width : int} -> Bytes.t typ
-    (* Explicit alignment allows us to use a right-aligned Fixed_bytes type to represent integers. *)
-  | Bytes : Bytes.t typ
-  | Array : 'a typ -> 'a list typ
-  | Map :
-      {name : string; repr : 'repr typ; encode : 'a -> 'repr; decode : 'repr -> ('a, string) result}
-      -> 'a typ
-
-and 'a tup = [] : unit Tuple.t tup | ( :: ) : 'a typ * 'b Tuple.t tup -> ('a * 'b) Tuple.t tup
-
-let rec type_name : type a. a typ -> string =
-  let rec tuple_names : type a. a tup -> string list = function
-    | [] -> []
-    | ty :: tys -> type_name ty :: tuple_names tys
-  in
-  function
-  | Tuple tup -> Format.sprintf "(%s)" (String.concat "," (tuple_names tup))
-  | Fixed_bytes {alignment = Left; byte_width} -> Format.sprintf "bytes%d" byte_width
-  | Fixed_bytes {alignment = Right; byte_width} -> Format.sprintf "bytesr%d" byte_width
-  | Bytes -> "bytes"
-  | Array typ -> Format.sprintf "%s[]" (type_name typ)
-  | Map m -> m.name
-
-let bytes_to_words (size : int) = (size + 31) / 32
-let bytes_to_padded_bytes (size : int) = bytes_to_words size * 32
-
-type kind = Static of {word_width : int} | Dynamic
-let rec kind : type a. a typ -> kind =
-  let concat (k_0 : kind) (k_1 : kind) =
-    match (k_0, k_1) with
-    | Static s_0, Static s_1 -> Static {word_width = s_0.word_width + s_1.word_width}
-    | _ -> Dynamic
-  in
-  let rec tuple_kind : type a. a tup -> kind = function
-    | [] -> Static {word_width = 0}
-    | hd :: tl -> concat (kind hd) (tuple_kind tl)
-  in
-  function
-  | Tuple tup -> tuple_kind tup
-  | Fixed_bytes {byte_width; _} -> Static {word_width = bytes_to_words byte_width}
-  | Bytes | Array _ -> Dynamic
-  | Map m -> kind m.repr
-
-let rec tuple_header_word_width : type a. a tup -> int = function
-  | [] -> 0
-  | elt :: elts -> (
-    match kind elt with
-    | Dynamic -> 1 + tuple_header_word_width elts
-    | Static {word_width} -> word_width + tuple_header_word_width elts )
-
-(* Optional versions of types. *)
-let option : equal:('a -> 'a -> bool) -> empty:'a -> 'a typ -> 'a option typ =
- fun ~equal ~empty typ ->
-  let repr = typ in
-  let encode = function None -> empty | Some elt -> elt in
-  let decode e = Ok (if equal empty e then None else Some e) in
-  let name = Format.sprintf "Option<%s>" (type_name typ) in
-  Map {repr; encode; decode; name}
-
-let align (alignment : alignment) (bs : Bytes.t) : B32.t list =
-  let padded_bytes = bytes_to_padded_bytes (Bytes.length bs) in
-  let padded_words = padded_bytes / 32 in
-  match alignment with
-  | Left -> List.init padded_words (fun i -> B32.sub_with_zero_padding bs (i * 32))
-  | Right ->
-      let d = padded_bytes - Bytes.length bs in
-      if d = 0 then List.init padded_words (fun i -> B32.sub_with_zero_padding bs (i * 32))
-      else
-        let header = B32.init (fun i -> if i < d then '\x00' else bs.[i - d]) in
-        header :: List.init (padded_words - 1) (fun i -> B32.sub_with_zero_padding bs (32 - d + (i * 32)))
-
-let rec enc : type a. a typ -> a -> B32.t list =
- fun typ v ->
-  match typ with
-  | Tuple tup -> enc_tup tup v
-  | Fixed_bytes {alignment; byte_width} ->
-      assert (Bytes.length v = byte_width) ;
-      align alignment v
-  | Bytes ->
-      let len = U256.(to_repr ~$(Bytes.length v)) in
-      len :: align Left v
-  | Array typ ->
-      let len = U256.(to_repr ~$(List.length v)) in
-      let rec loop elts = match elts with List.[] -> List.[] | elt :: elts -> enc typ elt :: loop elts in
-      len :: List.concat (loop v)
-  | Map {repr; encode; _} -> enc repr (encode v)
-
-and enc_tup : type a. a tup -> a -> B32.t list =
- fun tup elts ->
-  let header_word_width = tuple_header_word_width tup in
-  let rec loop : type a. a tup -> a -> int -> B32.t list * B32.t list =
-   fun (tup : a tup) (elts : a) running_tails_len ->
-    match (tup, elts) with
-    | [], [] -> ([], [])
-    | hd :: tup, elt :: elts -> (
-      (* TODO: the list concatenations here have quadratic overhead. Revisit if it becomes an issue. *)
-      match kind hd with
-      | Static _ ->
-          let heads, tails = loop tup elts running_tails_len in
-          (enc hd elt @ heads, tails)
-      | Dynamic ->
-          let head = U256.(to_repr ~$Stdlib.((header_word_width * 32) + running_tails_len)) in
-          let tail = enc hd elt in
-          let tail_words = List.length tail in
-          let heads, tails = loop tup elts (running_tails_len + (tail_words * 32)) in
-          (head :: heads, tail @ tails) )
-  in
-  let headers, tails = loop tup elts 0 in
-  headers @ tails
-
-let enc_bytes (typ : 'a typ) (v : 'a) = Bytes.(concat empty (List.map B32.to_bytes (enc typ v)))
-
-(* Decoding operates over word iterators, which are constructed from either a byte string or the storage. *)
-module Input_view = struct
-  (* A view is a sequence of 32-byte words followed by optionally a sub-32-byte tail. While a storage-derived
-     view is always aligned, views obtained from a message's input data may have a tail. In case of e.g. input
-     data of length 33, this allows us to differentiate between three cases:
-     * dec returns Ok(v, view) and view is empty: decoding was successful.
-     * dec returns Ok(v, view) and view is non-empty: decoding was successful but some (potentially unaligned)
-       bytes are left over.
-     * dec returns Error: decoding failed (either because input data was too short or malformed. *)
-  type chunk = Word of B32.t | Tail of Bytes.t
-  type t = chunk Seq.t
-
-  let of_bytes (bs : Bytes.t) : t =
-    Seq.unfold
-      (fun i ->
-        if i + 32 <= Bytes.length bs then Some (Word (B32.sub bs i), i + 32)
-        else if i < Bytes.length bs then Some (Tail (Bytes.sub bs i (Bytes.length bs - i)), Bytes.length bs)
-        else None )
-      0
-
-  let of_storage (s : Chain.Ethereum.Storage.t) ~(offset : U256.t) : t =
-    Seq.unfold
-      (fun addr ->
-        let word = Chain.Ethereum.Storage.find (U256.to_repr addr) s in
-        let addr = U256.(addr + one) in
-        Some (Word word, addr) )
-      offset
-
-  let take_word (view : t) : (B32.t * t) option =
-    match Seq.uncons view with Some (Word w, view) -> Some (w, view) | _ -> None
-
-  let take_words (n_words : int) (view : t) : (Bytes.t * t) option =
-    Option.(
-      let rec loop n_words view =
-        if n_words <= 0 then Some (List.[], view)
-        else
-          let$ w, view = take_word view in
-          let w = B32.to_bytes w in
-          let$ ws, view = loop (n_words - 1) view in
-          return (List.(w :: ws), view)
-      in
-      let$ words, view = loop n_words view in
-      return (Bytes.(concat empty words), view) )
-end
 
 type decode_error =
   | Input_too_short
@@ -177,238 +7,541 @@ type decode_error =
   | Length_overflow
   | Map_error of {name : string; message : string}
 
-type 'a decoder = Input_view.t -> ('a * Input_view.t, decode_error) result
+module Input_view = struct
+  (* A view is a "materialized" sequence of bytes [start],[remaining] followed by a (possibly empty, possibly
+     infinite) sequence of 32-byte words [chunks]. This can represent either a calldata view (the calldata as
+     the initial bytes followed by an empty sequence of words) or a storage view (as empty bytes followed by
+     an infinite sequence of storage words). *)
+  type t = {start : int; remaining : Bytes.t; chunks : B32.t Seq.t}
 
-let dec_length : int decoder =
- fun view ->
-  Result.(
-    let$ header, view = Option.or_fail Input_too_short (Input_view.take_word view) in
-    let$ length = Option.or_fail Length_overflow U256.(to_int_opt (of_repr header)) in
-    return (length, view) )
+  let of_bytes (bs : Bytes.t) : t =
+    let start = 0 in
+    let remaining = bs in
+    let chunks = Seq.empty in
+    {start; remaining; chunks}
 
-let rec dec : type a. a typ -> a decoder =
- fun typ view ->
-  let open Result in
-  match typ with
-  | Tuple tup -> dec_tuple tup view
-  | Bytes ->
-      let$ len, view = dec_length view in
-      dec (Fixed_bytes {alignment = Left; byte_width = len}) view
-  | Array elt_typ ->
-      let$ len, view = dec_length view in
-      let rec loop len view =
-        if len <= 0 then return (List.[], view)
-        else
-          let$ elt, view = dec elt_typ view in
-          let$ elts, view = loop (len - 1) view in
-          return (List.(elt :: elts), view)
-      in
-      loop len view
-  | Fixed_bytes {alignment; byte_width} -> (
-      let n_words = bytes_to_padded_bytes byte_width / 32 in
-      let$ bytes, view = Option.or_fail Input_too_short (Input_view.take_words n_words view) in
-      match alignment with
-      | Left -> Ok (Bytes.sub bytes 0 byte_width, view)
-      | Right -> Ok (Bytes.sub bytes (Bytes.length bytes - byte_width) byte_width, view) )
-  | Map {repr; decode; name; _} -> (
-      let$ r, view = dec repr view in
-      match decode r with Ok v -> return (v, view) | Error message -> fail (Map_error {name; message}) )
+  let of_storage (s : Chain.Ethereum.Storage.t) ~(offset : U256.t) : t =
+    let start = 0 in
+    let remaining = Bytes.empty in
+    let chunks =
+      Seq.unfold
+        (fun addr ->
+          let word = Chain.Ethereum.Storage.find (U256.to_repr addr) s in
+          let addr = U256.(addr + one) in
+          Some (word, addr) )
+        offset
+    in
+    {start; remaining; chunks}
 
-and dec_tuple : type a. a tup -> a decoder =
- fun tup view ->
-  let open Result in
-  let rec loop : type a. a tup -> Input_view.t -> Input_view.t -> (a * Input_view.t, decode_error) result =
-   fun tup head_view tail_view ->
-    match tup with
-    | [] -> Ok ([], tail_view)
-    | hd :: tup -> (
-      match kind hd with
-      | Static _ ->
-          let$ hd_elt, head_view = dec hd head_view in
-          let$ tl_elts, tail_view = loop tup head_view tail_view in
-          Ok (Tuple.(hd_elt :: tl_elts), tail_view)
-      | Dynamic ->
-          let$ _tail_offset, head_view = dec_length head_view in
-          (* We could carry our own count of the tail position to double-check against tail_offset. As it
-             stands, we can decode malformed tuples. Note that the C++ implementation of the staking contract
-             also ignores tuple headers. *)
-          let$ hd_elt, tail_view = dec hd tail_view in
-          let$ tl_elts, tl_elts_view = loop tup head_view tail_view in
-          Ok (Tuple.(hd_elt :: tl_elts), tl_elts_view) )
-  in
-  let header_word_width = tuple_header_word_width tup in
-  let tail_view = Seq.drop header_word_width view in
-  loop tup view tail_view
+  let take_bytes (n_bytes : int) (view : t) : (Bytes.t * t) option =
+    let rec loop n pieces {start; remaining; chunks} =
+      let available = Bytes.length remaining - start in
+      if n <= available then
+        let piece = Bytes.sub remaining start n in
+        Some (List.rev (piece :: pieces), {start = start + n; remaining; chunks})
+      else
+        let piece = Bytes.sub remaining start available in
+        match Seq.uncons chunks with
+        | None -> None
+        | Some (chunk, chunks) ->
+            let remaining = B32.to_bytes chunk in
+            loop (n - available) (piece :: pieces) {start = 0; remaining; chunks}
+    in
+    if n_bytes <= 0 then Some (Bytes.empty, view)
+    else
+      Option.(
+        let$ pieces, view = loop n_bytes [] view in
+        return (Bytes.(concat empty pieces), view) )
 
-(* Decode a byte-string as the indicated type and fail if any bytes remain unconsumed. *)
-let dec_bytes (typ : 'a typ) (bytes : Bytes.t) =
-  Result.(
-    let$ v, view = dec typ (Input_view.of_bytes bytes) in
-    let$ () = ensure (Seq.is_empty view) ~or_error:Input_too_long in
-    return v )
+  let take_word (view : t) : (B32.t * t) option =
+    Option.(
+      let$ bs, view = take_bytes 32 view in
+      (* Cannot fail as bs is exactly 32 bytes wide. *)
+      return (B32.of_bytes_exn bs, view) )
 
-(* The Solidity ABI treats addresses as integers in that they are right-aligned. *)
-module Address = struct
-  include Chain.Ethereum.Address
-  let t : t typ =
-    Map
-      { repr = Fixed_bytes {alignment = Right; byte_width}
-      ; encode = (fun addr -> to_bytes addr)
-      ; decode = (fun bs -> Result.Option.or_fail "input too short" (of_bytes bs))
-      ; name = "address" }
+  let drop_bytes (n_bytes : int) (view : t) : t option =
+    let rec loop n {start; remaining; chunks} =
+      let available = Bytes.length remaining - start in
+      if n <= available then Some {start = start + n; remaining; chunks}
+      else
+        match Seq.uncons chunks with
+        | None -> None
+        | Some (chunk, chunks) -> loop (n - available) {start = 0; remaining = B32.to_bytes chunk; chunks}
+    in
+    loop (max n_bytes 0) view
 
-  let t_option : t option typ = option ~equal ~empty:zero t
+  let is_empty ({start; remaining; chunks} : t) : bool =
+    start >= Bytes.length remaining && Seq.is_empty chunks
 end
 
-module Fixed_bytes (M : sig
+type alignment = Left | Right
+
+type encoding = Abi | Packed
+
+type kind = Static of {abi_word_width : int; packed_byte_width : int} | Dynamic
+
+type 'a typ =
+  { name : string
+  ; kind : kind
+  ; read : encoding -> Input_view.t -> ('a * Input_view.t, decode_error) result
+  ; write : encoding -> 'a -> Bytes.t }
+
+let name {name; _} = name
+let kind {kind; _} = kind
+let read {read; _} = read
+let write {write; _} = write
+
+let bytes_to_whole_words (n_bytes : int) = (n_bytes + 31) / 32
+let bytes_to_padded_bytes (n_bytes : int) = 32 * bytes_to_whole_words n_bytes
+
+let padding_byte_width (n_bytes : int) = (32 - (n_bytes mod 32)) mod 32
+
+let read_fixed (enc : encoding) (alignment : alignment) (byte_width : int) (view : Input_view.t) :
+    (Bytes.t * Input_view.t, decode_error) result =
+  let take n view = Result.Option.or_fail Input_too_short (Input_view.take_bytes n view) in
+  let skip n view = Result.Option.or_fail Input_too_short (Input_view.drop_bytes n view) in
+  Result.(
+    match enc with
+    | Packed -> take byte_width view
+    | Abi -> (
+        (* We don't check that the padding bytes are indeed zero. *)
+        let padding = padding_byte_width byte_width in
+        match alignment with
+        | Left ->
+            let$ bs, view = take byte_width view in
+            let$ view = skip padding view in
+            return (bs, view)
+        | Right ->
+            let$ view = skip padding view in
+            take byte_width view ) )
+
+let write_fixed (enc : encoding) (alignment : alignment) (bs : Bytes.t) : Bytes.t =
+  match enc with
+  | Packed -> bs
+  | Abi -> (
+      let padding = Bytes.make (padding_byte_width (Bytes.length bs)) '\x00' in
+      match alignment with Left -> bs ^ padding | Right -> padding ^ bs )
+
+module type FIXED_BYTES = sig
   type t
-  val to_bytes : t -> Bytes.t
-  val of_bytes : Bytes.t -> t option
   val byte_width : int
-end) =
-struct
-  open M
-  let t : t typ =
-    Map
-      { repr = Fixed_bytes {alignment = Left; byte_width}
-      ; encode = (fun bs -> to_bytes bs)
-      ; decode = (fun bs -> Result.Option.or_fail "input too short" (of_bytes bs))
-      ; name = Format.sprintf "bytes%d" byte_width }
+  val of_bytes_exn : Bytes.t -> t
+  val to_bytes : t -> Bytes.t
+end
+
+let fixed_bytes (module M : FIXED_BYTES) (alignment : alignment) : M.t typ =
+  let open M in
+  let name =
+    match alignment with
+    | Left -> Format.sprintf "bytes%d" byte_width
+    | Right -> Format.sprintf "bytesr%d" byte_width
+  in
+  let kind = Static {abi_word_width = bytes_to_whole_words byte_width; packed_byte_width = byte_width} in
+  let read enc view =
+    Result.(
+      let$ bs, view = read_fixed enc alignment byte_width view in
+      return (of_bytes_exn bs, view) )
+  in
+  let write enc (bs : t) = write_fixed enc alignment (to_bytes bs) in
+  {name; kind; read; write}
+
+let map ~(name : string) ~(encode : 'a -> 'r) ~(decode : 'r -> ('a, string) result) (repr : 'r typ) : 'a typ =
+  let kind = repr.kind in
+  let read enc view =
+    Result.(
+      Result.(
+        let$ r, view = repr.read enc view in
+        match decode r with Ok v -> return (v, view) | Error message -> fail (Map_error {name; message}) ) )
+  in
+  let write enc v = repr.write enc (encode v) in
+  {name; kind; read; write}
+
+(* A type to represent Solidity's internal encoding of lengths. These must fit in an OCaml int, otherwise an
+   error is returned when decoding them.
+   This type is never used directly, but it's used internally when encoding/decoding dynamic types. *)
+let length : int typ =
+  map ~name:"length"
+    ~encode:(fun i -> U256.(to_repr (of_int i)))
+    ~decode:(fun bs -> Result.Option.or_fail "length overflow" U256.(to_int_opt (of_repr bs)))
+    (fixed_bytes (module B32) Left)
+
+let bytes : Bytes.t typ =
+  let read enc view =
+    Result.(
+      let$ n, view = length.read enc view in
+      read_fixed enc Left n view )
+  in
+  let write enc bs = length.write enc (Bytes.length bs) ^ write_fixed enc Left bs in
+  {name = "bytes"; kind = Dynamic; read; write}
+
+(* When encoding dynamic arrays or tuples, the Solidity ABI specifies that static fields are encoded in-place
+   and dynamic fields are encoded as an offset, with their payload appended as a tail.
+   [arrange_fields enc fields] is responsible for laying out the encoded fields [fields] according to this
+   convention. *)
+let arrange_fields (enc : encoding) (fields : (kind * Bytes.t) list) : Bytes.t =
+  let head_byte_width =
+    List.fold_left
+      (fun n (kind, bs) -> match kind with Static _ -> n + Bytes.length bs | Dynamic -> n + U256.byte_width)
+      0 fields
+  in
+  let heads, tails, _ =
+    List.fold_left
+      (fun (heads, tails, offset) (kind, bs) ->
+        match kind with
+        | Static _ -> (bs :: heads, tails, offset)
+        | Dynamic -> (length.write enc offset :: heads, bs :: tails, offset + Bytes.length bs) )
+      ([], [], head_byte_width) fields
+  in
+  Bytes.(concat empty (List.rev_append heads (List.rev tails)))
+
+let write_field (typ : 'a typ) (enc : encoding) (v : 'a) : kind * Bytes.t = (typ.kind, typ.write enc v)
+
+(* Decoding state for a sequence of fields. [base] is the start of the sequence, which offsets are relative to,
+   [head] is the next unread head slot, and [tails_end] is the end of the last tail read, if any. Like the
+   Solidity decoder, we follow offsets without checking that they are canonical. *)
+type cursor = {base : Input_view.t; head : Input_view.t; tails_end : Input_view.t option}
+
+let cursor (view : Input_view.t) : cursor = {base = view; head = view; tails_end = None}
+
+(* Where the sequence ends: after the last tail if there is a dynamic field, after the head otherwise. This is
+   exact for canonically encoded input. *)
+let finish (c : cursor) : Input_view.t = match c.tails_end with Some view -> view | None -> c.head
+
+let read_field (typ : 'a typ) (enc : encoding) (c : cursor) : ('a * cursor, decode_error) result =
+  Result.(
+    match typ.kind with
+    | Static _ ->
+        let$ v, head = typ.read enc c.head in
+        return (v, {c with head})
+    | Dynamic ->
+        let$ offset, head = length.read enc c.head in
+        let$ tail = Option.or_fail Input_too_short (Input_view.drop_bytes offset c.base) in
+        let$ v, tails_end = typ.read enc tail in
+        return (v, {c with head; tails_end = Some tails_end}) )
+
+(* An array is represented as its length followed by its elements, laid out as a sequence according to the
+   Solidity ABI's head/tail separation. For static elements, this is a plain concatenation. *)
+let array (elt : 'a typ) : 'a list typ =
+  let name = Format.sprintf "%s[]" elt.name in
+  let kind = Dynamic in
+  let read enc view =
+    Result.(
+      Result.(
+        let$ n, view = length.read enc view in
+        let rec loop n acc c =
+          if n <= 0 then return (List.rev acc, c)
+          else
+            let$ v, c = read_field elt enc c in
+            loop (n - 1) (v :: acc) c
+        in
+        let$ vs, c = loop n [] (cursor view) in
+        return (vs, finish c) ) )
+  in
+  let write enc vs =
+    length.write enc (List.length vs) ^ arrange_fields enc (List.map (write_field elt enc) vs)
+  in
+  {name; kind; read; write}
+
+(* A tuple keeps its fields' names and encodings next to its ['a typ], because function signatures and event
+   topics need them individually. It also keeps their kinds and a field-by-field reader, so that it can be
+   extended with further fields by [(@:)]. *)
+type 'a tup =
+  { typ : 'a typ
+  ; field_type_names : string list
+  ; field_kinds : kind list
+  ; write_fields : encoding -> 'a -> (kind * Bytes.t) list
+  ; read_fields : encoding -> cursor -> ('a * cursor, decode_error) result }
+
+let field_type_names {field_type_names; _} = field_type_names
+let write_fields (t : 'a tup) (enc : encoding) (v : 'a) : Bytes.t list = List.map snd (t.write_fields enc v)
+
+let tuple (t : 'a tup) : 'a typ = t.typ
+
+let tuple_kind (kinds : kind list) : kind =
+  List.fold_left
+    (fun acc kind ->
+      match (acc, kind) with
+      | Static a, Static b ->
+          Static
+            { abi_word_width = a.abi_word_width + b.abi_word_width
+            ; packed_byte_width = a.packed_byte_width + b.packed_byte_width }
+      | _ -> Dynamic )
+    (Static {abi_word_width = 0; packed_byte_width = 0})
+    kinds
+
+let make_tuple
+    ~(names : string list)
+    ~(kinds : kind list)
+    ~(write_fields : encoding -> 'a -> (kind * Bytes.t) list)
+    ~(read_fields : encoding -> cursor -> ('a * cursor, decode_error) result) : 'a tup =
+  let typ =
+    { name = Format.sprintf "(%s)" (String.concat "," names)
+    ; kind = tuple_kind kinds
+    ; write = (fun enc v -> arrange_fields enc (write_fields enc v))
+    ; read =
+        (fun enc view ->
+          Result.(
+            let$ v, c = read_fields enc (cursor view) in
+            return (v, finish c) ) ) }
+  in
+  {typ; field_type_names = names; field_kinds = kinds; write_fields; read_fields}
+
+let nil : unit tup =
+  make_tuple ~names:[] ~kinds:[] ~write_fields:(fun _ () -> []) ~read_fields:(fun _ c -> Ok ((), c))
+
+(* [a @: rest] prepends a field of type [a] to the tuple [rest]. Since [(@:)] is right-associative,
+   [a @: b @: nil] is the type [a * (b * unit)]. *)
+let ( @: ) (a : 'a typ) (rest : 'b tup) : ('a * 'b) tup =
+  make_tuple ~names:(a.name :: rest.field_type_names) ~kinds:(a.kind :: rest.field_kinds)
+    ~write_fields:(fun enc (x, xs) -> write_field a enc x :: rest.write_fields enc xs)
+    ~read_fields:(fun enc c ->
+      Result.(
+        let$ x, c = read_field a enc c in
+        let$ xs, c = rest.read_fields enc c in
+        return ((x, xs), c) ) )
+
+(* [map_tuple ~encode ~decode t] is the tuple [t] with its values transformed by [encode] when writing and by
+   [decode] when reading. Its fields, and therefore its encoding, are those of [t]. This is used to convert
+   between the nested pairs built by [(@:)] and flat OCaml tuples. *)
+let map_tuple ~(encode : 'a -> 'r) ~(decode : 'r -> 'a) (t : 'r tup) : 'a tup =
+  make_tuple ~names:t.field_type_names ~kinds:t.field_kinds
+    ~write_fields:(fun enc v -> t.write_fields enc (encode v))
+    ~read_fields:(fun enc c ->
+      Result.(
+        let$ r, c = t.read_fields enc c in
+        return (decode r, c) ) )
+
+let tup0 : unit tup = nil
+
+let tup1 (a1 : 'a1 typ) : 'a1 tup =
+  map_tuple ~encode:(fun x1 -> (x1, ())) ~decode:(fun (x1, ()) -> x1) (a1 @: nil)
+
+let tup2 (a1 : 'a1 typ) (a2 : 'a2 typ) : ('a1 * 'a2) tup =
+  map_tuple ~encode:(fun (x1, x2) -> (x1, (x2, ()))) ~decode:(fun (x1, (x2, ())) -> (x1, x2)) (a1 @: a2 @: nil)
+
+let tup3 (a1 : 'a1 typ) (a2 : 'a2 typ) (a3 : 'a3 typ) : ('a1 * 'a2 * 'a3) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3) -> (x1, (x2, (x3, ()))))
+    ~decode:(fun (x1, (x2, (x3, ()))) -> (x1, x2, x3))
+    (a1 @: a2 @: a3 @: nil)
+
+let tup4 (a1 : 'a1 typ) (a2 : 'a2 typ) (a3 : 'a3 typ) (a4 : 'a4 typ) : ('a1 * 'a2 * 'a3 * 'a4) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4) -> (x1, (x2, (x3, (x4, ())))))
+    ~decode:(fun (x1, (x2, (x3, (x4, ())))) -> (x1, x2, x3, x4))
+    (a1 @: a2 @: a3 @: a4 @: nil)
+
+let tup5 (a1 : 'a1 typ) (a2 : 'a2 typ) (a3 : 'a3 typ) (a4 : 'a4 typ) (a5 : 'a5 typ) :
+    ('a1 * 'a2 * 'a3 * 'a4 * 'a5) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5) -> (x1, (x2, (x3, (x4, (x5, ()))))))
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, ()))))) -> (x1, x2, x3, x4, x5))
+    (a1 @: a2 @: a3 @: a4 @: a5 @: nil)
+
+let tup6 (a1 : 'a1 typ) (a2 : 'a2 typ) (a3 : 'a3 typ) (a4 : 'a4 typ) (a5 : 'a5 typ) (a6 : 'a6 typ) :
+    ('a1 * 'a2 * 'a3 * 'a4 * 'a5 * 'a6) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5, x6) -> (x1, (x2, (x3, (x4, (x5, (x6, ())))))))
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, (x6, ())))))) -> (x1, x2, x3, x4, x5, x6))
+    (a1 @: a2 @: a3 @: a4 @: a5 @: a6 @: nil)
+
+let tup7
+    (a1 : 'a1 typ) (a2 : 'a2 typ) (a3 : 'a3 typ) (a4 : 'a4 typ) (a5 : 'a5 typ) (a6 : 'a6 typ) (a7 : 'a7 typ) :
+    ('a1 * 'a2 * 'a3 * 'a4 * 'a5 * 'a6 * 'a7) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5, x6, x7) -> (x1, (x2, (x3, (x4, (x5, (x6, (x7, ()))))))))
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, (x6, (x7, ()))))))) -> (x1, x2, x3, x4, x5, x6, x7))
+    (a1 @: a2 @: a3 @: a4 @: a5 @: a6 @: a7 @: nil)
+
+let tup8
+    (a1 : 'a1 typ)
+    (a2 : 'a2 typ)
+    (a3 : 'a3 typ)
+    (a4 : 'a4 typ)
+    (a5 : 'a5 typ)
+    (a6 : 'a6 typ)
+    (a7 : 'a7 typ)
+    (a8 : 'a8 typ) : ('a1 * 'a2 * 'a3 * 'a4 * 'a5 * 'a6 * 'a7 * 'a8) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5, x6, x7, x8) -> (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, ())))))))))
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, ())))))))) -> (x1, x2, x3, x4, x5, x6, x7, x8))
+    (a1 @: a2 @: a3 @: a4 @: a5 @: a6 @: a7 @: a8 @: nil)
+
+let tup9
+    (a1 : 'a1 typ)
+    (a2 : 'a2 typ)
+    (a3 : 'a3 typ)
+    (a4 : 'a4 typ)
+    (a5 : 'a5 typ)
+    (a6 : 'a6 typ)
+    (a7 : 'a7 typ)
+    (a8 : 'a8 typ)
+    (a9 : 'a9 typ) : ('a1 * 'a2 * 'a3 * 'a4 * 'a5 * 'a6 * 'a7 * 'a8 * 'a9) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5, x6, x7, x8, x9) ->
+      (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, ()))))))))) )
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, ()))))))))) ->
+      (x1, x2, x3, x4, x5, x6, x7, x8, x9) )
+    (a1 @: a2 @: a3 @: a4 @: a5 @: a6 @: a7 @: a8 @: a9 @: nil)
+
+let tup10
+    (a1 : 'a1 typ)
+    (a2 : 'a2 typ)
+    (a3 : 'a3 typ)
+    (a4 : 'a4 typ)
+    (a5 : 'a5 typ)
+    (a6 : 'a6 typ)
+    (a7 : 'a7 typ)
+    (a8 : 'a8 typ)
+    (a9 : 'a9 typ)
+    (a10 : 'a10 typ) : ('a1 * 'a2 * 'a3 * 'a4 * 'a5 * 'a6 * 'a7 * 'a8 * 'a9 * 'a10) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) ->
+      (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, (x10, ())))))))))) )
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, (x10, ())))))))))) ->
+      (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) )
+    (a1 @: a2 @: a3 @: a4 @: a5 @: a6 @: a7 @: a8 @: a9 @: a10 @: nil)
+
+let tup11
+    (a1 : 'a1 typ)
+    (a2 : 'a2 typ)
+    (a3 : 'a3 typ)
+    (a4 : 'a4 typ)
+    (a5 : 'a5 typ)
+    (a6 : 'a6 typ)
+    (a7 : 'a7 typ)
+    (a8 : 'a8 typ)
+    (a9 : 'a9 typ)
+    (a10 : 'a10 typ)
+    (a11 : 'a11 typ) : ('a1 * 'a2 * 'a3 * 'a4 * 'a5 * 'a6 * 'a7 * 'a8 * 'a9 * 'a10 * 'a11) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11) ->
+      (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, (x10, (x11, ()))))))))))) )
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, (x10, (x11, ()))))))))))) ->
+      (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11) )
+    (a1 @: a2 @: a3 @: a4 @: a5 @: a6 @: a7 @: a8 @: a9 @: a10 @: a11 @: nil)
+
+let tup12
+    (a1 : 'a1 typ)
+    (a2 : 'a2 typ)
+    (a3 : 'a3 typ)
+    (a4 : 'a4 typ)
+    (a5 : 'a5 typ)
+    (a6 : 'a6 typ)
+    (a7 : 'a7 typ)
+    (a8 : 'a8 typ)
+    (a9 : 'a9 typ)
+    (a10 : 'a10 typ)
+    (a11 : 'a11 typ)
+    (a12 : 'a12 typ) : ('a1 * 'a2 * 'a3 * 'a4 * 'a5 * 'a6 * 'a7 * 'a8 * 'a9 * 'a10 * 'a11 * 'a12) tup =
+  map_tuple
+    ~encode:(fun (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12) ->
+      (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, (x10, (x11, (x12, ())))))))))))) )
+    ~decode:(fun (x1, (x2, (x3, (x4, (x5, (x6, (x7, (x8, (x9, (x10, (x11, (x12, ())))))))))))) ->
+      (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12) )
+    (a1 @: a2 @: a3 @: a4 @: a5 @: a6 @: a7 @: a8 @: a9 @: a10 @: a11 @: a12 @: nil)
+
+let unit : unit typ = {(tuple nil) with name = "unit"}
+
+let option ~(equal : 'a -> 'a -> bool) ~(empty : 'a) (typ : 'a typ) : 'a option typ =
+  map
+    ~name:(Format.sprintf "Option<%s>" typ.name)
+    ~encode:(function None -> empty | Some v -> v)
+    ~decode:(fun v -> Ok (if equal empty v then None else Some v))
+    typ
+
+(* The Solidity ABI treats addresses as integers in that they are right-aligned. Defined outside [Address]
+   because [Chain.Ethereum.Address] has its own [map]. *)
+let address : Chain.Ethereum.Address.t typ =
+  map ~name:"address" ~encode:Fun.id ~decode:Result.return (fixed_bytes (module Chain.Ethereum.Address) Right)
+
+module Address = struct
+  include Chain.Ethereum.Address
+  let t : t typ = address
+  let t_option : t option typ = option ~equal ~empty:zero t
 end
 
 module B33 = struct
   include B33
-  include Fixed_bytes (B33)
+  let t = fixed_bytes (module B33) Left
 end
 
 module B48 = struct
   include B48
-  include Fixed_bytes (B48)
+  let t = fixed_bytes (module B48) Left
 end
 
-module Fixed_uint (M : sig
-  module Repr : sig
-    type t
-    val to_bytes : t -> Bytes.t
-    val of_bytes : Bytes.t -> t option
-  end
+module type UINT = sig
+  module Repr : FIXED_BYTES
   type t
-  val byte_width : int
   val to_repr : t -> Repr.t
   val of_repr : Repr.t -> t
-  val zero : t
-  val equal : t -> t -> bool
-end) =
-struct
-  open M
-  let t : t typ =
-    Map
-      { repr = Fixed_bytes {alignment = Right; byte_width}
-      ; encode = (fun x -> Repr.to_bytes (to_repr x))
-      ; decode =
-          (fun bs ->
-            match Repr.of_bytes bs with None -> Error "input too short" | Some bs -> Ok (of_repr bs) )
-      ; name = Format.sprintf "uint%d" (byte_width * 8) }
-
-  let t_option : t option typ = option ~equal ~empty:zero t
 end
+
+let uint (module M : UINT) : M.t typ =
+  let open M in
+  map
+    ~name:(Format.sprintf "uint%d" (Repr.byte_width * 8))
+    ~encode:(fun x -> to_repr x)
+    ~decode:(fun r -> Ok (of_repr r))
+    (fixed_bytes (module Repr) Right)
 
 module U256 = struct
   include U256
-  include Fixed_uint (U256)
+  let t = uint (module U256)
 end
 
 module U64 = struct
   include U64
-  include Fixed_uint (U64)
+  let t = uint (module U64)
 end
 
 module U8 = struct
   include U8
-  include Fixed_uint (U8)
+  let t = uint (module U8)
 end
 
 module U32 = struct
   include U32
-  include Fixed_uint (U32)
+  let t = uint (module U32)
 end
 
-(* abicoder v1 is unclear on how to treat a bool field with spurious bits.
-   The Solidity compiler emits ISZERO so we use the same logic here. *)
 let bool : bool typ =
-  Map
-    { repr = U256.t
-    ; encode = (fun b -> if b then U256.one else U256.zero)
-    ; decode = (fun u256 -> Ok U256.(u256 <> zero))
-    ; name = "bool" }
+  (* abicoder v1 is unclear on how to treat a bool field with spurious bits. The Solidity compiler emits
+     ISZERO so we use the same logic here. *)
+  map ~name:"bool"
+    ~encode:(fun b -> if b then U256.one else U256.zero)
+    ~decode:(fun u -> Ok U256.(u <> zero))
+    U256.t
 
-let unit : unit typ = Map {repr = Tuple []; encode = (fun () -> []); decode = (fun [] -> Ok ()); name = "unit"}
+let packed ?(name : string option) (ty : 'a typ) : 'a typ =
+  let packed_byte_width =
+    match ty.kind with
+    | Static {packed_byte_width; _} -> packed_byte_width
+    | Dynamic -> failwith (Format.sprintf "Packing non-static type %s" ty.name)
+  in
+  let name = match name with None -> Format.sprintf "Packed<%s>" ty.name | Some name -> name in
+  let kind = Static {abi_word_width = bytes_to_whole_words packed_byte_width; packed_byte_width} in
+  let read enc view =
+    Result.(
+      let$ bs, view = read_fixed enc Left packed_byte_width view in
+      let$ v, _ = ty.read Packed (Input_view.of_bytes bs) in
+      return (v, view) )
+  in
+  let write enc v = write_fixed enc Left (ty.write Packed v) in
+  {name; kind; read; write}
 
-(* TODO: the aligned/packed distinction is awkward: aligned types are most naturally encoded and decoded from
-   storage, since it's word-aligned, and packed types are most naturally encoded and decoded from straight
-   byte arrays. However, most (all?) usages of packed types in the staking contract are in the storage, and
-   most usages of aligned types are in function input/outputs. *)
-module Packed : sig
-  val t : ?name:string -> 'a typ -> 'a typ
-end = struct
-  let rec packed_width : type a. a typ -> int option = function
-    | Fixed_bytes {byte_width; _} -> Some byte_width
-    | Bytes -> None
-    | Array _ -> None
-    | Tuple [] -> Some 0
-    | Tuple (ty :: tys) ->
-        Option.(
-          let$ ty_w = packed_width ty in
-          let$ tys_w = packed_width (Tuple tys) in
-          return (ty_w + tys_w) )
-    | Map {repr; _} -> packed_width repr
+let enc_bytes (typ : 'a typ) (v : 'a) : Bytes.t = typ.write Abi v
 
-  let rec encode_packed : type a. a typ -> a -> Bytes.t list =
-   fun ty v ->
-    match ty with
-    | Fixed_bytes {byte_width; _} ->
-        assert (Bytes.length v = byte_width) ;
-        [v]
-    | Tuple [] -> []
-    | Tuple (ty :: tys) -> ( match v with v :: vs -> encode_packed ty v @ encode_packed (Tuple tys) vs )
-    | Map {repr; encode; _} -> encode_packed repr (encode v)
-    | Bytes | Array _ ->
-        (* This cannot happen as we only pack static types. *)
-        assert false
+let enc (typ : 'a typ) (v : 'a) : B32.t list =
+  let bs = enc_bytes typ v in
+  (* This never fails because enc_bytes always produces word-aligned outputs. *)
+  List.init (Bytes.length bs / 32) (fun i -> B32.sub bs (i * 32))
 
-  let rec decode_packed : type a. a typ -> offset:int -> Bytes.t -> (a * int, string) result =
-   fun ty ~offset bs ->
-    match ty with
-    | Fixed_bytes {byte_width; _} ->
-        (* This cannot fail as `decode_packed` is only called when the decoded byte-string is known to be
-           long enough. *)
-        assert (Bytes.length bs - offset >= byte_width) ;
-        Ok (Bytes.sub bs offset byte_width, offset + byte_width)
-    | Tuple [] -> Ok ([], offset)
-    | Tuple (ty :: tys) ->
-        Result.(
-          let$ v, offset = decode_packed ty ~offset bs in
-          let$ vs, offset = decode_packed (Tuple tys) ~offset bs in
-          return (Tuple.(v :: vs), offset) )
-    | Map {repr; decode; _} ->
-        Result.(
-          let$ r, offset = decode_packed repr ~offset bs in
-          let$ r = decode r in
-          return (r, offset) )
-    | Bytes | Array _ ->
-        (* This cannot happen as we only pack static types. *)
-        assert false
+let dec (typ : 'a typ) (view : Input_view.t) : ('a * Input_view.t, decode_error) result = typ.read Abi view
 
-  let t : type a. ?name:string -> a typ -> a typ =
-   fun ?name ty ->
-    let byte_width =
-      match packed_width ty with
-      | Some w -> w
-      | None -> failwith (Format.sprintf "Packing non-static type %s" (type_name ty))
-    in
-    let repr = Fixed_bytes {alignment = Left; byte_width} in
-    let encode v = Bytes.(concat empty (encode_packed ty v)) in
-    let decode bs = Result.map fst (decode_packed ty ~offset:0 bs) in
-    let name = match name with None -> Format.sprintf "Packed<%s>" (type_name ty) | Some name -> name in
-    Map {repr; encode; decode; name}
-end
+let dec_bytes (typ : 'a typ) (bytes : Bytes.t) : ('a, decode_error) result =
+  Result.(
+    let$ v, view = dec typ (Input_view.of_bytes bytes) in
+    let$ () = ensure (Input_view.is_empty view) ~or_error:Input_too_long in
+    return v )

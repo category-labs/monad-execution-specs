@@ -28,7 +28,7 @@ module Error = struct
     | Duplicate_system_transaction
     | System_transaction_out_of_order
     | Invalid_reward_value
-  [@@deriving to_yojson]
+  [@@deriving to_yojson, eq]
 
   type invalid_system_transaction =
     | Bad_sender of Address.t
@@ -37,7 +37,7 @@ module Error = struct
     | Invalid_system_contract of Address.t
     | Non_zero_gas
     | Execution_error of Evmc.Result.StatusCode.t
-  [@@deriving to_yojson]
+  [@@deriving to_yojson, eq]
 
   type invalid_transaction =
     | Wrong_chain_id
@@ -54,12 +54,12 @@ module Error = struct
     | Transaction_fee_below_base of {base_fee_per_gas : Gas.t}
     | Gas_above_limit
     | System_transaction_error of invalid_system_transaction
-  [@@deriving to_yojson]
+  [@@deriving to_yojson, eq]
 
   type t =
     | Invalid_block of {block : Block.t; reason : invalid_block}
     | Invalid_transaction of {block : Block.t; transaction : Transaction.t; reason : invalid_transaction}
-  [@@deriving to_yojson]
+  [@@deriving to_yojson, eq]
 
   let to_string err = Yojson.Safe.pretty_to_string (to_yojson err)
 end

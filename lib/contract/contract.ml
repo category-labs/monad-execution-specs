@@ -45,20 +45,17 @@ struct
     let make
         (name : string)
         ?(payable = false)
-        ~(input : 'i Tuple.t tup)
+        ~(input : 'i tup)
         ~(output : 'o typ)
         ~gas_cost
-        (fn : ('i Tuple.t, 'o) abi_fn) =
+        (fn : ('i, 'o) abi_fn) =
       let signature = Signature.make name ~input ~output in
       {signature; payable; gas_cost; impl = Abi fn}
 
     let make_raw
-        (name : string) ?(payable = false) ~(input : 'i Tuple.t tup) ~(output : 'o typ) ~gas_cost (fn : raw_fn)
-        =
+        (name : string) ?(payable = false) ~(input : 'i tup) ~(output : 'o typ) ~gas_cost (fn : raw_fn) =
       let signature = Signature.make name ~input ~output in
       {signature; payable; gas_cost; impl = Raw fn}
-
-    type t = Pack : ('i, 'o) impl -> t
 
     (* Monad precompiles revert with an error message on failure. All gas is consumed. *)
     let revert err : Evmc.Result.t TransactionState.M.t =
@@ -70,14 +67,7 @@ struct
           ; output_data = encode_error err
           ; create_address = Address.zero }
 
-    (** Low-level function call: invoke a smart contract function from an EVMC message, get an EVMC result.
-        Returns an error directly if gas is insufficient, if a non-payable function is invoked with a nonzero
-        value, or if input decoding fails.
-        * On insufficient gas, returns a standard EVMC.Out_of_gas result.
-        * On a decoding error or a non-payable nonzero value error, returns an EVMC.Revert error with the error
-          encoded in the message's return data. The encoding is contract-specific.
-     *)
-    let send_message (Pack fn : t) (msg : Evmc.Message.t) : Evmc.Result.t TransactionState.M.t =
+    let send_impl (fn : ('i, 'o) impl) (msg : Evmc.Message.t) : Evmc.Result.t TransactionState.M.t =
       let open TransactionState.M in
       let input = msg.input_data in
       let gas = Gas.of_uint64 msg.gas in
@@ -91,7 +81,7 @@ struct
             match fn.impl with
             | Raw raw_fn -> raw_fn ~sender ~value msg.input_data
             | Abi abi_fn -> (
-              match dec_bytes (Tuple fn.signature.input) input with
+              match dec_bytes (tuple fn.signature.input) input with
               | Error err -> return (Error (decode_error err))
               | Ok inputs ->
                   let$ (output : _ or_error) = abi_fn ~sender ~value inputs in
@@ -107,6 +97,18 @@ struct
                   ; output_data
                   ; create_address = Address.zero }
           | Error err -> revert err
+
+    type t = {selector : Selector.t; send : Evmc.Message.t -> Evmc.Result.t TransactionState.M.t}
+    let pack fn = {selector = fn.signature.selector; send = send_impl fn}
+
+    (** Low-level function call: invoke a smart contract function from an EVMC message, get an EVMC result.
+        Returns an error directly if gas is insufficient, if a non-payable function is invoked with a nonzero
+        value, or if input decoding fails.
+        * On insufficient gas, returns a standard EVMC.Out_of_gas result.
+        * On a decoding error or a non-payable nonzero value error, returns an EVMC.Revert error with the error
+          encoded in the message's return data. The encoding is contract-specific.
+     *)
+    let send_message (fn : t) (msg : Evmc.Message.t) : Evmc.Result.t TransactionState.M.t = fn.send msg
   end
 
   module Impl : sig
@@ -115,9 +117,7 @@ struct
   end = struct
     type t = {functions : Function.t Selector.Map.t; fallback : Function.t}
     let make (functions : Function.t list) ~(fallback : Function.t) : t =
-      { functions =
-          Selector.Map.of_list
-            List.(map (function Function.Pack fn as f -> (fn.signature.selector, f)) functions)
+      { functions = Selector.Map.of_list List.(map (fun (fn : Function.t) -> (fn.selector, fn)) functions)
       ; fallback }
   end
   include Impl

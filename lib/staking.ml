@@ -106,8 +106,8 @@ module Val_id = struct
     let repr = Type.U64.t in
     let encode (Val_id i) = i in
     let decode i = Ok (Val_id i) in
-    let name = Type.type_name Type.U64.t in
-    Type.Map {repr; encode; decode; name}
+    let name = Type.name Type.U64.t in
+    Type.map ~name ~encode ~decode repr
   let t_option = Type.option ~equal ~empty:zero t
 
   (* The C++ implementation here overflows silently and wraps around. *)
@@ -131,8 +131,8 @@ module Epoch = struct
     let repr = Type.U64.t in
     let encode (Epoch i) = i in
     let decode i = Ok (Epoch i) in
-    let name = Type.type_name Type.U64.t in
-    Type.Map {repr; encode; decode; name}
+    let name = Type.name Type.U64.t in
+    Type.map ~name ~encode ~decode repr
 
   (* More useful than symmetric binary addition. The C++ implementation here over/underflows silently and
      wraps around. *)
@@ -168,11 +168,11 @@ module Address_flags = struct
   let empty = {auth_address = Address.zero; flags = U64.zero}
 
   let t =
-    let repr = Packed.t (Tuple [Address.t; U64.t]) in
-    let encode {auth_address; flags} = Tuple.[auth_address; flags] in
-    let decode Tuple.[auth_address; flags] = Ok {auth_address; flags} in
+    let repr = packed Type.(tuple (tup2 Address.t U64.t)) in
+    let encode {auth_address; flags} = (auth_address, flags) in
+    let decode (auth_address, flags) = Ok {auth_address; flags} in
     let name = "address_flags" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
 
   let flag (mask_set : U64.t) : (t, bool) Lens.t =
     let get {flags; _} = U64.(mask_set = logand flags mask_set) in
@@ -194,11 +194,11 @@ module Keys = struct
   let empty = {secp_pubkey = B33.zeros; bls_pubkey = B48.zeros}
 
   let t =
-    let repr = Packed.t (Tuple [B33.t; B48.t]) in
-    let encode {secp_pubkey; bls_pubkey} = Tuple.[secp_pubkey; bls_pubkey] in
-    let decode Tuple.[secp_pubkey; bls_pubkey] = Ok {secp_pubkey; bls_pubkey} in
+    let repr = packed (tuple (tup2 B33.t B48.t)) in
+    let encode {secp_pubkey; bls_pubkey} = (secp_pubkey, bls_pubkey) in
+    let decode (secp_pubkey, bls_pubkey) = Ok {secp_pubkey; bls_pubkey} in
     let name = "keys" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
 end
 
 module Val_execution = struct
@@ -221,21 +221,21 @@ module Val_execution = struct
     ; unclaimed_rewards = U256.zero }
 
   let t =
-    let repr = Tuple [U256.t; U256.t; U256.t; Keys.t; Address_flags.t; U256.t] in
+    let repr = tuple (tup6 U256.t U256.t U256.t Keys.t Address_flags.t U256.t) in
     let encode v =
-      Tuple.[v.stake; v.rewards_per_token; v.commission; v.keys; v.address_flags; v.unclaimed_rewards]
+      (v.stake, v.rewards_per_token, v.commission, v.keys, v.address_flags, v.unclaimed_rewards)
     in
-    let decode Tuple.[stake; rewards_per_token; commission; keys; address_flags; unclaimed_rewards] =
+    let decode (stake, rewards_per_token, commission, keys, address_flags, unclaimed_rewards) =
       Ok {stake; rewards_per_token; commission; keys; address_flags; unclaimed_rewards}
     in
     let name = "val_execution" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
 
   (* A validator is considered to exist iff its auth address is nonzero. *)
   let t_option : t option typ =
     let encode = function None -> empty | Some v -> v in
     let decode (v : t) = Ok (if Address.(v.address_flags.auth_address = zero) then None else Some v) in
-    Map {repr = t; encode; decode; name = "Option<val_execution>"}
+    map ~name:"Option<val_execution>" ~encode ~decode t
 end
 
 module Consensus_view = struct
@@ -245,11 +245,11 @@ module Consensus_view = struct
 
   let t =
     (* Like Val_execution.t but only the relevant fields are available. *)
-    let repr = Packed.t (Tuple [U256.t; U256.t]) in
-    let encode v = Tuple.[v.stake; v.commission] in
-    let decode Tuple.[stake; commission] = Ok {stake; commission} in
+    let repr = packed (tuple (tup2 U256.t U256.t)) in
+    let encode v = (v.stake, v.commission) in
+    let decode (stake, commission) = Ok {stake; commission} in
     let name = "consensus_view" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
 end
 
 module Snapshot_view = Consensus_view
@@ -260,11 +260,11 @@ module Epochs = struct
   let empty = {delta_epoch = Epoch.zero; next_delta_epoch = Epoch.zero}
 
   let t =
-    let repr = Packed.t (Tuple [Epoch.t; Epoch.t]) in
-    let encode {delta_epoch; next_delta_epoch} = Tuple.[delta_epoch; next_delta_epoch] in
-    let decode Tuple.[delta_epoch; next_delta_epoch] = Ok {delta_epoch; next_delta_epoch} in
+    let repr = packed (tuple (tup2 Epoch.t Epoch.t)) in
+    let encode {delta_epoch; next_delta_epoch} = (delta_epoch, next_delta_epoch) in
+    let decode (delta_epoch, next_delta_epoch) = Ok {delta_epoch; next_delta_epoch} in
     let name = "epochs" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
 end
 
 module List_node = struct
@@ -275,11 +275,11 @@ module List_node = struct
   let empty = {inext = Val_id.zero; iprev = Val_id.zero; anext = Address.zero; aprev = Address.zero}
 
   let t =
-    let repr = Packed.t (Tuple [Val_id.t; Val_id.t; Address.t; Address.t]) in
-    let encode v = Tuple.[v.inext; v.iprev; v.anext; v.aprev] in
-    let decode Tuple.[inext; iprev; anext; aprev] = Ok {inext; iprev; anext; aprev} in
+    let repr = packed (tuple (tup4 Val_id.t Val_id.t Address.t Address.t)) in
+    let encode v = (v.inext, v.iprev, v.anext, v.aprev) in
+    let decode (inext, iprev, anext, aprev) = Ok {inext; iprev; anext; aprev} in
     let name = "list_node" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
 end
 
 module Delegator = struct
@@ -304,15 +304,15 @@ module Delegator = struct
     ; list_node = List_node.empty }
 
   let t =
-    let repr = Tuple [U256.t; U256.t; U256.t; U256.t; U256.t; Epochs.t; List_node.t] in
+    let repr = tuple (tup7 U256.t U256.t U256.t U256.t U256.t Epochs.t List_node.t) in
     let encode d =
-      Tuple.[d.stake; d.rewards_per_token; d.rewards; d.delta_stake; d.next_delta_stake; d.epochs; d.list_node]
+      (d.stake, d.rewards_per_token, d.rewards, d.delta_stake, d.next_delta_stake, d.epochs, d.list_node)
     in
-    let decode Tuple.[stake; rewards_per_token; rewards; delta_stake; next_delta_stake; epochs; list_node] =
+    let decode (stake, rewards_per_token, rewards, delta_stake, next_delta_stake, epochs, list_node) =
       Ok {stake; rewards_per_token; rewards; delta_stake; next_delta_stake; epochs; list_node}
     in
     let name = "delegator" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
 
   let t_option = option ~equal ~empty t
 
@@ -324,11 +324,11 @@ module Withdrawal_request = struct
   type t = {amount : U256.t; acc : U256.t; epoch : Epoch.t} [@@deriving eq]
   let empty = {amount = U256.zero; acc = U256.zero; epoch = Epoch.zero}
   let t =
-    let repr = Packed.t (Tuple [U256.t; U256.t; Epoch.t]) in
-    let encode {amount; acc; epoch} = Tuple.[amount; acc; epoch] in
-    let decode Tuple.[amount; acc; epoch] = Ok {amount; acc; epoch} in
+    let repr = packed (tuple (tup3 U256.t U256.t Epoch.t)) in
+    let encode {amount; acc; epoch} = (amount, acc, epoch) in
+    let decode (amount, acc, epoch) = Ok {amount; acc; epoch} in
     let name = "withdrawal_request" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
   let t_option = option ~equal ~empty t
 end
 
@@ -336,11 +336,11 @@ module Ref_counted_accumulator = struct
   type t = {value : U256.t; refcount : U256.t} [@@deriving eq]
   let empty = {value = U256.zero; refcount = U256.zero}
   let t =
-    let repr = Packed.t (Tuple [U256.t; U256.t]) in
-    let encode {value; refcount} = Tuple.[value; refcount] in
-    let decode Tuple.[value; refcount] = Ok {value; refcount} in
+    let repr = packed (tuple (tup2 U256.t U256.t)) in
+    let encode {value; refcount} = (value, refcount) in
+    let decode (value, refcount) = Ok {value; refcount} in
     let name = "ref_counted_accumulator" in
-    Map {repr; encode; decode; name}
+    map ~name ~encode ~decode repr
   let t_option = option ~equal ~empty t
 end
 
@@ -356,16 +356,18 @@ module Variables = struct
 
   (* The staking contract stores numeric types in a packed (left-aligned) representation. However, outside of
      this module, the Solidity ABIs expect them to be right-aligned. *)
-  let packed_epoch_t = Type.Packed.t Epoch.t
-  let packed_val_id_t = Type.Packed.t Val_id.t
-  let packed_val_id_t_option = Type.Packed.t Val_id.t_option
+  let packed_epoch_t = Type.packed Epoch.t
+  let packed_val_id_t = Type.packed Val_id.t
+  let packed_val_id_t_option = Type.packed Val_id.t_option
   let packed_bool_t =
-    Type.Packed.t
-      (Map
-         { repr = U8.t
-         ; encode = (fun b -> if b then U8.one else U8.zero)
-         ; decode = (fun u8 -> Ok U8.(u8 <> zero))
-         ; name = "bool" } )
+    (* Type.bool is backed by U256.t in order to handle extraneous bytes correctly, so a packed
+       Type.bool would still take up 32 bytes. We use byte-backed bools here. *)
+    Type.(
+      packed
+        (map ~name:"bool"
+           ~encode:(fun b -> if b then U8.one else U8.zero)
+           ~decode:(fun u8 -> Ok U8.(u8 <> zero))
+           U8.t ) )
 
   let epoch = Loc.(packed_epoch_t @ epoch_address)
   let in_epoch_delay_period = Loc.(packed_bool_t @ in_epoch_delay_period_address)
@@ -724,53 +726,53 @@ let validator_rewarded_event =
   Abi.Event.
     { name = "ValidatorRewarded"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t; Address.t]
-    ; non_indexed_parameter_types = [U256.t; U64.t] }
+    ; indexed_parameter_types = tup2 U64.t Address.t
+    ; non_indexed_parameter_types = tup2 U256.t U64.t }
 let () =
   check_hash validator_rewarded_event "3a420a01486b6b28d6ae89c51f5c3bde3e0e74eecbb646a0c481ccba3aae3754"
 let emit_validator_rewarded_event ~val_id:(Val_id.Val_id val_id) ~from ~amount : unit M.t =
   M.(
     let$ (Epoch epoch) = !$Variables.epoch in
-    emit_event validator_rewarded_event [val_id; from] [amount; epoch] )
+    emit_event validator_rewarded_event (val_id, from) (amount, epoch) )
 
 let validator_created_event =
   Abi.Event.
     { name = "ValidatorCreated"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t; Address.t]
-    ; non_indexed_parameter_types = [U256.t] }
+    ; indexed_parameter_types = tup2 U64.t Address.t
+    ; non_indexed_parameter_types = tup1 U256.t }
 let () = check_hash validator_created_event "6f8045cd38e512b8f12f6f02947c632e5f25af03aad132890ecf50015d97c1b2"
 let emit_validator_created_event ~val_id:(Val_id.Val_id val_id) ~auth_delegator ~commission : unit M.t =
-  M.emit_event validator_created_event [val_id; auth_delegator] [commission]
+  M.emit_event validator_created_event (val_id, auth_delegator) commission
 
 let validator_status_changed_event =
   Abi.Event.
     { name = "ValidatorStatusChanged"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t]
-    ; non_indexed_parameter_types = [U64.t] }
+    ; indexed_parameter_types = tup1 U64.t
+    ; non_indexed_parameter_types = tup1 U64.t }
 let () =
   check_hash validator_status_changed_event "c95966754e882e03faffaf164883d98986dda088d09471a35f9e55363daf0c53"
 let emit_validator_status_changed_event ~val_id:(Val_id.Val_id val_id) ~flags : unit M.t =
-  M.emit_event validator_status_changed_event [val_id] [flags]
+  M.emit_event validator_status_changed_event val_id flags
 
 let delegation_event =
   Abi.Event.
     { name = "Delegate"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t; Address.t]
-    ; non_indexed_parameter_types = [U256.t; U64.t] }
+    ; indexed_parameter_types = tup2 U64.t Address.t
+    ; non_indexed_parameter_types = tup2 U256.t U64.t }
 let () = check_hash delegation_event "e4d4df1e1827dd28252fd5c3cd7ebccd3da6e0aa31f74c828f3c8542af49d840"
 let emit_delegation_event
     ~val_id:(Val_id.Val_id val_id) ~delegator ~amount ~active_epoch:(Epoch.Epoch active_epoch) : unit M.t =
-  M.emit_event delegation_event [val_id; delegator] [amount; active_epoch]
+  M.emit_event delegation_event (val_id, delegator) (amount, active_epoch)
 
 let undelegate_event =
   Abi.Event.
     { name = "Undelegate"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t; Address.t]
-    ; non_indexed_parameter_types = [U8.t; U256.t; U64.t] }
+    ; indexed_parameter_types = tup2 U64.t Address.t
+    ; non_indexed_parameter_types = tup3 U8.t U256.t U64.t }
 let () = check_hash undelegate_event "3e53c8b91747e1b72a44894db10f2a45fa632b161fdcdd3a17bd6be5482bac62"
 let emit_undelegate_event
     ~val_id:(Val_id.Val_id val_id)
@@ -778,52 +780,52 @@ let emit_undelegate_event
     ~withdrawal_id
     ~amount
     ~activation_epoch:(Epoch.Epoch activation_epoch) =
-  M.emit_event undelegate_event [val_id; delegator] [withdrawal_id; amount; activation_epoch]
+  M.emit_event undelegate_event (val_id, delegator) (withdrawal_id, amount, activation_epoch)
 
 let withdraw_event =
   Abi.Event.
     { name = "Withdraw"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t; Address.t]
-    ; non_indexed_parameter_types = [U8.t; U256.t; U64.t] }
+    ; indexed_parameter_types = tup2 U64.t Address.t
+    ; non_indexed_parameter_types = tup3 U8.t U256.t U64.t }
 let () = check_hash withdraw_event "63030e4238e1146c63f38f4ac81b2b23c8be28882e68b03f0887e50d0e9bb18f"
 let emit_withdraw_event ~val_id:(Val_id.Val_id val_id) ~delegator ~withdrawal_id ~amount =
   M.(
     let$ (Epoch withdraw_epoch) = !$Variables.epoch in
-    emit_event withdraw_event [val_id; delegator] [withdrawal_id; amount; withdraw_epoch] )
+    emit_event withdraw_event (val_id, delegator) (withdrawal_id, amount, withdraw_epoch) )
 
 let claim_rewards_event =
   Abi.Event.
     { name = "ClaimRewards"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t; Address.t]
-    ; non_indexed_parameter_types = [U256.t; U64.t] }
+    ; indexed_parameter_types = tup2 U64.t Address.t
+    ; non_indexed_parameter_types = tup2 U256.t U64.t }
 let () = check_hash claim_rewards_event "cb607e6b63c89c95f6ae24ece9fe0e38a7971aa5ed956254f1df47490921727b"
 let emit_claim_rewards_event ~val_id:(Val_id.Val_id val_id) ~delegator ~amount =
   M.(
     let$ (Epoch claim_epoch) = !$Variables.epoch in
-    emit_event claim_rewards_event [val_id; delegator] [amount; claim_epoch] )
+    emit_event claim_rewards_event (val_id, delegator) (amount, claim_epoch) )
 
 let commission_changed_event =
   Abi.Event.
     { name = "CommissionChanged"
     ; anonymous = false
-    ; indexed_parameter_types = [U64.t]
-    ; non_indexed_parameter_types = [U256.t; U256.t] }
+    ; indexed_parameter_types = tup1 U64.t
+    ; non_indexed_parameter_types = tup2 U256.t U256.t }
 let () =
   check_hash commission_changed_event "d1698d3454c5b5384b70aaae33f1704af7c7e055f0c75503ba3146dc28995920"
 let emit_commission_changed_event ~val_id:(Val_id.Val_id val_id) ~old_commission ~new_commission =
-  M.emit_event commission_changed_event [val_id] [old_commission; new_commission]
+  M.emit_event commission_changed_event val_id (old_commission, new_commission)
 
 let epoch_changed_event =
   Abi.Event.
     { name = "EpochChanged"
     ; anonymous = false
-    ; indexed_parameter_types = []
-    ; non_indexed_parameter_types = [U64.t; U64.t] }
+    ; indexed_parameter_types = tup0
+    ; non_indexed_parameter_types = tup2 U64.t U64.t }
 let () = check_hash epoch_changed_event "4fae4dbe0ed659e8ce6637e3c273cd8e4d3bf029b9379a9e8b3f3f27dbef809b"
 let emit_epoch_changed_event ~old_epoch:(Epoch.Epoch old_epoch) ~new_epoch:(Epoch.Epoch new_epoch) =
-  M.emit_event epoch_changed_event [] [old_epoch; new_epoch]
+  M.emit_event epoch_changed_event () (old_epoch, new_epoch)
 
 let delegate_impl ~(val_id : Val_id.t) ~(stake : U256.t) ~(address : Address.t) : bool M.t =
   M.(
@@ -909,7 +911,7 @@ let delegate_impl ~(val_id : Val_id.t) ~(stake : U256.t) ~(address : Address.t) 
 
     return true )
 
-let delegate ~sender ~value Tuple.[(val_id : Val_id.t)] =
+let delegate ~sender ~value (val_id : Val_id.t) =
   M.(if U256.(value = zero) then return true else delegate_impl ~val_id ~stake:value ~address:sender)
 
 let add_validator ~sender:_ ~value (input : Bytes.t) : Bytes.t M.t =
@@ -917,7 +919,7 @@ let add_validator ~sender:_ ~value (input : Bytes.t) : Bytes.t M.t =
     (* add_validator does not use standard Solidity ABI decoding. Instead, it takes its parameters as a tuple
        of dynamic byte arrays but ignores the tuple offsets and decodes each parameter directly from offsets
        calculated from their expected length. As a consequence, if the offsets in the tuple header are invalid,
-       this function will still succeed. *)
+       this function will still succeed. Staking errors are observable, so we preserve this behavior. *)
     let decode_bytes_tail ~offset ~length =
       let input_length = Bytes.length input in
       let$ offset =
@@ -933,21 +935,20 @@ let add_validator ~sender:_ ~value (input : Bytes.t) : Bytes.t M.t =
       (* Skip header size. *)
       B32.byte_width + B32.byte_width + B32.byte_width
     in
-    (* Message layout:
+    (* Payload layout:
        [ B33 secp_pubkey | B48 bls_pubkey | B20 auth_address | B32 signed_stake | B32 commission ] *)
-    let message_size = 33 + 48 + Address.byte_width + U256.byte_width + U256.byte_width in
-    let$ message, offset = decode_bytes_tail ~offset ~length:message_size in
+    let payload_size = 33 + 48 + Address.byte_width + U256.byte_width + U256.byte_width in
+    let$ payload, offset = decode_bytes_tail ~offset ~length:payload_size in
     let$ secp_sig, offset = decode_bytes_tail ~offset ~length:64 in
     let secp_sig = B64.of_bytes_exn secp_sig in
     let$ bls_sig, offset = decode_bytes_tail ~offset ~length:96 in
     let bls_sig = B96.of_bytes_exn bls_sig in
     let$ () = when_ (offset <> Bytes.length input) (fail Invalid_input) in
-    let secp_pubkey = B33.sub message 0 in
-    let bls_pubkey = B48.sub message 33 in
-    let auth_address = Address.sub message 81 in
-    let signed_stake = U256.(of_repr (Repr.sub message 101)) in
-    let commission = U256.(of_repr (Repr.sub message 133)) in
-
+    let secp_pubkey = B33.sub payload 0 in
+    let bls_pubkey = B48.sub payload 33 in
+    let auth_address = Address.sub payload 81 in
+    let signed_stake = U256.(of_repr (Repr.sub payload 101)) in
+    let commission = U256.(of_repr (Repr.sub payload 133)) in
     let$ () = when_ U256.(signed_stake <> value) (fail Invalid_input) in
     let$ () = when_ U256.(value < min_auth_address_stake) (fail Insufficient_stake) in
 
@@ -956,7 +957,7 @@ let add_validator ~sender:_ ~value (input : Bytes.t) : Bytes.t M.t =
     let$ () =
       let$ secp_sig = Option.or_fail Invalid_secp_signature (Crypto.Secp.signature_of_bytes secp_sig) in
       when_
-        (not (Crypto.Secp.verify secp_pk ~msg:message ~signature:secp_sig))
+        (not (Crypto.Secp.verify secp_pk ~msg:payload ~signature:secp_sig))
         (fail Secp_signature_verification_failed)
     in
     (* Verify BLS signature. *)
@@ -964,7 +965,7 @@ let add_validator ~sender:_ ~value (input : Bytes.t) : Bytes.t M.t =
     let$ () =
       let$ bls_sig = Option.or_fail Invalid_bls_signature (Crypto.Bls.signature_of_bytes bls_sig) in
       when_
-        (not (Crypto.Bls.verify bls_pk ~msg:message ~signature:bls_sig))
+        (not (Crypto.Bls.verify bls_pk ~msg:payload ~signature:bls_sig))
         (fail Bls_signature_verification_failed)
     in
 
@@ -994,8 +995,7 @@ let add_validator ~sender:_ ~value (input : Bytes.t) : Bytes.t M.t =
 
     return (enc_bytes Val_id.t val_id) )
 
-let undelegate ~sender ~value:_ Tuple.[(val_id : Val_id.t); (amount : U256.t); (withdrawal_id : U8.t)] :
-    bool M.t =
+let undelegate ~sender ~value:_ ((val_id : Val_id.t), (amount : U256.t), (withdrawal_id : U8.t)) : bool M.t =
   M.(
     if U256.(amount = zero) then return true
     else
@@ -1085,7 +1085,7 @@ let undelegate ~sender ~value:_ Tuple.[(val_id : Val_id.t); (amount : U256.t); (
 
       return true )
 
-let withdraw ~sender ~value:_ Tuple.[(val_id : Val_id.t); (withdrawal_id : U8.t)] : bool M.t =
+let withdraw ~sender ~value:_ ((val_id : Val_id.t), (withdrawal_id : U8.t)) : bool M.t =
   M.(
     let$ wr_opt = !$(Variables.withdrawal_request (val_id, sender, withdrawal_id)) in
     let$ wr = Option.or_fail Unknown_withdrawal_id wr_opt in
@@ -1116,7 +1116,7 @@ let withdraw ~sender ~value:_ Tuple.[(val_id : Val_id.t); (withdrawal_id : U8.t)
 
     return true )
 
-let compound ~sender ~value:_ Tuple.[(val_id : Val_id.t)] : bool M.t =
+let compound ~sender ~value:_ (val_id : Val_id.t) : bool M.t =
   M.(
     let$ val_execution, delegator = pull_delegator_up_to_date (val_id, sender) in
 
@@ -1135,7 +1135,7 @@ let compound ~sender ~value:_ Tuple.[(val_id : Val_id.t)] : bool M.t =
 
     return true )
 
-let claim_rewards ~sender ~value:_ Tuple.[(val_id : Val_id.t)] : bool M.t =
+let claim_rewards ~sender ~value:_ (val_id : Val_id.t) : bool M.t =
   M.(
     let$ val_execution, delegator = pull_delegator_up_to_date (val_id, sender) in
 
@@ -1154,7 +1154,7 @@ let claim_rewards ~sender ~value:_ Tuple.[(val_id : Val_id.t)] : bool M.t =
 
     return true )
 
-let change_commission ~sender ~value:_ Tuple.[(val_id : Val_id.t); (new_commission : U256.t)] : bool M.t =
+let change_commission ~sender ~value:_ ((val_id : Val_id.t), (new_commission : U256.t)) : bool M.t =
   M.(
     let$ val_execution = !$(Variables.val_execution_opt val_id) >>= Option.or_fail Unknown_validator in
 
@@ -1175,7 +1175,7 @@ let change_commission ~sender ~value:_ Tuple.[(val_id : Val_id.t); (new_commissi
 
     return true )
 
-let external_reward ~sender ~value Tuple.[(val_id : Val_id.t)] : bool M.t =
+let external_reward ~sender ~value (val_id : Val_id.t) : bool M.t =
   M.(
     let reward = value in
     let$ val_execution = !$(Variables.val_execution_opt val_id) >>= Option.or_fail Unknown_validator in
@@ -1193,27 +1193,26 @@ let external_reward ~sender ~value Tuple.[(val_id : Val_id.t)] : bool M.t =
 
     return true )
 
-let get_validator ~sender:_ ~value:_ Tuple.[(val_id : Val_id.t)] =
+let get_validator ~sender:_ ~value:_ (val_id : Val_id.t) =
   M.(
     let$ val_execution = !$(Variables.val_execution val_id) in
     let$ consensus = !$(Variables.consensus_view val_id) in
     let$ snapshot = !$(Variables.snapshot_view val_id) in
     return
-      Tuple.
-        [ val_execution.address_flags.auth_address
-        ; val_execution.address_flags.flags
-        ; val_execution.stake
-        ; val_execution.rewards_per_token
-        ; val_execution.commission
-        ; val_execution.unclaimed_rewards
-        ; consensus.stake
-        ; consensus.commission
-        ; snapshot.stake
-        ; snapshot.commission
-        ; B33.to_bytes val_execution.keys.secp_pubkey
-        ; B48.to_bytes val_execution.keys.bls_pubkey ] )
+      ( val_execution.address_flags.auth_address
+      , val_execution.address_flags.flags
+      , val_execution.stake
+      , val_execution.rewards_per_token
+      , val_execution.commission
+      , val_execution.unclaimed_rewards
+      , consensus.stake
+      , consensus.commission
+      , snapshot.stake
+      , snapshot.commission
+      , B33.to_bytes val_execution.keys.secp_pubkey
+      , B48.to_bytes val_execution.keys.bls_pubkey ) )
 
-let get_delegator ~sender:_ ~value:_ Tuple.[(val_id : Val_id.t); (address : Address.t)] =
+let get_delegator ~sender:_ ~value:_ ((val_id : Val_id.t), (address : Address.t)) =
   M.(
     let$ val_execution, delegator = pull_delegator_up_to_date (val_id, address) in
 
@@ -1221,23 +1220,22 @@ let get_delegator ~sender:_ ~value:_ Tuple.[(val_id : Val_id.t); (address : Addr
     let$ () = Variables.delegator (val_id, address) $= delegator in
 
     return
-      Tuple.
-        [ delegator.stake
-        ; delegator.rewards_per_token
-        ; delegator.rewards
-        ; delegator.delta_stake
-        ; delegator.next_delta_stake
-        ; delegator.epochs.delta_epoch
-        ; delegator.epochs.next_delta_epoch ] )
+      ( delegator.stake
+      , delegator.rewards_per_token
+      , delegator.rewards
+      , delegator.delta_stake
+      , delegator.next_delta_stake
+      , delegator.epochs.delta_epoch
+      , delegator.epochs.next_delta_epoch ) )
 
 let get_withdrawal_request
-    ~sender:_ ~value:_ Tuple.[(val_id : Val_id.t); (address : Address.t); (withdrawal_id : U8.t)] =
+    ~sender:_ ~value:_ ((val_id : Val_id.t), (address : Address.t), (withdrawal_id : U8.t)) =
   M.(
     let$ wr_opt = !$(Variables.withdrawal_request (val_id, address, withdrawal_id)) in
     let wr = Option.value wr_opt ~default:Withdrawal_request.empty in
-    return Tuple.[wr.amount; wr.acc; wr.epoch] )
+    return (wr.amount, wr.acc, wr.epoch) )
 
-let get_valset (arr : 'a Storage.Array.t) ~sender:_ ~value:_ Tuple.[(start_index : U32.t)] =
+let get_valset (arr : 'a Storage.Array.t) ~sender:_ ~value:_ (start_index : U32.t) =
   M.(
     let$ arr_len = !$(arr.length) in
 
@@ -1265,26 +1263,26 @@ let get_valset (arr : 'a Storage.Array.t) ~sender:_ ~value:_ Tuple.[(start_index
     let$ next_index =
       match U32.of_uint_opt (U64.to_uint index) with Some i -> return i | None -> fail Internal_error
     in
-    return Tuple.[done_; next_index; page] )
+    return (done_, next_index, page) )
 
-let get_delegations ~sender:_ ~value:_ Tuple.[(address : Address.t); (start_val_id : Val_id.t)] =
+let get_delegations ~sender:_ ~value:_ ((address : Address.t), (start_val_id : Val_id.t)) =
   M.(
     let$ done_, next, items = Validators_for_delegator.traverse address start_val_id linked_list_pagination in
-    return Tuple.[done_; next; items] )
+    return (done_, next, items) )
 
-let get_delegators ~sender:_ ~value:_ Tuple.[(val_id : Val_id.t); (start_delegator : Address.t)] =
+let get_delegators ~sender:_ ~value:_ ((val_id : Val_id.t), (start_delegator : Address.t)) =
   M.(
     let$ done_, next, items =
       Delegators_for_validator.traverse val_id start_delegator linked_list_pagination
     in
-    return Tuple.[done_; next; items] )
+    return (done_, next, items) )
 
 let get_epoch ~sender:_ ~value:_ (_input : Bytes.t) =
   (* get_epoch explicitly ignores any input and does not fail on trailing bytes. *)
   M.(
     let$ epoch = !$Variables.epoch in
     let$ in_epoch_delay_period = !$Variables.in_epoch_delay_period in
-    return (enc_bytes (Tuple [Epoch.t; bool]) Tuple.[epoch; in_epoch_delay_period]) )
+    return (enc_bytes (tuple (tup2 Epoch.t bool)) (epoch, in_epoch_delay_period)) )
 
 let get_proposer ~sender:_ ~value:_ (_input : Bytes.t) =
   (* get_proposer explicitly ignores any input and does not fail on trailing bytes. *)
@@ -1295,138 +1293,144 @@ let get_proposer ~sender:_ ~value:_ (_input : Bytes.t) =
 let check_signature (fn : (_, _) Function.impl) hash = assert (B4.(fn.signature.selector = of_hex_string hash))
 
 let add_validator_function =
-  Function.make_raw "addValidator" ~payable:true ~input:[Bytes; Bytes; Bytes] ~output:Val_id.t
+  Function.make_raw "addValidator" ~payable:true ~input:(tup3 bytes bytes bytes) ~output:Val_id.t
     ~gas_cost:(Gas.of_int 505125) add_validator
 let () = check_signature add_validator_function "f145204c"
 
 let delegate_function =
-  Function.make "delegate" ~payable:true ~input:[Val_id.t] ~output:bool ~gas_cost:Gas.(of_int 260850) delegate
+  Function.make "delegate" ~payable:true ~input:(tup1 Val_id.t) ~output:bool
+    ~gas_cost:Gas.(of_int 260850)
+    delegate
 let () = check_signature delegate_function "84994fec"
 
 let undelegate_function =
-  Function.make "undelegate" ~input:[Val_id.t; U256.t; U8.t] ~output:bool
+  Function.make "undelegate" ~input:(tup3 Val_id.t U256.t U8.t) ~output:bool
     ~gas_cost:Gas.(of_int 147750)
     undelegate
 let () = check_signature undelegate_function "5cf41514"
 
 let compound_function =
-  Function.make "compound" ~input:[Val_id.t] ~output:bool ~gas_cost:Gas.(of_int 289325) compound
+  Function.make "compound" ~input:(tup1 Val_id.t) ~output:bool ~gas_cost:Gas.(of_int 289325) compound
 let () = check_signature compound_function "b34fea67"
 
 let withdraw_function =
-  Function.make "withdraw" ~input:[Val_id.t; U8.t] ~output:bool ~gas_cost:Gas.(of_int 68675) withdraw
+  Function.make "withdraw" ~input:(tup2 Val_id.t U8.t) ~output:bool ~gas_cost:Gas.(of_int 68675) withdraw
 let () = check_signature withdraw_function "aed2ee73"
 
 let claim_rewards_function =
-  Function.make "claimRewards" ~input:[Val_id.t] ~output:bool ~gas_cost:Gas.(of_int 155375) claim_rewards
+  Function.make "claimRewards" ~input:(tup1 Val_id.t) ~output:bool ~gas_cost:Gas.(of_int 155375) claim_rewards
 let () = check_signature claim_rewards_function "a76e2ca5"
 
 let change_commission_function =
-  Function.make "changeCommission" ~input:[Val_id.t; U256.t] ~output:bool
+  Function.make "changeCommission" ~input:(tup2 Val_id.t U256.t) ~output:bool
     ~gas_cost:Gas.(of_int 39475)
     change_commission
 let () = check_signature change_commission_function "9bdcc3c8"
 
 let external_reward_function =
-  Function.make "externalReward" ~payable:true ~input:[Val_id.t] ~output:bool
+  Function.make "externalReward" ~payable:true ~input:(tup1 Val_id.t) ~output:bool
     ~gas_cost:Gas.(of_int 66575)
     external_reward
 let () = check_signature external_reward_function "e4b3303b"
 
 let get_epoch_function =
   (* get_epoch is a raw function because it will ignore trailing input bytes. *)
-  Function.make_raw "getEpoch" ~input:[] ~output:(Tuple [Epoch.t; bool]) ~gas_cost:Gas.(of_int 200) get_epoch
+  Function.make_raw "getEpoch" ~input:tup0
+    ~output:(tuple (tup2 Epoch.t bool))
+    ~gas_cost:Gas.(of_int 200)
+    get_epoch
 let () = check_signature get_epoch_function "757991a8"
 
 let get_proposer_val_id_function =
   (* get_proposer_val_id is a raw function because it will ignore trailing input bytes. *)
-  Function.make_raw "getProposerValId" ~input:[] ~output:Val_id.t ~gas_cost:Gas.(of_int 100) get_proposer
+  Function.make_raw "getProposerValId" ~input:tup0 ~output:Val_id.t ~gas_cost:Gas.(of_int 100) get_proposer
 let () = check_signature get_proposer_val_id_function "fbacb0be"
 
 let get_validator_function =
-  Function.make "getValidator" ~input:[Val_id.t]
+  Function.make "getValidator" ~input:(tup1 Val_id.t)
     ~output:
-      (Tuple [Address.t; U64.t; U256.t; U256.t; U256.t; U256.t; U256.t; U256.t; U256.t; U256.t; Bytes; Bytes])
+      (tuple (tup12 Address.t U64.t U256.t U256.t U256.t U256.t U256.t U256.t U256.t U256.t bytes bytes))
     ~gas_cost:Gas.(of_int 97200)
     get_validator
 let () = check_signature get_validator_function "2b6d639a"
 
 let get_delegator_function =
-  Function.make "getDelegator" ~input:[Val_id.t; Address.t]
-    ~output:(Tuple [U256.t; U256.t; U256.t; U256.t; U256.t; Epoch.t; Epoch.t])
+  Function.make "getDelegator" ~input:(tup2 Val_id.t Address.t)
+    ~output:(tuple (tup7 U256.t U256.t U256.t U256.t U256.t Epoch.t Epoch.t))
     ~gas_cost:Gas.(of_int 184900)
     get_delegator
 let () = check_signature get_delegator_function "573c1ce0"
 
 let get_withdrawal_request_function =
-  Function.make "getWithdrawalRequest" ~input:[Val_id.t; Address.t; U8.t]
-    ~output:(Tuple [U256.t; U256.t; Epoch.t])
+  Function.make "getWithdrawalRequest" ~input:(tup3 Val_id.t Address.t U8.t)
+    ~output:(tuple (tup3 U256.t U256.t Epoch.t))
     ~gas_cost:Gas.(of_int 24300)
     get_withdrawal_request
 let () = check_signature get_withdrawal_request_function "56fa2045"
 
 let get_consensus_validator_set_function =
-  Function.make "getConsensusValidatorSet" ~input:[U32.t]
-    ~output:(Tuple [bool; U32.t; Array Val_id.t])
+  Function.make "getConsensusValidatorSet" ~input:(tup1 U32.t)
+    ~output:(tuple (tup3 bool U32.t (array Val_id.t)))
     ~gas_cost:Gas.(of_int 814000)
     (get_valset Variables.valset_consensus)
 let () = check_signature get_consensus_validator_set_function "fb29b729"
 
 let get_snapshot_validator_set_function =
-  Function.make "getSnapshotValidatorSet" ~input:[U32.t]
-    ~output:(Tuple [bool; U32.t; Array Val_id.t])
+  Function.make "getSnapshotValidatorSet" ~input:(tup1 U32.t)
+    ~output:(tuple (tup3 bool U32.t (array Val_id.t)))
     ~gas_cost:Gas.(of_int 814000)
     (get_valset Variables.valset_snapshot)
 let () = check_signature get_snapshot_validator_set_function "de66a368"
 
 let get_execution_validator_set_function =
-  Function.make "getExecutionValidatorSet" ~input:[U32.t]
-    ~output:(Tuple [bool; U32.t; Array Val_id.t])
+  Function.make "getExecutionValidatorSet" ~input:(tup1 U32.t)
+    ~output:(tuple (tup3 bool U32.t (array Val_id.t)))
     ~gas_cost:Gas.(of_int 814000)
     (get_valset Variables.valset_execution)
 let () = check_signature get_execution_validator_set_function "7cb074df"
 
 let get_delegations_function =
-  Function.make "getDelegations" ~input:[Address.t; Val_id.t]
-    ~output:(Tuple [bool; Val_id.t; Array Val_id.t])
+  Function.make "getDelegations" ~input:(tup2 Address.t Val_id.t)
+    ~output:(tuple (tup3 bool Val_id.t (array Val_id.t)))
     ~gas_cost:Gas.(of_int 814000)
     get_delegations
 let () = check_signature get_delegations_function "4fd66050"
 
 let get_delegators_function =
-  Function.make "getDelegators" ~input:[Val_id.t; Address.t]
-    ~output:(Tuple [bool; Address.t; Array Address.t])
+  Function.make "getDelegators" ~input:(tup2 Val_id.t Address.t)
+    ~output:(tuple (tup3 bool Address.t (array Address.t)))
     ~gas_cost:Gas.(of_int 814000)
     get_delegators
 let () = check_signature get_delegators_function "a0843a26"
 
 let fallback_function =
-  Function.make "fallback" ~payable:true ~input:[] ~output:unit
+  Function.make "fallback" ~payable:true ~input:tup0 ~output:unit
     ~gas_cost:Gas.(of_int 40_000)
-    (fun ~sender:_ ~value:_ [] -> M.fail Method_not_supported)
+    (fun ~sender:_ ~value:_ () -> M.fail Method_not_supported)
 
 let address = staking_address
 let precompile =
+  let open Function in
   let contract =
-    Contract.make ~fallback:(Pack fallback_function)
-      [ Pack add_validator_function
-      ; Pack delegate_function
-      ; Pack undelegate_function
-      ; Pack compound_function
-      ; Pack withdraw_function
-      ; Pack claim_rewards_function
-      ; Pack change_commission_function
-      ; Pack external_reward_function
-      ; Pack get_epoch_function
-      ; Pack get_proposer_val_id_function
-      ; Pack get_validator_function
-      ; Pack get_delegator_function
-      ; Pack get_withdrawal_request_function
-      ; Pack get_consensus_validator_set_function
-      ; Pack get_snapshot_validator_set_function
-      ; Pack get_execution_validator_set_function
-      ; Pack get_delegations_function
-      ; Pack get_delegators_function ]
+    Contract.make ~fallback:(pack fallback_function)
+      [ pack add_validator_function
+      ; pack delegate_function
+      ; pack undelegate_function
+      ; pack compound_function
+      ; pack withdraw_function
+      ; pack claim_rewards_function
+      ; pack change_commission_function
+      ; pack external_reward_function
+      ; pack get_epoch_function
+      ; pack get_proposer_val_id_function
+      ; pack get_validator_function
+      ; pack get_delegator_function
+      ; pack get_withdrawal_request_function
+      ; pack get_consensus_validator_set_function
+      ; pack get_snapshot_validator_set_function
+      ; pack get_execution_validator_set_function
+      ; pack get_delegations_function
+      ; pack get_delegators_function ]
   in
   fun (msg : Evmc.Message.t) -> Contract.dispatch contract msg
 
@@ -1437,7 +1441,7 @@ let clear_valset (val_ids : Val_id.t Storage.Array.t) (validators : (Val_id.t, '
     let$ () = lift (Storage.Array.iterM val_ids ~f:(fun val_id -> Storage.Loc.clear (validators val_id))) in
     lift (Storage.Array.clear val_ids) )
 
-let syscall_snapshot ~sender:_ ~value:_ Tuple.[] =
+let syscall_snapshot ~sender:_ ~value:_ () =
   M.(
     let$ in_epoch_delay_period = !$Variables.in_epoch_delay_period in
     let$ () = when_ in_epoch_delay_period (fail Snapshot_in_boundary) in
@@ -1512,10 +1516,10 @@ let syscall_snapshot ~sender:_ ~value:_ Tuple.[] =
 
     Variables.in_epoch_delay_period $= true )
 let syscall_snapshot_function =
-  Function.make "syscallSnapshot" ~input:[] ~output:unit ~gas_cost:Gas.zero syscall_snapshot
+  Function.make "syscallSnapshot" ~input:tup0 ~output:unit ~gas_cost:Gas.zero syscall_snapshot
 let () = check_signature syscall_snapshot_function "157eeb21"
 
-let syscall_on_epoch_change ~sender:_ ~value:_ Tuple.[(next_epoch : Epoch.t)] =
+let syscall_on_epoch_change ~sender:_ ~value:_ (next_epoch : Epoch.t) =
   M.(
     let$ next_next_epoch = checked_arith Epoch.(next_epoch + 1) in
     let$ last_epoch = !$Variables.epoch in
@@ -1548,11 +1552,11 @@ let syscall_on_epoch_change ~sender:_ ~value:_ Tuple.[(next_epoch : Epoch.t)] =
     let$ () = Variables.in_epoch_delay_period $= false in
     Variables.epoch $= next_epoch )
 let syscall_on_epoch_change_function =
-  Function.make "syscallOnEpochChange" ~input:[Epoch.t] ~output:unit ~gas_cost:Gas.zero
+  Function.make "syscallOnEpochChange" ~input:(tup1 Epoch.t) ~output:unit ~gas_cost:Gas.zero
     syscall_on_epoch_change
 let () = check_signature syscall_on_epoch_change_function "1d4e9f02"
 
-let syscall_reward ~sender:_ ~value Tuple.[(block_author : Address.t)] =
+let syscall_reward ~sender:_ ~value (block_author : Address.t) =
   M.(
     let raw_reward = value in
 
@@ -1592,13 +1596,14 @@ let syscall_reward ~sender:_ ~value Tuple.[(block_author : Address.t)] =
     (* 6. Store the proposer validator id for other contracts to query. *)
     Variables.proposer_val_id $= val_id )
 let syscall_reward_function =
-  Function.make "syscallReward" ~payable:true ~input:[Address.t] ~output:unit ~gas_cost:Gas.zero
+  Function.make "syscallReward" ~payable:true ~input:(tup1 Address.t) ~output:unit ~gas_cost:Gas.zero
     syscall_reward
 let () = check_signature syscall_reward_function "791bdcf3"
 
 let staking_syscalls =
+  let open Function in
   let contract =
-    Contract.make ~fallback:(Pack fallback_function)
-      [Pack syscall_reward_function; Pack syscall_snapshot_function; Pack syscall_on_epoch_change_function]
+    Contract.make ~fallback:(pack fallback_function)
+      [pack syscall_reward_function; pack syscall_snapshot_function; pack syscall_on_epoch_change_function]
   in
   Contract.dispatch contract

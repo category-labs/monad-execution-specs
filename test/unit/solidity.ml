@@ -4,20 +4,49 @@ open Test_utils.Utils
 open QCheck2
 open Contract.Type
 
-type e_typ = Pack_typ : 'a typ -> e_typ
-type e_tup = Pack_tup : 'a Tuple.t tup -> e_tup
-type e_val = Pack_val : 'a typ * 'a -> e_val
+(* Types implemented as GADTs. *)
 
-let rec equal : type a. a typ -> a -> a -> bool = function
+type 'a tuple_descr = Nil : unit tuple_descr | Cons : 'a descr * 'b tuple_descr -> ('a * 'b) tuple_descr
+
+and 'a descr =
+  | Tuple : 'a tuple_descr -> 'a descr
+  | Fixed_bytes : {byte_width : int; alignment : alignment} -> Bytes.t descr
+  | Bytes : Bytes.t descr
+  | Array : 'a descr -> 'a list descr
+  | Packed : 'a descr -> 'a descr
+
+let rec type_of : type a. a descr -> a typ = function
+  | Tuple tup -> tuple (tuple_of tup)
+  | Fixed_bytes {byte_width; alignment} ->
+      let module M = struct
+        type t = Bytes.t
+        let byte_width = byte_width
+        let of_bytes_exn bs = bs
+        let to_bytes bs = bs
+      end in
+      fixed_bytes (module M) alignment
+  | Bytes -> bytes
+  | Array elt -> array (type_of elt)
+  | Packed elt -> packed (type_of elt)
+
+and tuple_of : type a. a tuple_descr -> a tup = function
+  | Nil -> nil
+  | Cons (ty, tys) -> type_of ty @: tuple_of tys
+
+type e_typ = Pack_typ : 'a descr -> e_typ
+type e_tup = Pack_tup : 'a tuple_descr -> e_tup
+type e_val = Pack_val : 'a descr * 'a -> e_val
+
+let rec equal : type a. a descr -> a -> a -> bool = function
   | Tuple tys -> equal_tup tys
   | Fixed_bytes _ -> Bytes.equal
   | Bytes -> Bytes.equal
   | Array elt_typ -> List.equal (equal elt_typ)
-  | Map {repr; encode; _} -> fun x y -> equal repr (encode x) (encode y)
+  | Packed elt_typ -> equal elt_typ
 
-and equal_tup : type a. a tup -> a -> a -> bool = function
-  | [] -> fun Tuple.[] Tuple.[] -> true
-  | typ :: tys -> fun Tuple.(x :: xs) Tuple.(y :: ys) -> equal typ x y && equal_tup tys xs ys
+and equal_tup : type a. a tuple_descr -> a -> a -> bool = function
+  | Nil -> fun () () -> true
+  | Cons (typ, tys) -> fun (x, xs) (y, ys) -> equal typ x y && equal_tup tys xs ys
 
 let gen_typ ~static : e_typ Gen.t =
   let open Gen in
@@ -27,18 +56,18 @@ let gen_typ ~static : e_typ Gen.t =
       let gen_tuple =
         let* len = tiny_nat in
         let rec loop (i : int) : e_tup Gen.t =
-          if i = 0 then return (Pack_tup [])
+          if i = 0 then return (Pack_tup Nil)
           else
             let* (Pack_typ hd) = self (static, depth + 1) in
             let* (Pack_tup tl) = loop (i - 1) in
-            return (Pack_tup (hd :: tl))
+            return (Pack_tup (Cons (hd, tl)))
         in
         let* (Pack_tup tup) = loop len in
         return (Pack_typ (Tuple tup))
       in
       let gen_packed =
         let* (Pack_typ typ) = self (true, depth + 1) in
-        return (Pack_typ (Packed.t typ))
+        return (Pack_typ (Packed typ))
       in
       let gen_fixed_bytes =
         let* byte_width = small_nat in
@@ -61,20 +90,18 @@ let gen_typ ~static : e_typ Gen.t =
           ; (2, gen_array) ] )
     (static, 0)
 
-let rec gen_val : type a. a typ -> a Gen.t =
+let rec gen_val : type a. a descr -> a Gen.t =
   Gen.(
     function
-    | Tuple [] -> return Tuple.[]
-    | Tuple (typ :: tys) ->
+    | Tuple Nil -> return ()
+    | Tuple (Cons (typ, tys)) ->
         let* hd = gen_val typ in
         let* tl = gen_val (Tuple tys) in
-        return Tuple.(hd :: tl)
+        return (hd, tl)
     | Array typ -> list_size tiny_nat (gen_val typ)
     | Fixed_bytes {byte_width; _} -> string_size (return byte_width)
     | Bytes -> string ~nonempty:false
-    | Map {repr; decode; _} ->
-        let* repr = gen_val repr in
-        return (Result.get_ok (decode repr)) )
+    | Packed elt -> gen_val elt )
 
 let gen_e_val ~static : e_val Gen.t =
   Gen.(
@@ -85,25 +112,27 @@ let gen_e_val ~static : e_val Gen.t =
 let list_to_string (elt_to_string : 'a -> string) (elts : 'a list) : string =
   Format.sprintf "[%s]" (String.concat ", " (List.map elt_to_string elts))
 
-let rec val_to_string : type a. a typ -> a -> string =
+let rec val_to_string : type a. a descr -> a -> string =
  fun typ ->
   match typ with
   | Tuple tup ->
-      let rec loop : type b. b tup -> b -> string list =
+      let rec loop : type b. b tuple_descr -> b -> string list =
        fun tup v ->
-        match (tup, v) with [], [] -> [] | typ :: tys, v :: vs -> val_to_string typ v :: loop tys vs
+        match (tup, v) with Nil, () -> [] | Cons (typ, tys), (v, vs) -> val_to_string typ v :: loop tys vs
       in
       fun v -> Format.sprintf "[%s]" (String.concat ", " (loop tup v))
   | Array typ -> list_to_string (val_to_string typ)
   | Fixed_bytes _ -> fun v -> Format.sprintf "\"0x%s\"" (Bytes.to_hex_string v)
   | Bytes -> fun v -> Format.sprintf "\"0x%s\"" (Bytes.to_hex_string v)
-  | Map {repr; encode; _} -> fun v -> val_to_string repr (encode v)
+  | Packed typ -> fun v -> Format.sprintf "packed(%s)" (val_to_string typ v)
 
-let e_val_to_string (Pack_val (typ, v)) = Format.sprintf "%s : %s" (val_to_string typ v) (type_name typ)
+let e_val_to_string (Pack_val (descr, v)) =
+  Format.sprintf "%s : %s" (val_to_string descr v) (name (type_of descr))
 
-let round_trip (Pack_val (typ, v)) =
+let round_trip (Pack_val (descr, v)) =
+  let typ = type_of descr in
   let encoded = Bytes.(concat empty (List.map B32.to_bytes (enc typ v))) in
-  match dec_bytes typ encoded with Ok decoded -> equal typ v decoded | Error _ -> false
+  match dec_bytes typ encoded with Ok decoded -> equal descr v decoded | Error _ -> false
 
 let () =
   let open Alcotest in
