@@ -195,7 +195,7 @@ module Transaction = struct
     | SetCode of set_code_tx
   [@@deriving eq]
 
-  type kind_tag = [`Legacy | `AccessList | `FeeMarket | `SetCode]
+  type kind_tag = [`Legacy | `AccessList | `FeeMarket | `SetCode] [@@deriving eq]
   let kind_tag tx : kind_tag =
     match tx with
     | Legacy _ -> `Legacy

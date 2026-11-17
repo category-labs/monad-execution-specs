@@ -69,8 +69,6 @@ module M = Storage.M
    encoding would go untested.
    Note that call does not check gas costs.
  *)
-(* TODO: we would like to move the encoding/decoding testing to its own module. Round-tripping for every
-   function call is expensive. *)
 let call
     (type i o)
     (fn : (i, o) Function.impl)
@@ -156,7 +154,7 @@ let craft_add_validator_input ~auth_address ~stake ~commission ~secret =
   assert (Bytes.length message = 165) ;
   let secp_sig = Crypto.Secp.(signature_to_bytes (sign secp_sk message)) in
   let bls_sig = Crypto.Bls.(signature_to_bytes (sign bls_sk message)) in
-  (Type.Tuple.[message; secp_sig; bls_sig], Crypto.Secp.address_of_pubkey secp_pk)
+  ((message, secp_sig, bls_sig), Crypto.Secp.address_of_pubkey secp_pk)
 
 let add_validator_wrapper
     ?(commission = U256.zero) ?(secret = B32.of_hex_string "0x1000") ~auth_address ~stake () :
@@ -173,14 +171,14 @@ let add_validator_wrapper
 (* Never expected to fail. *)
 let snapshot =
   M.(
-    let$ () = expect_ok <$> syscall syscall_snapshot_function [] in
+    let$ () = expect_ok <$> syscall syscall_snapshot_function () in
     return () )
 
 (* Never expected to fail. *)
 let inc_epoch =
   M.(
     let$ epoch = !$Variables.epoch in
-    let$ () = expect_ok <$> syscall syscall_on_epoch_change_function [Result.get_ok Epoch.(epoch + 1)] in
+    let$ () = expect_ok <$> syscall syscall_on_epoch_change_function (Result.get_ok Epoch.(epoch + 1)) in
     return () )
 
 (* Never expected to fail. *)
@@ -192,7 +190,7 @@ let skip_to_next_epoch =
 
 let pull_delegator_up_to_date val_id address =
   M.(
-    let$ _ = expect_ok <$> call get_delegator_function ~sender:Address.zero [val_id; address] in
+    let$ _ = expect_ok <$> call get_delegator_function ~sender:Address.zero (val_id, address) in
     return () )
 
 let reward = U256.(~$1 * mon)
@@ -200,7 +198,7 @@ let reward = U256.(~$1 * mon)
 (* Delegate and, if successful, also credit the staking contract balance. *)
 let delegate_and_credit val_id ~sender ~value =
   M.(
-    let$ result = call delegate_function ~sender ~value [val_id] in
+    let$ result = call delegate_function ~sender ~value val_id in
     let$ () =
       when_ (Result.is_ok result)
         (update_field (staking_account |-- Account.balance) (fun b -> U256.(b + value)))
@@ -211,7 +209,7 @@ let delegate_and_credit val_id ~sender ~value =
    succeed. *)
 let external_reward_and_credit val_id ~sender ~value =
   M.(
-    let$ _ = expect_ok <$> call external_reward_function ~sender ~value [val_id] in
+    let$ _ = expect_ok <$> call external_reward_function ~sender ~value val_id in
     update_field (staking_account |-- Account.balance) (fun b -> U256.(b + value)) )
 
 let check_validator_flags name expected_flags val_id =
@@ -287,7 +285,7 @@ let test_accumulator_is_monotonic_again () =
       let$ () =
         let rec loop i previous_accumulator =
           when_ (i > 0)
-            (let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+            (let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
              let$ validator = !$validator1_loc in
              let current_accumulator = validator.rewards_per_token in
              (* Check that accumulator is monotonically increasing. *)
@@ -324,7 +322,7 @@ let test_revert_if_commission_too_high () =
       in
       let$ () =
         expect_error Commission_too_high
-        <$> call change_commission_function ~sender:auth_address [val_id; bad_commission]
+        <$> call change_commission_function ~sender:auth_address (val_id, bad_commission)
       in
       return () )
 
@@ -337,7 +335,7 @@ let test_non_auth_attempts_to_change_commission () =
       let$ {val_id; _} = expect_ok <$> add_validator_wrapper ~auth_address ~stake:min_auth_address_stake () in
       let$ () =
         expect_error Requires_auth_address
-        <$> call change_commission_function ~sender:bad_sender [val_id; max_commission]
+        <$> call change_commission_function ~sender:bad_sender (val_id, max_commission)
       in
       return () )
 
@@ -359,7 +357,7 @@ let test_validator_has_commission (commission_percent : int) (reward : U256.t) =
       let$ _ = expect_ok <$> delegate_and_credit val_id ~sender:del_address ~value:active_validator_stake in
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id del_address in
 
@@ -407,13 +405,13 @@ let test_validator_changes_commission () =
 
       (* Change validator's commission to 20%; this won't go live until the next epoch. *)
       let new_commission = U256.(mon / ~$5) in
-      let$ _ = expect_ok <$> call change_commission_function ~sender:auth_address [val_id; new_commission] in
+      let$ _ = expect_ok <$> call change_commission_function ~sender:auth_address (val_id, new_commission) in
 
       (* Reward this epoch, before and after the boundary, to verify both consensus and snapshot views use
          the starting commission. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Auth address has 5% commission and 10% of stake pool. Note that stake pool rewards are applied
          after the commission, so he gets two rewards at 14.5% each. If the auth has stake `S` and commission
@@ -434,9 +432,9 @@ let test_validator_changes_commission () =
       let$ () = inc_epoch in
 
       (* Reward before and after the boundary again, uses the new commission. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let total_rewards = U256.(total_rewards + (~$2 * reward)) in
       let auth_running_rewards = U256.(auth_running_rewards + (reward * ~$56 / ~$100)) in
@@ -470,13 +468,13 @@ let test_add_validator_revert_invalid_input_size () =
   in
   let () =
     let msg_too_short = {msg with input_data = Bytes.(sub msg.input_data 0 (length msg.input_data - 1))} in
-    let result, _ = Function.send_message (Pack add_validator_function) msg_too_short initial_state in
+    let result, _ = Function.(send_message (pack add_validator_function)) msg_too_short initial_state in
     check status_code "status_code" Revert result.status_code ;
     check staking_error "staking_error" Input_too_short (error_of_output_string result.output_data)
   in
   let () =
     let msg_too_long = {msg with input_data = msg.input_data ^ "\xff"} in
-    let result, _ = Function.send_message (Pack add_validator_function) msg_too_long initial_state in
+    let result, _ = Function.(send_message (pack add_validator_function)) msg_too_long initial_state in
     check status_code "status_code" Revert result.status_code ;
     check staking_error "staking_error" Invalid_input (error_of_output_string result.output_data)
   in
@@ -484,7 +482,7 @@ let test_add_validator_revert_invalid_input_size () =
 
 let test_add_validator_revert_bad_signature () =
   let auth_address = address "0xababab" in
-  let [message; good_secp_sig; good_bls_sig], _ =
+  let (message, good_secp_sig, good_bls_sig), _ =
     craft_add_validator_input ~auth_address ~stake:min_auth_address_stake ~commission:U256.zero
       ~secret:B32.(of_hex_string "0x1000")
   in
@@ -497,7 +495,7 @@ let test_add_validator_revert_bad_signature () =
     M.(
       expect_error Secp_signature_verification_failed
       <$> call add_validator_function ~sender:auth_address ~value:min_auth_address_stake
-            [message; bad_secp_sig; good_bls_sig] ) ;
+            (message, bad_secp_sig, good_bls_sig) ) ;
 
   (* Bad BLS signature. *)
   let _bad_bls_pk, bad_bls_sk = Crypto.Bls.gen_keypair B32.(of_hex_string "0x2000") in
@@ -506,7 +504,7 @@ let test_add_validator_revert_bad_signature () =
     M.(
       expect_error Bls_signature_verification_failed
       <$> call add_validator_function ~sender:auth_address ~value:min_auth_address_stake
-            [message; good_secp_sig; bad_bls_sig] )
+            (message, good_secp_sig, bad_bls_sig) )
 
 let test_add_validator_revert_msg_value_not_signed () =
   run_from_initial_state ~compare_with:"add_validator_revert_msg_value_not_signed"
@@ -552,24 +550,24 @@ let test_nonpayable_functions_revert () =
         expect_error Value_non_zero <$> call ~endpoint ~value ~sender:Address.zero fn input
       in
 
-      let$ () = check_nonpayable ~endpoint:staking_syscalls syscall_snapshot_function [] in
-      let$ () = check_nonpayable ~endpoint:staking_syscalls syscall_on_epoch_change_function [Epoch.zero] in
+      let$ () = check_nonpayable ~endpoint:staking_syscalls syscall_snapshot_function () in
+      let$ () = check_nonpayable ~endpoint:staking_syscalls syscall_on_epoch_change_function Epoch.zero in
 
-      let$ () = check_nonpayable undelegate_function [Val_id.zero; U256.zero; U8.zero] in
-      let$ () = check_nonpayable compound_function [Val_id.zero] in
-      let$ () = check_nonpayable withdraw_function [Val_id.zero; U8.zero] in
-      let$ () = check_nonpayable claim_rewards_function [Val_id.zero] in
-      let$ () = check_nonpayable change_commission_function [Val_id.zero; U256.zero] in
-      let$ () = check_nonpayable get_validator_function [Val_id.zero] in
-      let$ () = check_nonpayable get_delegator_function [Val_id.zero; Address.zero] in
-      let$ () = check_nonpayable get_withdrawal_request_function [Val_id.zero; Address.zero; U8.zero] in
-      let$ () = check_nonpayable get_execution_validator_set_function [U32.zero] in
-      let$ () = check_nonpayable get_snapshot_validator_set_function [U32.zero] in
-      let$ () = check_nonpayable get_consensus_validator_set_function [U32.zero] in
-      let$ () = check_nonpayable get_delegations_function [Address.zero; Val_id.zero] in
-      let$ () = check_nonpayable get_delegators_function [Val_id.zero; Address.zero] in
-      let$ () = check_nonpayable get_epoch_function [] in
-      let$ () = check_nonpayable get_proposer_val_id_function [] in
+      let$ () = check_nonpayable undelegate_function (Val_id.zero, U256.zero, U8.zero) in
+      let$ () = check_nonpayable compound_function Val_id.zero in
+      let$ () = check_nonpayable withdraw_function (Val_id.zero, U8.zero) in
+      let$ () = check_nonpayable claim_rewards_function Val_id.zero in
+      let$ () = check_nonpayable change_commission_function (Val_id.zero, U256.zero) in
+      let$ () = check_nonpayable get_validator_function Val_id.zero in
+      let$ () = check_nonpayable get_delegator_function (Val_id.zero, Address.zero) in
+      let$ () = check_nonpayable get_withdrawal_request_function (Val_id.zero, Address.zero, U8.zero) in
+      let$ () = check_nonpayable get_execution_validator_set_function U32.zero in
+      let$ () = check_nonpayable get_snapshot_validator_set_function U32.zero in
+      let$ () = check_nonpayable get_consensus_validator_set_function U32.zero in
+      let$ () = check_nonpayable get_delegations_function (Address.zero, Val_id.zero) in
+      let$ () = check_nonpayable get_delegators_function (Val_id.zero, Address.zero) in
+      let$ () = check_nonpayable get_epoch_function () in
+      let$ () = check_nonpayable get_proposer_val_id_function () in
 
       return () )
 
@@ -618,7 +616,7 @@ let test_linked_list_removal_state_override () =
         (* Here the C++ equivalent test throws an exception inside `undelegate`, and the state is not
            rolled back, so we use the same behavior, as that is what the fixture expects. *)
         expect_error Internal_error
-        <$> call undelegate_function ~sender:sentinel ~on_error:`Keep [val_id; stake; U8.one]
+        <$> call undelegate_function ~sender:sentinel ~on_error:`Keep (val_id, stake, U8.one)
       in
 
       return () )
@@ -643,14 +641,16 @@ let test_simple_add_validator () =
   in
   let canonical = msg.input_data in
   let () = check int "canonical calldata length" 544 (Bytes.length canonical) in
-  (* Overwrite the 32-byte word at [at..at+32) with the big-endian representation of [v]. *)
+  (* Overwrite the 32-byte word at [at..at+32) with the big-endian representation of v. *)
   let set_word (data : Bytes.t) ~(at : int) (v : U256.t) : Bytes.t =
     Bytes.(sub data 0 at ^ U256.to_repr_bytes v ^ sub data (at + 32) (length data - at - 32))
   in
   (* Send corrupted calldata from the initial state and discard the post-state: decode failures must not
      leak state, and the fixture comparison below only covers the successful call. *)
   let expect_decode_error name err (input_data : Bytes.t) =
-    let result, _ = Function.send_message (Pack add_validator_function) {msg with input_data} initial_state in
+    let result, _ =
+      Function.(send_message (pack add_validator_function)) {msg with input_data} initial_state
+    in
     check status_code (name ^ ": status_code") Revert result.status_code ;
     check staking_error name err (error_of_output_string result.output_data)
   in
@@ -710,7 +710,7 @@ let test_simple_add_validator () =
           ^ garbage_padding
           ^ sub canonical 320 (length canonical - 320) )
       in
-      let$ result = Function.send_message (Pack add_validator_function) {msg with input_data = lenient} in
+      let$ result = Function.(send_message (pack add_validator_function)) {msg with input_data = lenient} in
       check status_code "lenient accept: status_code" Success result.status_code ;
       let val_id = Result.get_ok (Type.dec_bytes Val_id.t result.output_data) in
       (* Mirror add_validator_wrapper: credit the staked value to the contract. *)
@@ -742,7 +742,7 @@ let test_add_validator_sufficient_balance () =
 
       let$ () = inc_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val1_sign] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val1_sign in
       let$ () =
         let$ epoch_valset = expect_ok <$> get_this_epoch_valset in
         return (check int "List.length this_epoch_valset = 1" 1 (List.length epoch_valset))
@@ -756,7 +756,7 @@ let test_add_validator_sufficient_balance () =
         let$ epoch_valset = expect_ok <$> get_this_epoch_valset in
         return (check int "List.length this_epoch_valset = 2" 2 (List.length epoch_valset))
       in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val2_sign] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val2_sign in
       let$ () = check_validator_flags "val_1.flags = ok" Address_flags.ok val1_id in
       let$ () = check_validator_flags "val_2.flags = ok" Address_flags.ok val2_id in
 
@@ -798,7 +798,7 @@ let test_add_validator_insufficient_balance () =
 
       let$ () = inc_epoch in
 
-      let$ () = expect_error Not_in_validator_set <$> syscall syscall_reward_function [val1_sign] in
+      let$ () = expect_error Not_in_validator_set <$> syscall syscall_reward_function val1_sign in
 
       let$ () =
         check int "List.length this_epoch_valset = 0" 0
@@ -809,7 +809,7 @@ let test_add_validator_insufficient_balance () =
 
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_error Not_in_validator_set <$> syscall syscall_reward_function [val2_sign] in
+      let$ () = expect_error Not_in_validator_set <$> syscall syscall_reward_function val2_sign in
 
       let$ () =
         check int "List.length this_epoch_valset = 0" 0
@@ -918,7 +918,7 @@ let test_validator_multiple_delegations () =
 
       (* Epoch 2. *)
       let$ () = skip_to_next_epoch in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -929,7 +929,7 @@ let test_validator_multiple_delegations () =
 
       let$ () = snapshot in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
           ~expected_rewards:U256.(~$2 * reward)
@@ -964,24 +964,24 @@ let test_validator_compound () =
 
       (* Epoch 2. *)
       let$ () = skip_to_next_epoch in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
           ~expected_rewards:reward
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
 
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
           ~expected_rewards:reward
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
 
       (* Epoch 3. *)
       let$ () = inc_epoch in
@@ -1031,20 +1031,20 @@ let test_validator_undelegate () =
       let$ () = skip_to_next_epoch in
 
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val1_id; min_auth_address_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val1_id, min_auth_address_stake, U8.one)
       in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val1_id; min_auth_address_stake; U8.(~$2)]
-      in
-      let$ _ =
-        expect_ok
-        <$> call undelegate_function ~sender:auth_address
-              [val2_id; U256.(active_validator_stake / ~$2); U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val1_id, min_auth_address_stake, U8.(~$2))
       in
       let$ _ =
         expect_ok
         <$> call undelegate_function ~sender:auth_address
-              [val2_id; U256.(active_validator_stake / ~$2); U8.(~$2)]
+              (val2_id, U256.(active_validator_stake / ~$2), U8.one)
+      in
+      let$ _ =
+        expect_ok
+        <$> call undelegate_function ~sender:auth_address
+              (val2_id, U256.(active_validator_stake / ~$2), U8.(~$2))
       in
       let$ () =
         check_validator_flags "val1.flags = Withdrawn | StakeTooLow"
@@ -1055,8 +1055,8 @@ let test_validator_undelegate () =
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val2_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id) in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val2_id, withdrawal_id) in
 
       (* Check val info. *)
       let$ () =
@@ -1115,11 +1115,11 @@ let test_validator_exit_via_validator () =
       let$ _ =
         expect_ok
         <$> call undelegate_function ~sender:auth_address
-              [val1_id; U256.(active_validator_stake + min_auth_address_stake - one); withdrawal_id]
+              (val1_id, U256.(active_validator_stake + min_auth_address_stake - one), withdrawal_id)
       in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:other_address [val2_id; min_auth_address_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:other_address (val2_id, min_auth_address_stake, withdrawal_id)
       in
 
       let$ _ =
@@ -1145,8 +1145,8 @@ let test_validator_exit_via_validator () =
       in
       let$ () = skip_to_next_epoch in
 
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:other_address [val2_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id) in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:other_address (val2_id, withdrawal_id) in
       return () )
 
 let test_validator_exit_via_delegator () =
@@ -1180,11 +1180,11 @@ let test_validator_exit_via_delegator () =
 
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:auth_address [val1_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:auth_address (val1_id, active_validator_stake, withdrawal_id)
       in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:auth_address [val2_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:auth_address (val2_id, active_validator_stake, withdrawal_id)
       in
 
       let$ _ = expect_ok <$> delegate_and_credit val1_id ~sender:auth_address ~value:active_validator_stake in
@@ -1204,8 +1204,8 @@ let test_validator_exit_via_delegator () =
       in
       let$ () = skip_to_next_epoch in
 
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val2_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id) in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val2_id, withdrawal_id) in
       return () )
 
 (* The equivalent C++ test runs on the MONAD_FOUR fork (active stake 25M MON). This version was constructed
@@ -1252,14 +1252,14 @@ let test_validator_exit_multiple_delegations () =
          positions. *)
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:auth_address [val1_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:auth_address (val1_id, active_validator_stake, withdrawal_id)
       in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:auth_address [val2_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:auth_address (val2_id, active_validator_stake, withdrawal_id)
       in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val1_sign] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val2_sign] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val1_sign in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val2_sign in
 
       (* Re-delegate to exactly one wei below the active threshold: neither validator may re-enter the
          valset. *)
@@ -1279,18 +1279,18 @@ let test_validator_exit_multiple_delegations () =
 
       let$ () = check u256 "auth balance" U256.zero <$> !(TransactionState.balance auth_address) in
       (* Auth had no live stake in val2 at reward time, so there is nothing to claim... *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val2_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val2_id in
       let$ () =
         check u256 "auth balance after claim val2" U256.zero <$> !(TransactionState.balance auth_address)
       in
       (* ...but the withdrawal request accrued rewards until its withdrawal epoch. *)
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val2_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val2_id, withdrawal_id) in
       let$ () =
         check u256 "auth balance after withdraw val2" U256.(active_validator_stake + ~@"990099009900990099")
         <$> !(TransactionState.balance auth_address)
       in
 
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address [val2_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address val2_id in
       let$ () =
         check u256 "other balance after claim val2" U256.(~@"9900990099009900")
         <$> !(TransactionState.balance other_address)
@@ -1299,8 +1299,8 @@ let test_validator_exit_multiple_delegations () =
       (* Auth is val1's auth delegator, so it owns both the live 100k position (paid by claim_rewards) and
          the 10M withdrawal (paid by withdraw): together they receive the full reward minus 1 wei of
          flooring dust. *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val1_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val1_id in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id) in
       let$ () =
         check u256 "auth balance after exiting val1"
           U256.(active_validator_stake + (reward - ~$1) + active_validator_stake + ~@"990099009900990099")
@@ -1351,15 +1351,15 @@ let test_validator_exit_multiple_delegations_full_withdrawal () =
       (* val1 is undelegated before its reward; val2 is rewarded before its undelegation. *)
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:auth_address [val1_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:auth_address (val1_id, active_validator_stake, withdrawal_id)
       in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val1_sign] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val2_sign] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val1_sign in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val2_sign in
 
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:auth_address [val2_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:auth_address (val2_id, active_validator_stake, withdrawal_id)
       in
 
       (* Re-delegate to exactly one wei below the active threshold: neither validator may re-enter the
@@ -1381,14 +1381,14 @@ let test_validator_exit_multiple_delegations_full_withdrawal () =
       let$ () = check u256 "auth balance" U256.zero <$> !(TransactionState.balance auth_address) in
       (* val2: the claim pays the live position's reward share; the withdrawal pays back exactly the
          undelegated principal (its request accrued nothing, having been created after the reward). *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val2_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val2_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val2_id in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val2_id, withdrawal_id) in
       let$ () =
         check u256 "auth balance after exiting val2" U256.(active_validator_stake + ~@"909090909090909090")
         <$> !(TransactionState.balance auth_address)
       in
 
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address [val2_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address val2_id in
       let$ () =
         check u256 "other balance after claim val2" U256.(~@"90909090909090909")
         <$> !(TransactionState.balance other_address)
@@ -1396,8 +1396,8 @@ let test_validator_exit_multiple_delegations_full_withdrawal () =
 
       (* val1: the claim pays the live 1M position's share, the withdrawal pays the principal plus the
          request's share; together the full reward minus 1 wei of flooring dust. *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val1_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val1_id in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id) in
       let$ () =
         check u256 "auth balance after exiting val1"
           U256.(active_validator_stake + (reward - ~$1) + active_validator_stake + ~@"909090909090909090")
@@ -1427,12 +1427,12 @@ let test_validator_exit_multiple_delegations_full_withdrawal () =
       let$ _ =
         expect_ok
         <$> call undelegate_function ~sender:auth_address
-              [val1_id; U256.(active_validator_stake - ~$1); withdrawal_id]
+              (val1_id, U256.(active_validator_stake - ~$1), withdrawal_id)
       in
       let$ _ =
         expect_ok
         <$> call undelegate_function ~sender:auth_address
-              [val2_id; U256.(active_validator_stake - smaller_stake - ~$1); withdrawal_id]
+              (val2_id, U256.(active_validator_stake - smaller_stake - ~$1), withdrawal_id)
       in
 
       let$ () = skip_to_next_epoch in
@@ -1442,17 +1442,17 @@ let test_validator_exit_multiple_delegations_full_withdrawal () =
 
       (* No rewards landed since the last claims: the final claims pay nothing and the withdrawals return
          exactly the undelegated principals. *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val2_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val2_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val2_id in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val2_id, withdrawal_id) in
 
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address [val2_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address val2_id in
       let$ () =
         check u256 "other balance unchanged" U256.(~@"90909090909090909")
         <$> !(TransactionState.balance other_address)
       in
 
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val1_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val1_id in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id) in
       let$ () =
         check u256 "auth balance after full withdrawal"
           U256.(
@@ -1496,11 +1496,11 @@ let test_validator_exit_claim_rewards () =
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val1_sign] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val2_sign] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val1_sign in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val2_sign in
 
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address [val1_id; larger_stake; U8.one] in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address [val2_id; larger_stake; U8.one] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address (val1_id, larger_stake, U8.one) in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address (val2_id, larger_stake, U8.one) in
 
       let$ () = skip_to_next_epoch in
 
@@ -1509,19 +1509,19 @@ let test_validator_exit_claim_rewards () =
       in
 
       let$ () = check u256 "auth balance" U256.zero <$> !(TransactionState.balance auth_address) in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val1_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val1_id in
       let$ () =
         check u256 "auth balance after claim val1" U256.(reward - ~$1)
         <$> !(TransactionState.balance auth_address)
       in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val2_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val2_id in
       let$ () =
         check u256 "auth balance after claim val2" U256.(~@"980392156862745098" + (reward - ~$1))
         <$> !(TransactionState.balance auth_address)
       in
 
       let$ () = check u256 "other balance" U256.zero <$> !(TransactionState.balance other_address) in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address [val2_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address val2_id in
       let$ () =
         check u256 "other balance after claim val2" U256.(~@"19607843137254901")
         <$> !(TransactionState.balance other_address)
@@ -1559,24 +1559,24 @@ let test_validator_exit_compound () =
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val1_sign] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [val2_sign] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val1_sign in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward val2_sign in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val1_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val2_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:other_address [val2_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val1_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val2_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:other_address val2_id in
 
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address [val1_id; larger_stake; U8.one] in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address [val2_id; larger_stake; U8.one] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address (val1_id, larger_stake, U8.one) in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address (val2_id, larger_stake, U8.one) in
 
       let$ () = skip_to_next_epoch in
 
       let$ () =
         check int "this_epoch_valset length" 0 <$> (List.length <$> (expect_ok <$> get_this_epoch_valset))
       in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val1_id] in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val2_id] in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address [val2_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val1_id in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val2_id in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:other_address val2_id in
 
       let$ () = check u256 "auth balance" U256.zero <$> !(TransactionState.balance auth_address) in
       let$ () = check u256 "other balance" U256.zero <$> !(TransactionState.balance other_address) in
@@ -1630,7 +1630,7 @@ let test_validator_activation_via_delegate () =
       (* Undelegate, once again deactivating this validator. *)
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:(address "0xabab") [val_id; active_validator_stake; U8.one]
+        <$> call undelegate_function ~sender:(address "0xabab") (val_id, active_validator_stake, U8.one)
       in
       let$ () = check_validator_flags "val.flags" Address_flags.stake_too_low val_id in
       let$ () = skip_to_next_epoch in
@@ -1650,7 +1650,7 @@ let test_validator_undelegates_and_redelegates_in_epoch_delay_period () =
 
       (* Undelegate everything, deactivating him. *)
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; active_validator_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, active_validator_stake, U8.one)
       in
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () =
@@ -1671,7 +1671,7 @@ let test_validator_undelegates_and_redelegates_in_epoch_delay_period () =
       let$ () = skip_to_next_epoch in
       let$ vs = Storage.Array.read_to_list Variables.valset_consensus in
       check int "valset_consensus length" 1 (List.length vs) ;
-      check validator_id "valset_consensus[0]" val_id (List.nth vs 0) ;
+      check validator_id "valset_consensus0" val_id (List.nth vs 0) ;
       return () )
 
 let test_validator_joins_in_epoch_delay_period () =
@@ -1686,7 +1686,7 @@ let test_validator_joins_in_epoch_delay_period () =
       let$ () = skip_to_next_epoch in
       let$ vs = Storage.Array.read_to_list Variables.valset_consensus in
       check int "valset_consensus length" 1 (List.length vs) ;
-      check validator_id "valset_consensus[0]" val_id (List.nth vs 0) ;
+      check validator_id "valset_consensus0" val_id (List.nth vs 0) ;
       return () )
 
 let test_validator_compound_before_active () =
@@ -1702,7 +1702,7 @@ let test_validator_compound_before_active () =
       in
 
       let$ _ = expect_ok <$> delegate_and_credit val1_id ~sender:auth_address ~value:min_auth_address_stake in
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val1_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val1_id in
 
       let$ () = snapshot in
 
@@ -1713,7 +1713,7 @@ let test_validator_compound_before_active () =
       in
 
       let$ _ = expect_ok <$> delegate_and_credit val2_id ~sender:auth_address ~value:active_validator_stake in
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val2_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val2_id in
 
       let$ () = inc_epoch in
 
@@ -1760,7 +1760,7 @@ let test_validator_withdrawal_before_active () =
       let$ _ = expect_ok <$> delegate_and_credit val1_id ~sender:auth_address ~value:min_auth_address_stake in
       let$ () =
         expect_error Unknown_withdrawal_id
-        <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id]
+        <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id)
       in
 
       let$ () = snapshot in
@@ -1774,7 +1774,7 @@ let test_validator_withdrawal_before_active () =
       let$ _ = expect_ok <$> delegate_and_credit val2_id ~sender:auth_address ~value:active_validator_stake in
       let$ () =
         expect_error Unknown_withdrawal_id
-        <$> call withdraw_function ~sender:auth_address [val2_id; withdrawal_id]
+        <$> call withdraw_function ~sender:auth_address (val2_id, withdrawal_id)
       in
 
       let$ () = inc_epoch in
@@ -1784,11 +1784,11 @@ let test_validator_withdrawal_before_active () =
       (* Check delegator info. *)
       let$ () =
         expect_error Unknown_withdrawal_id
-        <$> call withdraw_function ~sender:auth_address [val1_id; withdrawal_id]
+        <$> call withdraw_function ~sender:auth_address (val1_id, withdrawal_id)
       in
       let$ () =
         expect_error Unknown_withdrawal_id
-        <$> call withdraw_function ~sender:auth_address [val2_id; withdrawal_id]
+        <$> call withdraw_function ~sender:auth_address (val2_id, withdrawal_id)
       in
       return () )
 
@@ -1806,7 +1806,7 @@ let test_validator_undelegate_before_delegator_active () =
       let$ _ = expect_ok <$> delegate_and_credit val1_id ~sender:auth_address ~value:min_auth_address_stake in
       let$ () =
         expect_error Insufficient_stake
-        <$> call undelegate_function ~sender:auth_address [val1_id; U256.(~$50); U8.one]
+        <$> call undelegate_function ~sender:auth_address (val1_id, U256.(~$50), U8.one)
       in
 
       let$ () = snapshot in
@@ -1818,15 +1818,15 @@ let test_validator_undelegate_before_delegator_active () =
       let$ _ = expect_ok <$> delegate_and_credit val2_id ~sender:auth_address ~value:active_validator_stake in
       let$ () =
         expect_error Insufficient_stake
-        <$> call undelegate_function ~sender:auth_address [val2_id; U256.(~$50); U8.one]
+        <$> call undelegate_function ~sender:auth_address (val2_id, U256.(~$50), U8.one)
       in
 
       let$ () = inc_epoch in
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address [val1_id; U256.(~$50); U8.one] in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address [val2_id; U256.(~$50); U8.one] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address (val1_id, U256.(~$50), U8.one) in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth_address (val2_id, U256.(~$50), U8.one) in
       return () )
 
 let test_validator_removes_self () =
@@ -1844,7 +1844,7 @@ let test_validator_removes_self () =
       let withdrawal_id = U8.one in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:auth_address [val_id; min_auth_address_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:auth_address (val_id, min_auth_address_stake, withdrawal_id)
       in
 
       (* Check execution state. *)
@@ -1856,7 +1856,7 @@ let test_validator_removes_self () =
         U64.(logand ve.Val_execution.address_flags.Address_flags.flags Address_flags.withdrawn <> zero) ;
 
       (* Validator can still be rewarded this epoch because he's active. *)
-      let$ _ = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ _ = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Take snapshot. *)
       let$ () = snapshot in
@@ -1877,13 +1877,13 @@ let test_validator_removes_self () =
         sv.Snapshot_view.stake ;
 
       (* Rewards now reference the snapshot set and should continue to work for this validator. *)
-      let$ _ = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ _ = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = inc_epoch in
 
       (* Consensus view doesn't include this validator, and reward fails. *)
       let$ () =
-        expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward [sign_address]
+        expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward sign_address
       in
 
       return () )
@@ -1924,12 +1924,12 @@ let test_two_validators_remove_self () =
       let$ _ =
         expect_ok
         <$> call undelegate_function ~sender:auth_address
-              [List.nth expected_full_valset 9; active_validator_stake; U8.one]
+              (List.nth expected_full_valset 9, active_validator_stake, U8.one)
       in
       let$ _ =
         expect_ok
         <$> call undelegate_function ~sender:auth_address
-              [List.nth expected_full_valset 4; active_validator_stake; U8.one]
+              (List.nth expected_full_valset 4, active_validator_stake, U8.one)
       in
 
       let$ () = skip_to_next_epoch in
@@ -1989,12 +1989,12 @@ let test_validator_constant_validator_set () =
             let$ _ =
               expect_ok
               <$> call undelegate_function ~sender:auth_address
-                    [val1_id; U256.(min_auth_address_stake + one); withdrawal_id]
+                    (val1_id, U256.(min_auth_address_stake + one), withdrawal_id)
             in
             let$ _ =
               expect_ok
               <$> call undelegate_function ~sender:auth_address
-                    [val2_id; U256.(min_auth_address_stake + one); withdrawal_id]
+                    (val2_id, U256.(min_auth_address_stake + one), withdrawal_id)
             in
             let$ _ =
               delegate_and_credit val1_id ~sender:auth_address ~value:U256.(min_auth_address_stake + one)
@@ -2044,7 +2044,7 @@ let test_validator_joining_boundary_rewards () =
         List.iterM
           ~f:(fun _ ->
             expect_error Not_in_validator_set
-            <$> syscall syscall_reward_function ~value:reward [val1_sign_address] )
+            <$> syscall syscall_reward_function ~value:reward val1_sign_address )
           (List.init (delay_window - 100 + 1) Fun.id)
       in
       let$ {val_id = _; sign_address = val2_sign_address} =
@@ -2056,18 +2056,18 @@ let test_validator_joining_boundary_rewards () =
         List.iterM
           ~f:(fun _ ->
             expect_error Not_in_validator_set
-            <$> syscall syscall_reward_function ~value:reward [val1_sign_address] )
+            <$> syscall syscall_reward_function ~value:reward val1_sign_address )
           (List.init 99 Fun.id)
       in
 
       (* Joined after the boundary, not active. *)
       let$ () =
-        expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward [val2_sign_address]
+        expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward val2_sign_address
       in
       let$ () = inc_epoch in
 
       (* Joined before the boundary, now active. *)
-      let$ _ = expect_ok <$> syscall syscall_reward_function ~value:reward [val1_sign_address] in
+      let$ _ = expect_ok <$> syscall syscall_reward_function ~value:reward val1_sign_address in
 
       return () )
 
@@ -2102,7 +2102,7 @@ let test_validator_miss_snapshot_miss_deactivation () =
       let$ () = skip_to_next_epoch in
 
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; active_validator_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, active_validator_stake, U8.one)
       in
 
       let$ () = inc_epoch in
@@ -2127,28 +2127,28 @@ let test_validator_external_rewards_failure_conditions () =
 
       let$ () =
         expect_error Not_in_validator_set
-        <$> call external_reward_function ~sender:auth_address ~value:U256.(~$20 * mon) [val_id]
+        <$> call external_reward_function ~sender:auth_address ~value:U256.(~$20 * mon) val_id
       in
       let$ () = skip_to_next_epoch in
       (* Validator in set. *)
 
       let$ () =
         expect_error Unknown_validator
-        <$> call external_reward_function ~sender:auth_address ~value:U256.(~$20 * mon) [Val_id.of_int 20]
+        <$> call external_reward_function ~sender:auth_address ~value:U256.(~$20 * mon) (Val_id.of_int 20)
       in
 
       let$ () =
         expect_error External_reward_too_small
-        <$> call external_reward_function ~sender:auth_address ~value:U256.(~$5) [val_id]
+        <$> call external_reward_function ~sender:auth_address ~value:U256.(~$5) val_id
       in
       let$ () =
         expect_error External_reward_too_small
-        <$> call external_reward_function ~sender:auth_address ~value:U256.(min_external_reward - one) [val_id]
+        <$> call external_reward_function ~sender:auth_address ~value:U256.(min_external_reward - one) val_id
       in
 
       let$ () =
         expect_error External_reward_too_large
-        <$> call external_reward_function ~sender:auth_address ~value:U256.(max_external_reward + one) [val_id]
+        <$> call external_reward_function ~sender:auth_address ~value:U256.(max_external_reward + one) val_id
       in
 
       let$ () = external_reward_and_credit val_id ~sender:auth_address ~value:U256.(~$20 * mon) in
@@ -2212,7 +2212,7 @@ let test_delegate_init () =
 
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id d0 in
       let$ () = pull_delegator_up_to_date val_id d1 in
@@ -2271,25 +2271,25 @@ let test_delegator_none_init () =
       (* 2. Undelegate. *)
       let$ () =
         expect_error Insufficient_stake
-        <$> call undelegate_function ~sender:delegator [val_id; U256.(~$100); U8.one]
+        <$> call undelegate_function ~sender:delegator (val_id, U256.(~$100), U8.one)
       in
       let$ () = check_delegator_zero val_id delegator in
 
-      let$ _ = expect_ok <$> call undelegate_function ~sender:delegator [val_id; U256.zero; U8.one] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:delegator (val_id, U256.zero, U8.one) in
       let$ () = check_delegator_zero val_id delegator in
 
       (* 3. Withdraw. *)
       let$ () =
-        expect_error Unknown_withdrawal_id <$> call withdraw_function ~sender:delegator [val_id; U8.one]
+        expect_error Unknown_withdrawal_id <$> call withdraw_function ~sender:delegator (val_id, U8.one)
       in
       let$ () = check_delegator_zero val_id delegator in
 
       (* 4. Compound. *)
-      let$ _ = expect_ok <$> call compound_function ~sender:delegator [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:delegator val_id in
       let$ () = check_delegator_zero val_id delegator in
 
       (* 5. Claim. *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:delegator [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:delegator val_id in
       let$ () = check_delegator_zero val_id delegator in
       let$ () = check u256 "balance" U256.zero <$> !(TransactionState.balance delegator) in
 
@@ -2306,9 +2306,9 @@ let test_random_delegator_not_allocated_state () =
 
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* State should not be allocated. *)
       let$ () = check_delegator_zero val_id (address "0xaaaabbbb") in
@@ -2329,17 +2329,17 @@ let test_delegator_state_cleared_after_withdraw () =
       let$ () = skip_to_next_epoch in
 
       (* This causes del.acc to be nonzero. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = skip_to_next_epoch in
 
       (* Clear rewards slot. *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:delegator [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:delegator val_id in
       (* Remove stake, setting del.acc to zero. *)
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:delegator [val_id; active_validator_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:delegator (val_id, active_validator_stake, U8.one)
       in
 
       (* State should be deallocated. *)
@@ -2348,8 +2348,8 @@ let test_delegator_state_cleared_after_withdraw () =
       (* Just to be sure, let's redelegate again. *)
       let$ _ = expect_ok <$> delegate_and_credit ~sender:delegator ~value:active_validator_stake val_id in
       let$ () = skip_to_next_epoch in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = pull_delegator_up_to_date val_id delegator in
       let$ () = pull_delegator_up_to_date val_id auth_address in
 
@@ -2379,7 +2379,7 @@ let test_delegate_noop_add_zero_stake () =
       let$ _ = delegate_and_credit ~sender:d0 ~value:U256.zero val_id in
 
       let$ () = skip_to_next_epoch in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id d0 in
@@ -2407,9 +2407,9 @@ let test_delegate_noop_subsequent_zero_stake () =
       let$ () = skip_to_next_epoch in
 
       (* Reward the validator. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Validator should receive all the reward being the only active delegator. *)
       let$ () = pull_delegator_up_to_date val_id auth_address in
@@ -2483,7 +2483,7 @@ let test_delegate_redelegate_before_activation () =
 
       let$ () = inc_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = check_refcount ~epoch:2 ~count:1 in
@@ -2501,7 +2501,7 @@ let test_delegate_redelegate_before_activation () =
 
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id other_address in
 
@@ -2557,9 +2557,9 @@ let test_delegate_redelegate_after_activation () =
       (* Reward the validator. *)
       let$ del_auth = !$(Variables.delegator (val_id, auth_address)) in
       check u256 "del_auth.rewards" U256.zero del_auth.rewards ;
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ acc = !$(Variables.accumulated_reward_per_token (Epoch.of_int 3, val_id)) in
       check u256 "acc.value" U256.zero acc.value ;
@@ -2588,7 +2588,7 @@ let test_delegate_redelegate_after_activation () =
       check u256 "del_d1.rewards" U256.zero del_d1.rewards ;
 
       (* Reward again with only 1 active delegator. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id d0 in
@@ -2604,7 +2604,7 @@ let test_delegate_redelegate_after_activation () =
 
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id d0 in
       let$ () = pull_delegator_up_to_date val_id d1 in
@@ -2663,18 +2663,18 @@ let test_delegate_undelegate_withdraw_redelegate () =
       let$ _ = expect_ok <$> delegate_and_credit val_id ~sender:d1 ~value:active_validator_stake in
 
       (* Reward the validator. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = inc_epoch in
 
       (* Reward again with only 1 active delegator. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id d0 in
       let$ () = pull_delegator_up_to_date val_id d1 in
@@ -2696,19 +2696,19 @@ let test_delegate_undelegate_withdraw_redelegate () =
 
       let withdrawal_id = U8.one in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:d0 [val_id; active_validator_stake; withdrawal_id]
+        expect_ok <$> call undelegate_function ~sender:d0 (val_id, active_validator_stake, withdrawal_id)
       in
       let$ () = snapshot in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:d1 [val_id; active_validator_stake; withdrawal_id]
+        expect_ok <$> call undelegate_function ~sender:d1 (val_id, active_validator_stake, withdrawal_id)
       in
 
       let$ () = inc_epoch in
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
-      let$ _ = expect_ok <$> call withdraw_function ~sender:d0 [val_id; withdrawal_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:d1 [val_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:d0 (val_id, withdrawal_id) in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:d1 (val_id, withdrawal_id) in
 
       let$ del_d0 = !$(Variables.delegator (val_id, d0)) in
       let () =
@@ -2776,7 +2776,7 @@ let test_delegator_delegates_in_epoch_delay_period () =
             check u256 "this_epoch_view(val_id).stake" active_validator_stake cv.stake ;
             let$ ve = !$(Variables.val_execution val_id) in
             check u256 "val_execution(val_id).stake" U256.(active_validator_stake * ~$2) ve.stake ;
-            expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] )
+            expect_ok <$> syscall syscall_reward_function ~value:reward sign_address )
           (List.init delay_window Fun.id)
       in
 
@@ -2996,7 +2996,7 @@ let test_delegator_epoch_nz_accumulator_diff_snapshot () =
       check u256 "acc(2).refcount" U256.one acc.refcount ;
 
       (* Validator is rewarded. next acc is nonzero. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = snapshot in
       let$ () = inc_epoch in
@@ -3039,11 +3039,11 @@ let test_validator_exit_delegator_boundary_nz_accumulator () =
 
       let$ () = skip_to_next_epoch in
       (* Reward validator so his accumulator is nonzero. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; active_validator_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, active_validator_stake, U8.one)
       in
 
       (* Add delegator in the boundary. *)
@@ -3052,9 +3052,9 @@ let test_validator_exit_delegator_boundary_nz_accumulator () =
       let$ _ = expect_ok <$> delegate_and_credit val_id ~sender:del ~value:active_validator_stake in
 
       (* Reward the validator in the boundary, so the greedy accumulator for N+2 is now stale. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Goto epoch N+1. delegator is not active until N+2. *)
       let$ () = inc_epoch in
@@ -3138,9 +3138,9 @@ let test_delegate_inter_compound_rewards () =
       (* Epoch 2 - 3 block reward. this should be split evenly. *)
 
       (* Auth account should get 1/3 of all rewards this epoch. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Auth account should get 2/4 rewards at next epoch. *)
       let$ _ = expect_ok <$> delegate_and_credit val_id ~sender:auth_address ~value:active_validator_stake in
@@ -3160,16 +3160,16 @@ let test_delegate_inter_compound_rewards () =
       let$ del_d1 = !$(Variables.delegator (val_id, d1)) in
       check u256 "del_d1.rewards" reward_decimal_rounding del_d1.rewards ;
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = skip_to_next_epoch in
       (* Epoch 3 - 6 block reward. this should be 1/2 validator, 1/4 to each delegator. *)
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Delegator rewards should be p*(accumulated_reward_per_token(epoch) -
          accumulated_reward_per_token(del)) + p + r
@@ -3219,9 +3219,9 @@ let test_delegate_intra_compound_rewards () =
       let$ () = skip_to_next_epoch in
 
       (* Auth account should get 1/3 of all rewards this epoch. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Auth account should get 2/4 rewards at next epoch. *)
       let$ _ = expect_ok <$> delegate_and_credit val_id ~sender:auth_address ~value:active_validator_stake in
@@ -3241,9 +3241,9 @@ let test_delegate_intra_compound_rewards () =
       let$ del_d1 = !$(Variables.delegator (val_id, d1)) in
       check u256 "del_d1.rewards" reward_decimal_rounding del_d1.rewards ;
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Auth account should get 3/5 rewards at next epoch. *)
       (* Other delegators should get 1/5 of all rewards next epoch. *)
@@ -3251,9 +3251,9 @@ let test_delegate_intra_compound_rewards () =
 
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ () = pull_delegator_up_to_date val_id d0 in
@@ -3287,10 +3287,10 @@ let test_delegate_compound_boundary () =
       let$ () = skip_to_next_epoch in
 
       (* Epoch 2 - validator gets reward and compounds it in snapshot *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = snapshot in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
       let$ del = !$(Variables.delegator (val_id, auth_address)) in
       check u256 "del.rewards" U256.zero del.rewards ;
       check u256 "del.stake" active_validator_stake del.stake ;
@@ -3312,7 +3312,7 @@ let test_delegate_compound_boundary () =
       let$ () = skip_to_next_epoch in
 
       (* Epoch 4 - Compound rewards should take effect now. *)
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
       let$ del = !$(Variables.delegator (val_id, auth_address)) in
       check u256 "del.rewards" U256.zero del.rewards ;
       check u256 "del.stake" U256.(active_validator_stake + reward) del.stake ;
@@ -3345,7 +3345,7 @@ let test_delegate_compound () =
       let$ () = skip_to_next_epoch in
 
       (* Epoch 2. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3356,10 +3356,10 @@ let test_delegate_compound () =
           ~expected_rewards:U256.(reward / ~$4 * ~$1)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d0 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d0 val_id in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3370,10 +3370,10 @@ let test_delegate_compound () =
           ~expected_rewards:U256.(reward / ~$4 * ~$2)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d1 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d1 val_id in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3384,12 +3384,12 @@ let test_delegate_compound () =
           ~expected_rewards:U256.(reward / ~$4 * ~$3)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d2 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d2 val_id in
 
       let$ () = snapshot in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3400,10 +3400,10 @@ let test_delegate_compound () =
           ~expected_rewards:U256.(reward / ~$4 * ~$3)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d0 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d0 val_id in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3414,10 +3414,10 @@ let test_delegate_compound () =
           ~expected_rewards:U256.(reward / ~$4 * ~$3)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d1 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d1 val_id in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3428,8 +3428,8 @@ let test_delegate_compound () =
           ~expected_rewards:U256.(reward / ~$4 * ~$3)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d2 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d2 val_id in
 
       let$ () = inc_epoch in
 
@@ -3455,11 +3455,11 @@ let test_delegate_compound () =
           ~expected_rewards:U256.zero
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:d0 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:d0 val_id in
 
       let$ () = snapshot in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:d1 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:d1 val_id in
 
       let$ () = inc_epoch in
       let$ () = pull_delegator_up_to_date val_id auth_address in
@@ -3517,8 +3517,8 @@ let test_undelegate_compound () =
       let$ () = skip_to_next_epoch in
 
       (* Epoch 2. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3533,21 +3533,21 @@ let test_undelegate_compound () =
           ~expected_rewards:U256.(reward / ~$3 * ~$2)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d0 [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d1 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d0 val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d1 val_id in
 
       let withdrawal_id = U8.one in
 
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:d0 [val_id; active_validator_stake; withdrawal_id]
+        expect_ok <$> call undelegate_function ~sender:d0 (val_id, active_validator_stake, withdrawal_id)
       in
       let$ () =
         check_delegator_state ~val_id ~delegator:d0 ~expected_stake:U256.zero ~expected_rewards:U256.zero
       in
 
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
           ~expected_rewards:U256.(reward / ~$3 * ~$1)
@@ -3556,17 +3556,17 @@ let test_undelegate_compound () =
         check_delegator_state ~val_id ~delegator:d0 ~expected_stake:U256.zero ~expected_rewards:U256.zero
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d0 [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d1 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d0 val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d1 val_id in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:d1 [val_id; active_validator_stake; withdrawal_id]
+        expect_ok <$> call undelegate_function ~sender:d1 (val_id, active_validator_stake, withdrawal_id)
       in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:d1 ~expected_stake:U256.zero ~expected_rewards:U256.zero
       in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = inc_epoch in
       (* Epoch 3 *)
@@ -3590,8 +3590,8 @@ let test_undelegate_compound () =
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
-      let$ _ = expect_ok <$> call withdraw_function ~sender:d0 [val_id; withdrawal_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:d1 [val_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:d0 (val_id, withdrawal_id) in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:d1 (val_id, withdrawal_id) in
       let$ () =
         check u256 "balance d0" U256.(active_validator_stake + (reward / ~$3 * ~$2))
         <$> !(TransactionState.balance d0)
@@ -3622,8 +3622,8 @@ let test_undelegate_compound_partial () =
       let$ () = skip_to_next_epoch in
 
       (* Epoch 2. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3638,14 +3638,14 @@ let test_undelegate_compound_partial () =
           ~expected_rewards:U256.(reward / ~$3 * ~$2)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d0 [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d1 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d0 val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d1 val_id in
 
       let withdrawal_id = U8.one in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:d0 [val_id; U256.(active_validator_stake / ~$2); withdrawal_id]
+        <$> call undelegate_function ~sender:d0 (val_id, U256.(active_validator_stake / ~$2), withdrawal_id)
       in
       let$ () =
         check_delegator_state ~val_id ~delegator:d0
@@ -3654,7 +3654,7 @@ let test_undelegate_compound_partial () =
       in
 
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
@@ -3666,19 +3666,19 @@ let test_undelegate_compound_partial () =
           ~expected_rewards:U256.(reward / ~$6)
       in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d0 [val_id] in
-      let$ _ = expect_ok <$> call compound_function ~sender:d1 [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d0 val_id in
+      let$ _ = expect_ok <$> call compound_function ~sender:d1 val_id in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:d1 [val_id; U256.(active_validator_stake / ~$2); withdrawal_id]
+        <$> call undelegate_function ~sender:d1 (val_id, U256.(active_validator_stake / ~$2), withdrawal_id)
       in
       let$ () =
         check_delegator_state ~val_id ~delegator:d1
           ~expected_stake:U256.(active_validator_stake / ~$2)
           ~expected_rewards:U256.zero
       in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = inc_epoch in
       (* Epoch 3 *)
@@ -3702,8 +3702,8 @@ let test_undelegate_compound_partial () =
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
-      let$ _ = expect_ok <$> call withdraw_function ~sender:d0 [val_id; withdrawal_id] in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:d1 [val_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:d0 (val_id, withdrawal_id) in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:d1 (val_id, withdrawal_id) in
       let$ () =
         check u256 "balance d0" U256.((active_validator_stake / ~$2) + (reward / ~$3))
         <$> !(TransactionState.balance d0)
@@ -3741,7 +3741,7 @@ let test_undelegate_revert_insufficient_funds () =
       let$ () =
         expect_error Insufficient_stake
         <$> call undelegate_function ~sender:del_address
-              [val_id; U256.(active_validator_stake + ~$1); withdrawal_id]
+              (val_id, U256.(active_validator_stake + ~$1), withdrawal_id)
       in
 
       let$ () = pull_delegator_up_to_date val_id auth_address in
@@ -3768,12 +3768,12 @@ let test_undelegate_boundary_pool () =
       let withdrawal_id = U8.one in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:del_address [val_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:del_address (val_id, active_validator_stake, withdrawal_id)
       in
 
       (* Reward during the block boundary. *)
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Skip delay. *)
       let$ () = inc_epoch in
@@ -3792,19 +3792,19 @@ let test_undelegate_boundary_pool () =
 
       let$ () =
         expect_error Withdrawal_not_ready
-        <$> call withdraw_function ~sender:del_address [val_id; withdrawal_id]
+        <$> call withdraw_function ~sender:del_address (val_id, withdrawal_id)
       in
 
       (* Reward the validator in this epoch which the delegator should not
          get. he has a 1 epoch delay where he continues to deactivate, and
          another epoch delay for the slashing window in which no rewards are
          earned. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = skip_to_next_epoch in
 
       (* Withdrawal should succeed. *)
-      let$ _ = expect_ok <$> call withdraw_function ~sender:del_address [val_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:del_address (val_id, withdrawal_id) in
 
       (* Primary delegator get all the rewards after the secondary delegator
          becomes inactive. *)
@@ -3839,10 +3839,10 @@ let test_undelegate_snapshot_boundary_pool () =
       let$ () = snapshot in
       let$ _ =
         expect_ok
-        <$> call undelegate_function ~sender:del_address [val_id; active_validator_stake; withdrawal_id]
+        <$> call undelegate_function ~sender:del_address (val_id, active_validator_stake, withdrawal_id)
       in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       (* Skip delay. *)
       let$ () = inc_epoch in
@@ -3858,16 +3858,16 @@ let test_undelegate_snapshot_boundary_pool () =
 
       let$ () =
         expect_error Withdrawal_not_ready
-        <$> call withdraw_function ~sender:del_address [val_id; withdrawal_id]
+        <$> call withdraw_function ~sender:del_address (val_id, withdrawal_id)
       in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
 
       (* Withdrawal should succeed. *)
-      let$ _ = expect_ok <$> call withdraw_function ~sender:del_address [val_id; withdrawal_id] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:del_address (val_id, withdrawal_id) in
 
       let$ () = pull_delegator_up_to_date val_id auth_address in
       let$ del_auth = !$(Variables.delegator (val_id, auth_address)) in
@@ -3889,18 +3889,18 @@ let test_double_withdraw () =
       let$ {val_id; _} = expect_ok <$> add_validator_wrapper ~auth_address ~stake:min_auth_address_stake () in
       let$ () = skip_to_next_epoch in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; min_auth_address_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, min_auth_address_stake, U8.one)
       in
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
       let$ () = check u256 "balance before" U256.zero <$> !(TransactionState.balance auth_address) in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val_id; U8.one] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val_id, U8.one) in
       let$ () =
         check u256 "balance after withdraw" min_auth_address_stake
         <$> !(TransactionState.balance auth_address)
       in
       let$ () =
-        expect_error Unknown_withdrawal_id <$> call withdraw_function ~sender:auth_address [val_id; U8.one]
+        expect_error Unknown_withdrawal_id <$> call withdraw_function ~sender:auth_address (val_id, U8.one)
       in
       let$ () =
         check u256 "balance unchanged" min_auth_address_stake <$> !(TransactionState.balance auth_address)
@@ -3914,11 +3914,11 @@ let test_withdraw_reusable_id () =
       let$ {val_id; _} = expect_ok <$> add_validator_wrapper ~auth_address ~stake:min_auth_address_stake () in
       let$ () = skip_to_next_epoch in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; min_auth_address_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, min_auth_address_stake, U8.one)
       in
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val_id; U8.one] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val_id, U8.one) in
 
       let$ _ = expect_ok <$> delegate_and_credit val_id ~sender:auth_address ~value:active_validator_stake in
 
@@ -3926,12 +3926,12 @@ let test_withdraw_reusable_id () =
       let$ () = skip_to_next_epoch in
 
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; min_auth_address_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, min_auth_address_stake, U8.one)
       in
 
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address [val_id; U8.one] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth_address (val_id, U8.one) in
       return () )
 
 (**** claim_rewards tests. ****)
@@ -3944,9 +3944,9 @@ let test_claim_rewards () =
         expect_ok <$> add_validator_wrapper ~auth_address ~stake:active_validator_stake ()
       in
       let$ () = skip_to_next_epoch in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = check u256 "balance before" U256.zero <$> !(TransactionState.balance auth_address) in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val_id in
       let$ () = check u256 "balance after" reward <$> !(TransactionState.balance auth_address) in
       return () )
 
@@ -3957,7 +3957,7 @@ let test_claim_noop () =
       let$ {val_id; _} = expect_ok <$> add_validator_wrapper ~auth_address ~stake:active_validator_stake () in
       let$ () = skip_to_next_epoch in
       let$ () = check u256 "balance before" U256.zero <$> !(TransactionState.balance auth_address) in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val_id in
       let$ () = check u256 "balance after" U256.zero <$> !(TransactionState.balance auth_address) in
       return () )
 
@@ -3970,20 +3970,20 @@ let test_claim_rewards_compound () =
       in
       let$ () = skip_to_next_epoch in
 
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () = check u256 "balance 1" U256.zero <$> !(TransactionState.balance auth_address) in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val_id in
       let$ () = check u256 "balance 2" reward <$> !(TransactionState.balance auth_address) in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
       let$ () = check u256 "balance 3" reward <$> !(TransactionState.balance auth_address) in
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth_address val_id in
       let$ () = check u256 "balance 4" U256.(~$2 * reward) <$> !(TransactionState.balance auth_address) in
 
-      let$ _ = expect_ok <$> call compound_function ~sender:auth_address [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth_address val_id in
       let$ () =
         check_delegator_state ~val_id ~delegator:auth_address ~expected_stake:active_validator_stake
           ~expected_rewards:U256.zero
@@ -4001,9 +4001,7 @@ let test_reward_unknown_validator () =
   run_from_initial_state ~compare_with:"reward_unknown_validator"
     M.(
       let unknown = address "0x1234" in
-      let$ _ =
-        expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward [unknown]
-      in
+      let$ _ = expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward unknown in
       return () )
 
 let test_reward_crash_no_snapshot_missing_validator () =
@@ -4015,7 +4013,7 @@ let test_reward_crash_no_snapshot_missing_validator () =
       in
       let$ () = inc_epoch in
       let$ () =
-        expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward [sign_address]
+        expect_error Not_in_validator_set <$> syscall syscall_reward_function ~value:reward sign_address
       in
       return () )
 
@@ -4036,13 +4034,13 @@ let test_reward_sets_block_proposer () =
       let$ () =
         List.iterM
           ~f:(fun {val_id; sign_address} ->
-            let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+            let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
 
             (* The spec does not implement old forks so we take the >= MONAD_FIVE branch is tested here. *)
             let$ proposer = !$Variables.proposer_val_id in
             check validator_id "proposer_val_id slot" val_id proposer ;
 
-            let$ getter_result = expect_ok <$> call get_proposer_val_id_function ~sender:Address.zero [] in
+            let$ getter_result = expect_ok <$> call get_proposer_val_id_function ~sender:Address.zero () in
             check validator_id "proposer_val_id getter" val_id getter_result ;
 
             return () )
@@ -4056,7 +4054,7 @@ let test_multiple_snapshot_error () =
   run_from_initial_state ~compare_with:"multiple_snapshot_error"
     M.(
       let$ () = snapshot in
-      let$ () = expect_error Snapshot_in_boundary <$> syscall syscall_snapshot_function [] in
+      let$ () = expect_error Snapshot_in_boundary <$> syscall syscall_snapshot_function () in
       let$ () = inc_epoch in
       let$ () = snapshot in
       return () )
@@ -4130,15 +4128,15 @@ let test_valset_exceeds_n () =
 let test_epoch_goes_backwards () =
   run_from_initial_state ~compare_with:"epoch_goes_backwards"
     M.(
-      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function [Epoch.of_int 3] in
-      let$ () = expect_error Invalid_epoch_change <$> syscall syscall_on_epoch_change_function [Epoch.one] in
+      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function (Epoch.of_int 3) in
+      let$ () = expect_error Invalid_epoch_change <$> syscall syscall_on_epoch_change_function Epoch.one in
       let$ () =
-        expect_error Invalid_epoch_change <$> syscall syscall_on_epoch_change_function [Epoch.of_int 2]
+        expect_error Invalid_epoch_change <$> syscall syscall_on_epoch_change_function (Epoch.of_int 2)
       in
       let$ () =
-        expect_error Invalid_epoch_change <$> syscall syscall_on_epoch_change_function [Epoch.of_int 3]
+        expect_error Invalid_epoch_change <$> syscall syscall_on_epoch_change_function (Epoch.of_int 3)
       in
-      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function [Epoch.of_int 4] in
+      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function (Epoch.of_int 4) in
       return () )
 
 let test_contract_bootstrap () =
@@ -4149,7 +4147,7 @@ let test_contract_bootstrap () =
       let$ () = Variables.epoch $= Epoch.zero in
 
       (* Consensus initializes the epoch by calling epoch change. *)
-      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function [e_prev] in
+      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function e_prev in
 
       (* Sets should be empty. *)
       let$ () =
@@ -4189,7 +4187,7 @@ let test_contract_bootstrap () =
       (* Verify no undelegations before activation. *)
       let$ () =
         expect_error Insufficient_stake
-        <$> call undelegate_function ~sender:d1 [val1_id; active_validator_stake; U8.one]
+        <$> call undelegate_function ~sender:d1 (val1_id, active_validator_stake, U8.one)
       in
 
       (* Verify withdrawals don't work. *)
@@ -4197,14 +4195,14 @@ let test_contract_bootstrap () =
         List.iterM
           ~f:(fun i ->
             let$ () =
-              expect_error Unknown_withdrawal_id <$> call withdraw_function ~sender:d1 [val1_id; U8.of_int i]
+              expect_error Unknown_withdrawal_id <$> call withdraw_function ~sender:d1 (val1_id, U8.of_int i)
             in
             return () )
           (List.init 256 Fun.id)
       in
 
       let$ () = snapshot in
-      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function [e] in
+      let$ () = expect_ok <$> syscall syscall_on_epoch_change_function e in
 
       (* All delegators have their principal (no rewards earned). *)
       let$ () =
@@ -4231,7 +4229,7 @@ let test_contract_bootstrap () =
         <$> (List.length <$> Storage.Array.read_to_list Variables.valset_snapshot)
       in
       let$ valset_consensus = Storage.Array.read_to_list Variables.valset_consensus in
-      check validator_id "valset_consensus[0]" val1_id (List.nth valset_consensus 0) ;
+      check validator_id "valset_consensus0" val1_id (List.nth valset_consensus 0) ;
 
       (* Check: accumulator refcounts are cleared. *)
       let$ acc = !$(Variables.accumulated_reward_per_token (e_prev, val1_id)) in
@@ -4280,11 +4278,11 @@ let test_zero_reward_epochs () =
                 ~f:(fun block ->
                   let proposer = (List.nth validators (block mod List.length validators)).sign_address in
                   let$ () = if block = 40 then snapshot else return () in
-                  let$ () = expect_ok <$> syscall syscall_reward_function ~value:U256.zero [proposer] in
+                  let$ () = expect_ok <$> syscall syscall_reward_function ~value:U256.zero proposer in
                   return () )
                 (List.init 50 Fun.id)
             in
-            let$ () = expect_ok <$> syscall syscall_on_epoch_change_function [Epoch.of_int epoch] in
+            let$ () = expect_ok <$> syscall syscall_on_epoch_change_function (Epoch.of_int epoch) in
             return () )
           (List.init 10 (fun i -> i + 51))
       in
@@ -4442,9 +4440,9 @@ let test_get_delegators_for_validator () =
       let d0 = Address.of_u256_truncating U256.(~$20) in
       let d1 = Address.of_u256_truncating U256.(~$101) in
       let d2 = Address.of_u256_truncating U256.(~$500) in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:d0 [val_id; U256.(~$200 * mon); U8.one] in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:d1 [val_id; U256.(~$200 * mon); U8.one] in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:d2 [val_id; U256.(~$200 * mon); U8.one] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:d0 (val_id, U256.(~$200 * mon), U8.one) in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:d1 (val_id, U256.(~$200 * mon), U8.one) in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:d2 (val_id, U256.(~$200 * mon), U8.one) in
       let delegators = Address.(Set.(delegators |> remove d0 |> remove d1 |> remove d2)) in
 
       let$ () =
@@ -4513,9 +4511,9 @@ let test_get_validators_for_delegator () =
       let v0 = U64.of_int 20 in
       let v1 = U64.of_int 101 in
       let v2 = U64.of_int 500 in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:del [Val_id v0; U256.(~$200 * mon); U8.one] in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:del [Val_id v1; U256.(~$200 * mon); U8.one] in
-      let$ _ = expect_ok <$> call undelegate_function ~sender:del [Val_id v2; U256.(~$200 * mon); U8.one] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:del (Val_id v0, U256.(~$200 * mon), U8.one) in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:del (Val_id v1, U256.(~$200 * mon), U8.one) in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:del (Val_id v2, U256.(~$200 * mon), U8.one) in
       let validators = U64.(Set.(validators |> remove v0 |> remove v1 |> remove v2)) in
 
       let$ () =
@@ -4553,9 +4551,9 @@ let test_get_valset_paginated_reads () =
       (* Read valset in pages. *)
       let$ valset_paginated =
         let rec loop valset next_index =
-          let$ [done_; next_index; valset_page] =
+          let$ done_, next_index, valset_page =
             expect_ok
-            <$> get_valset Variables.valset_execution ~sender:Address.zero ~value:U256.zero [next_index]
+            <$> get_valset Variables.valset_execution ~sender:Address.zero ~value:U256.zero next_index
           in
           (* This is inefficient, but it should be fine for a test. *)
           let valset = valset @ valset_page in
@@ -4618,8 +4616,8 @@ let test_get_proposer_val_id_fork () =
 
       let$ () = skip_to_next_epoch in
       (* The spec does not implement legacy Monad versions, so we test only the >= MONAD_FIVE branch. *)
-      let$ () = expect_ok <$> syscall syscall_reward_function [sign_address] in
-      let$ id = expect_ok <$> call get_proposer_val_id_function ~sender:Address.zero [] in
+      let$ () = expect_ok <$> syscall syscall_reward_function sign_address in
+      let$ id = expect_ok <$> call get_proposer_val_id_function ~sender:Address.zero () in
       check validator_id "proposer_val_id = val_id" val_id id ;
       return () )
 
@@ -4640,7 +4638,7 @@ let test_validator_insolvent () =
           (fun v -> {v with Val_execution.rewards_per_token = U256.(~$10 * mon)})
       in
 
-      let$ () = expect_error Solvency_error <$> call claim_rewards_function ~sender:auth_address [val_id] in
+      let$ () = expect_error Solvency_error <$> call claim_rewards_function ~sender:auth_address val_id in
 
       return () )
 
@@ -4653,7 +4651,7 @@ let test_withdrawal_insolvent () =
       let$ () = skip_to_next_epoch in
       (* Activate the stake. *)
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; active_validator_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, active_validator_stake, U8.one)
       in
 
       (* Simulate an accumulator error before the epoch change. This is so the error becomes part of the
@@ -4670,7 +4668,7 @@ let test_withdrawal_insolvent () =
       (* Withdrawal is insolvent and active. *)
 
       let$ () =
-        expect_error Solvency_error <$> call withdraw_function ~sender:auth_address [val_id; U8.one]
+        expect_error Solvency_error <$> call withdraw_function ~sender:auth_address (val_id, U8.one)
       in
 
       return () )
@@ -4683,7 +4681,7 @@ let test_withdrawal_state_override () =
 
       let$ () = skip_to_next_epoch in
       let$ _ =
-        expect_ok <$> call undelegate_function ~sender:auth_address [val_id; active_validator_stake; U8.one]
+        expect_ok <$> call undelegate_function ~sender:auth_address (val_id, active_validator_stake, U8.one)
       in
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
@@ -4693,7 +4691,7 @@ let test_withdrawal_state_override () =
            rolled back, so we use the same behavior, as that is what the fixture expects. *)
       let$ _ =
         expect_error Internal_error
-        <$> call withdraw_function ~sender:auth_address ~on_error:`Keep [val_id; U8.one]
+        <$> call withdraw_function ~sender:auth_address ~on_error:`Keep (val_id, U8.one)
       in
 
       return () )
@@ -4723,7 +4721,7 @@ let test_dust_hunter () =
             (fun d -> {d with Delegator.stake})
         in
         let$ () = skip_to_next_epoch in
-        let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+        let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
         let$ () = pull_delegator_up_to_date val_id delegator_addr in
         let$ del = !$(Variables.delegator (val_id, delegator_addr)) in
         return (del.rewards, keydata)
@@ -4774,19 +4772,19 @@ let test_delegate_dust () =
         let$ del = !$(Variables.delegator (val_id, delegator)) in
         Variables.delegator (val_id, delegator) $= {del with rewards = U256.(dust_threshold / ~$2)}
       in
-      let$ () = expect_error Delegation_too_small <$> call compound_function ~sender:delegator [val_id] in
+      let$ () = expect_error Delegation_too_small <$> call compound_function ~sender:delegator val_id in
       let$ () =
         let$ del = !$(Variables.delegator (val_id, delegator)) in
         Variables.delegator (val_id, delegator) $= {del with rewards = U256.(dust_threshold - ~$1)}
       in
-      let$ () = expect_error Delegation_too_small <$> call compound_function ~sender:delegator [val_id] in
+      let$ () = expect_error Delegation_too_small <$> call compound_function ~sender:delegator val_id in
 
       (* Above the threshold. *)
       let$ () =
         let$ del = !$(Variables.delegator (val_id, delegator)) in
         Variables.delegator (val_id, delegator) $= {del with rewards = dust_threshold}
       in
-      let$ _ = expect_ok <$> call compound_function ~sender:delegator [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:delegator val_id in
 
       return () )
 
@@ -4814,7 +4812,7 @@ let test_undelegate_dust () =
       in
 
       (* Undelegate, leaving the 300 we in the delegator. *)
-      let$ _ = call undelegate_function ~sender:delegator [val_id; dust_threshold; U8.one] in
+      let$ _ = call undelegate_function ~sender:delegator (val_id, dust_threshold, U8.one) in
 
       (* Withdrawal request should include the dust. *)
       let$ () =
@@ -4831,7 +4829,7 @@ let test_undelegate_dust () =
 
       let$ () = skip_to_next_epoch in
       let$ () = skip_to_next_epoch in
-      let$ _ = expect_ok <$> call withdraw_function ~sender:delegator [val_id; U8.one] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:delegator (val_id, U8.one) in
       let$ () =
         check u256 "delegator.balance = dust_threshold + 300" U256.(dust_threshold + ~$300)
         <$> !(TransactionState.balance delegator)
@@ -4864,7 +4862,7 @@ let test_events () =
       (* Change to new commission
          1. Commission changed event *)
       let$ _ =
-        expect_ok <$> call change_commission_function ~sender:auth [val_id; U256.(mon * ~$25 / ~$100)]
+        expect_ok <$> call change_commission_function ~sender:auth (val_id, U256.(mon * ~$25 / ~$100))
       in
       let$ () =
         check int "logs.size += 1 (change_commission)" (seen_events + 1) <$> (List.length <$> get_logs)
@@ -4873,7 +4871,7 @@ let test_events () =
 
       (* Change to the same commission. No events emitted *)
       let$ _ =
-        expect_ok <$> call change_commission_function ~sender:auth [val_id; U256.(mon * ~$25 / ~$100)]
+        expect_ok <$> call change_commission_function ~sender:auth (val_id, U256.(mon * ~$25 / ~$100))
       in
       let$ () =
         check int "logs.size unchanged (same commission)" seen_events <$> (List.length <$> get_logs)
@@ -4888,7 +4886,7 @@ let test_events () =
       (* Undelegate, setting validator inactive
          1. Undelegate event
          2. Validator status changed to inactive *)
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth [val_id; U256.(~$50 * mon); U8.one] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth (val_id, U256.(~$50 * mon), U8.one) in
       let$ () =
         check int "logs.size += 2 (undelegate inactive)" (seen_events + 2) <$> (List.length <$> get_logs)
       in
@@ -4896,7 +4894,7 @@ let test_events () =
 
       (* Undelegate without changing validator state
          1. Undelegate event *)
-      let$ _ = expect_ok <$> call undelegate_function ~sender:auth [val_id; U256.(~$10 * mon); U8.of_int 2] in
+      let$ _ = expect_ok <$> call undelegate_function ~sender:auth (val_id, U256.(~$10 * mon), U8.of_int 2) in
       let$ () =
         check int "logs.size += 1 (undelegate no change)" (seen_events + 1) <$> (List.length <$> get_logs)
       in
@@ -4920,14 +4918,14 @@ let test_events () =
       let seen_events = seen_events + 2 in
 
       (* Claim with no rewards. No events emitted *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth val_id in
       let$ () =
         check int "logs.size unchanged (claim no reward)" seen_events <$> (List.length <$> get_logs)
       in
 
       (* Reward syscall
          1. Reward originating from the contract *)
-      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward [sign_address] in
+      let$ () = expect_ok <$> syscall syscall_reward_function ~value:reward sign_address in
       let$ () =
         check int "logs.size += 1 (syscall_reward)" (seen_events + 1) <$> (List.length <$> get_logs)
       in
@@ -4935,7 +4933,7 @@ let test_events () =
         let$ logs = get_logs in
         let last_log = List.nth logs (List.length logs - 1) in
         return
-          (check b32 "reward topics[2] = SYSTEM_SENDER"
+          (check b32 "reward topics2 = SYSTEM_SENDER"
              (B20.to_bytes32 Chain.Monad.system_sender)
              (List.nth last_log.Log.topics 2) )
       in
@@ -4943,7 +4941,7 @@ let test_events () =
 
       (* Claim with nonzero rewards.
          1. Claim event *)
-      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth [val_id] in
+      let$ _ = expect_ok <$> call claim_rewards_function ~sender:auth val_id in
       let$ () = check int "logs.size += 1 (claim reward)" (seen_events + 1) <$> (List.length <$> get_logs) in
       let seen_events = seen_events + 1 in
 
@@ -4957,20 +4955,20 @@ let test_events () =
         let$ logs = get_logs in
         let last_log = List.nth logs (List.length logs - 1) in
         return
-          (check b32 "external_reward topics[2] = auth" (B20.to_bytes32 auth) (List.nth last_log.Log.topics 2))
+          (check b32 "external_reward topics2 = auth" (B20.to_bytes32 auth) (List.nth last_log.Log.topics 2))
       in
       let seen_events = seen_events + 1 in
 
       (* Compound without changing validator state
          1. Claim event
          2. Delegate event *)
-      let$ _ = expect_ok <$> call compound_function ~sender:auth [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth val_id in
       let$ () = check int "logs.size += 2 (compound)" (seen_events + 2) <$> (List.length <$> get_logs) in
       let seen_events = seen_events + 2 in
 
       (* Compound with no rewards. Note that all reward for `auth` were just
          compounded in the last step. No events emitted. *)
-      let$ _ = expect_ok <$> call compound_function ~sender:auth [val_id] in
+      let$ _ = expect_ok <$> call compound_function ~sender:auth val_id in
       let$ () =
         check int "logs.size unchanged (compound no reward)" seen_events <$> (List.length <$> get_logs)
       in
@@ -4981,7 +4979,7 @@ let test_events () =
       let$ () = skip_to_next_epoch in
       let seen_events = seen_events + 2 in
       (* Two epoch changed events *)
-      let$ _ = expect_ok <$> call withdraw_function ~sender:auth [val_id; U8.one] in
+      let$ _ = expect_ok <$> call withdraw_function ~sender:auth (val_id, U8.one) in
       let$ () = check int "logs.size += 1 (withdraw)" (seen_events + 1) <$> (List.length <$> get_logs) in
       let seen_events = seen_events + 1 in
       ignore seen_events ;

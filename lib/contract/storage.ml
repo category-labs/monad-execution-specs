@@ -55,7 +55,9 @@ struct
 
     (* Clear the memory occupied by this location. The underlying type must have a static layout. *)
     let clear (loc : 'a t) : unit TransactionState.M.t =
-      let word_width = match loc.kind with Static {word_width} -> word_width | Dynamic -> assert false in
+      let word_width =
+        match loc.kind with Static {abi_word_width; _} -> abi_word_width | Dynamic -> assert false
+      in
       let storage = TransactionState.account Addr.address |-- Account.storage in
       let end_ = U256.(loc.offset + ~$word_width) in
       TransactionState.M.(
@@ -106,12 +108,14 @@ struct
     type 'a t = {length : U64.t Loc.t; first : 'a Loc.t}
 
     let make (start : U256.t) (typ : 'a typ) =
-      let length = Loc.(Packed.t U64.t @ start) in
+      let length = Loc.(packed U64.t @ start) in
       let first = Loc.(typ @ U256.(start + one)) in
       match first.kind with Static _ -> {length; first} | _ -> assert false
 
     let ( .$() ) ({first; _} : 'a t) (i : U64.t) : 'a Loc.t =
-      let word_width = match first.kind with Static {word_width} -> word_width | Dynamic -> assert false in
+      let word_width =
+        match first.kind with Static {abi_word_width; _} -> abi_word_width | Dynamic -> assert false
+      in
       Loc.(first + U256.(~$word_width * of_z_exn (U64.to_z i)))
 
     (* Monadic API for convenience. *)
