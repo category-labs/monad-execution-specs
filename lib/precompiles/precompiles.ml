@@ -137,8 +137,7 @@ struct
 
   let monad_precompiles : monad_precompile Address.Map.t =
     let module Reserve_balance_introspection = Reserve_balance_introspection.Make (Revision) in
-    Address.Map.of_list
-      [Staking.(address, precompile); Reserve_balance_introspection.(address, precompile)]
+    Address.Map.of_list [Staking.(address, precompile); Reserve_balance_introspection.(address, precompile)]
 
   (* π in YP (142). *)
   let precompile_addresses : Address.Set.t =
