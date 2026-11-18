@@ -1672,7 +1672,12 @@ struct
       let transfer_value = Evmc.Message.CallKind.(kind <> DelegateCall) && U256.(value <> zero) in
 
       let$ target_is_alive = HostAPI.account_exists recipient in
-      let create_gas = Gas.(if transfer_value && not target_is_alive then new_account_cost else zero) in
+      let create_gas =
+        Gas.(
+          if Evmc.Message.CallKind.(kind = Call) && transfer_value && not target_is_alive then
+            new_account_cost
+          else zero )
+      in
 
       let transfer_gas = Gas.(if transfer_value then call_value else zero) in
 
