@@ -143,6 +143,7 @@ struct
 
   let make char = init (fun _ -> char)
   let zeros = make '\x00'
+  let ones = make '\xff'
 
   let of_bytes_exn (bs : Bytes.t) : t = Option.get (of_bytes bs)
   let to_bytes (bs : t) : string = (bs :> string)
@@ -241,10 +242,12 @@ module B256 = Fixed (Traits.Byte_width.Bytes256)
 module B96 = Fixed (Traits.Byte_width.Bytes96)
 module B64 = Fixed (Traits.Byte_width.Bytes64)
 module B48 = Fixed (Traits.Byte_width.Bytes48)
+module B33 = Fixed (Traits.Byte_width.Bytes33)
 module B32 = Fixed (Traits.Byte_width.Bytes32)
 module B20 = struct
   include Fixed (Traits.Byte_width.Bytes20)
 
+  (** Truncate a 32-byte string [bs] to a 20-byte address, discarding the leftmost bytes. *)
   let of_bytes32_truncating (bs : B32.t) : t = init (fun i -> B32.(bs.$(i + 32 - 20)))
 
   (** Widen a 20 byte string [addr] to 32 bytes by left-padding with zeros. *)
@@ -252,3 +255,4 @@ module B20 = struct
     B32.init (fun i -> if Stdlib.(i < 32 - 20) then '\x00' else addr.$(i - 32 + 20))
 end
 module B8 = Fixed (Traits.Byte_width.Bytes8)
+module B4 = Fixed (Traits.Byte_width.Bytes4)

@@ -22,10 +22,10 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
   module Precompiles = Precompiles.Make (ChainParams)
 
   let transfer_ether sender recipient amount =
-    let$ sender_balance = !(account sender |-- balance) in
+    let$ sender_balance = !(balance sender) in
     if U256.(sender_balance >= amount) then
-      let$ () = account sender |-- balance := U256.(sender_balance - amount) in
-      let$ () = update_field (account recipient |-- balance) (fun eth -> U256.(eth + amount)) in
+      let$ () = balance sender := U256.(sender_balance - amount) in
+      let$ () = update_field (balance recipient) (fun eth -> U256.(eth + amount)) in
       return true
     else return false
 
@@ -33,25 +33,16 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
   let account_exists addr = Option.is_some <$> !(world_state |-- accounts |-- Address.Map.at addr)
 
   (** {!Evmc.HOST.get_storage} *)
-  let get_storage addr key =
-    !(account addr |-- Account.storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros)
+  let get_storage addr key = !(account addr |-- Account.storage |-- Storage.at key)
 
   (** {!Evmc.HOST.set_storage} *)
   let set_storage addr key v =
-    let$ o =
-      !( initial_world_state
-       |-- WorldState.account addr
-       |-- storage
-       |-- B32.Map.at key
-       |-- Option.get_or_default B32.zeros )
-    in
-    let$ c = !(account addr |-- storage |-- B32.Map.at key |-- Option.get_or_default B32.zeros) in
+    let$ o = !(initial_world_state |-- WorldState.account addr |-- storage |-- Storage.at key) in
+    let$ c = !(account addr |-- storage |-- Storage.at key) in
     (* In practice there is no way to modify the storage of an account with zero nonce, so there is no
        need to keep empty accounts here. However, for the purpose of unit tests, it is useful to allow storage
        operations to work on empty accounts without clearing them up automatically. *)
-    let$ () =
-      account ~keep_empty:true addr |-- storage |-- B32.Map.at key := if B32.(v = zeros) then None else Some v
-    in
+    let$ () = account ~keep_empty:true addr |-- storage |-- Storage.at key := v in
     let zero u = B32.(u = zeros) in
     let x u = B32.(u <> zeros && u = o) in
     let y u = B32.(u <> zeros && u <> o && u = c) in
@@ -70,7 +61,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       | () -> Assigned )
 
   (** {!Evmc.HOST.get_balance} *)
-  let get_balance addr = !(account addr |-- balance)
+  let get_balance addr = !(balance addr)
 
   (** {!Evmc.HOST.get_code_size} *)
   let get_code_size addr =
@@ -92,7 +83,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
 
   (** {!Evmc.HOST.selfdestruct} *)
   let selfdestruct ~address ~beneficiary =
-    let$ account_balance = !(account address |-- balance) in
+    let$ account_balance = !(balance address) in
     let$ transfer_ok = transfer_ether address beneficiary account_balance in
     assert transfer_ok ;
 
@@ -102,7 +93,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       let$ alive_before_selfdestruct = account_exists address in
       let$ () = update_field self_destruct (Address.Set.add address) in
       (* Set selfdestructing account's balance to zero. This is a noop unless address=beneficiary. *)
-      let$ () = account address |-- balance := U256.zero in
+      let$ () = balance address := U256.zero in
       return alive_before_selfdestruct
     else return false
 
@@ -141,6 +132,14 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       | None -> Vm.execute msg code
     else return Evmc.Result.(failure StatusCode.Insufficient_balance)
 
+  let process_syscall (msg : Evmc.Message.t) : Evmc.Result.t TransactionState.M.t =
+    assert (Evmc.Message.CallKind.(equal msg.kind Call)) ;
+    (* Value, if nonzero, is not transferred here but handled over to the relevant syscall, which may
+       increase the balance of the target address. *)
+    match Address.Map.find_opt msg.recipient Precompiles.syscall_endpoints with
+    | Some precompile -> precompile msg
+    | None -> return Evmc.Result.(failure StatusCode.Internal_error)
+
   let contract_creation_address (msg : Evmc.Message.t) =
     let$ sender_nonce = !(account msg.sender |-- nonce) in
     (* YP (94), subsuming YP (92). *)
@@ -165,7 +164,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
       in
       (* YP (98): σ* is σ except for the two accounts mutated below. *)
       (* YP (99), σ*[a]ₙ and σ*[a]ₛ. The code field of σ*[a] is known to be empty by this point. *)
-      let$ () = account create_address |-- storage := B32.Map.empty in
+      let$ () = account create_address |-- storage := Storage.empty in
       let$ () = account create_address |-- nonce := U64.one in
       (* σ*[a]_b as per YP (99), and σ*[s]_b as per YP (100), YP (101). YP (102) v' is implicitly calculated
          by transfer_ether. *)
@@ -214,7 +213,9 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
           (* YP (118), disjunct 2 *)
           return result
 
-  let call_impl ~(from_tx : Transaction.t option) (msg : Evmc.Message.t) =
+  type call_origin = System_tx | Eoa_tx of Transaction.t | Evm_call
+
+  let call_impl ~(origin : call_origin) (msg : Evmc.Message.t) =
     let$ () =
       match msg.kind with
       | Create | Create2 ->
@@ -230,16 +231,20 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
     let$ initial_state = get in
     let$ result =
       match msg.kind with
-      | Call | DelegateCall | CallCode -> process_call from_tx msg
+      | Call | DelegateCall | CallCode -> (
+        match origin with
+        | System_tx -> process_syscall msg
+        | Eoa_tx tx -> process_call (Some tx) msg
+        | Evm_call -> process_call None msg )
       | Create | Create2 -> process_create msg
     in
     let$ result =
-      match from_tx with
-      | Some _t when Evmc.Result.StatusCode.is_success result.status_code ->
+      match origin with
+      | Eoa_tx _t when Evmc.Result.StatusCode.is_success result.status_code ->
           (* Check reserve balance condition. Monad §6 Algorithm 2. *)
           let$ reserve_dipped = Reserve_balance.dipped_into_reserve ChainParams.revision in
           return (if reserve_dipped then {result with status_code = Revert; gas_refund = 0L} else result)
-      | Some _ | None -> return result
+      | Eoa_tx _ | System_tx | Evm_call -> return result
     in
     (* YP (115), YP (116), failure cases. YP (117) is implicitly covered by result.status_code. *)
     (* YP (127), YP (129), failure cases. YP (128) is implicitly covered by exceptional halting returning
@@ -262,7 +267,7 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
          the nonce was already incremented in the irrevocable change. *)
       if Evmc.Message.CallKind.is_create msg.kind then try_increment_nonce msg.sender else return true
     in
-    if no_nonce_overflow then call_impl ~from_tx:None msg
+    if no_nonce_overflow then call_impl ~origin:Evm_call msg
     else
       (* As per EIP-2681, if the account nonce is already 2^64-1 when executing a CREATE or CREATE2 instruction,
          the call returns a failure code but no gas is spent. This is in contrast with failure due to an
@@ -271,7 +276,11 @@ module Make (ChainParams : Chain.Monad.PARAMS) (Vm : Evmc.Vm(TransactionState).S
 
   (** [call_from_eoa tx msg] processes a message (contract creation or call) created from a transaction sent
       by an EOA, as opposed to a system transaction or a CALL opcode which are handled by {!call} directly. *)
-  let call_from_eoa (tx : Transaction.t) (msg : Evmc.Message.t) = call_impl ~from_tx:(Some tx) msg
+  let call_from_eoa (tx : Transaction.t) (msg : Evmc.Message.t) = call_impl ~origin:(Eoa_tx tx) msg
+
+  (** [call_from_monad_system_transaction tx msg] processes a message call caused by a Monad system
+      transaction. *)
+  let call_from_monad_system_transaction (msg : Evmc.Message.t) = call_impl ~origin:System_tx msg
 
   (** {!Evmc.HOST.get_tx_context} *)
   let get_tx_context =

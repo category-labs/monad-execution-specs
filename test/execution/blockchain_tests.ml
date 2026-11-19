@@ -108,7 +108,7 @@ let run_blockchain_test ((_name : string), (fixtures : Fixtures.BlockchainTest.t
   assert (B32.(State.WorldState.state_root s = fixtures.genesis_block_header.state_root)) ;
   Result.List.fold_leftM ~f:check_block_fixture s fixtures.blocks
   |> Result.map_error Test_failure.to_string
-  |> expect_ok
+  |> expect_ok ~err_kind:Alcotest.string
   |> check_postconditions fixtures.post
 
 (* Test files can be split into shards to be run in parallel (see dune file).
