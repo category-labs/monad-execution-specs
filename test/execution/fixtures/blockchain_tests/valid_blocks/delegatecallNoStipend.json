@@ -1,11 +1,11 @@
 {
-  "./updated_2/delegatecallNoStipend.json::delegatecallNoStipend_MONAD_EIGHT": {
+  "./updated_2/delegatecallNoStipend.json::delegatecallNoStipend_MONAD_NINE": {
     "_info": {
       "filling-rpc-server": "execrun 377ae6a",
       "fixture-format": "blockchain_test",
       "hash": "0xf02fc6a9aa8172ce635463aee6aa9318ab59ea4231f6eefd62f4281ef2bd4af0"
     },
-    "network": "MONAD_EIGHT",
+    "network": "MONAD_NINE",
     "blocks": [
       {
         "blockHeader": {
@@ -52,14 +52,14 @@
     ],
     "config": {
       "blobSchedule": {
-        "MONAD_EIGHT": {
+        "MONAD_NINE": {
           "baseFeeUpdateFraction": "0x4c6964",
           "max": "0x9",
           "target": "0x6"
         }
       },
       "chainid": "0x8f",
-      "network": "MONAD_EIGHT"
+      "network": "MONAD_NINE"
     },
     "genesisBlockHeader": {
       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

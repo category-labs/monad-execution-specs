@@ -112,10 +112,7 @@ module Make (Revision : sig
   val revision : Chain.Monad.Revision.active
 end) =
 struct
-  open Revision
-
   let ethereum_precompiles : ethereum_precompile Address.Map.t =
-    let module Modexp = Modexp.Make (Revision) in
     Address.Map.of_list
       [ (ecrecover_address, ecrecover)
       ; (sha256_address, sha256)
@@ -138,9 +135,7 @@ struct
 
   let monad_precompiles : monad_precompile Address.Map.t =
     let module Reserve_balance_introspection = Reserve_balance_introspection.Make (Revision) in
-    match revision with
-    | `Eight -> Address.Map.empty
-    | `Nine -> Address.Map.of_list [Reserve_balance_introspection.(address, precompile)]
+    Address.Map.of_list [Reserve_balance_introspection.(address, precompile)]
 
   (* π in YP (142). *)
   let precompile_addresses : Address.Set.t =

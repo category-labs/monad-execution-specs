@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project purpose
 
-Executable specification of the Monad Execution layer, written in OCaml. The library (`monad_lib`) implements an EVM interpreter, block/transaction execution, and Ethereum world-state management parameterized by a Monad-specific chain revision (`MONAD_ZERO` … `MONAD_NEXT`; only `MONAD_EIGHT` and `MONAD_NINE` are "active" and supported at any given time — see `lib/chain/monad.ml`).
+Executable specification of the Monad Execution layer, written in OCaml. The library (`monad_lib`) implements an EVM interpreter, block/transaction execution, and Ethereum world-state management parameterized by a Monad-specific chain revision (`MONAD_ZERO` … `MONAD_NEXT`; only two revisions are "active" and supported at any given time, currently those are `MONAD_NINE` and `MONAD_TEN` — see `lib/chain/monad.ml`).
 
 ## Build, test, run
 
@@ -12,7 +12,7 @@ Executable specification of the Monad Execution layer, written in OCaml. The lib
 - `dune test` — run all Alcotest suites under `test/`.
 - `dune build @fmt --auto-promote` — check ocamlformat and apply changes (CI enforces this). Requires ocamlformat 0.28.1.
 - `dune build @doc` — build odoc docs to `_build/default/_doc/_html/index.html`.
-- `dune exec evmrun -- --bytecode HEX --calldata HEX [--gas N] [--trace] [--revision MONAD_EIGHT|MONAD_NINE]` — run raw bytecode via the interpreter.
+- `dune exec evmrun -- --bytecode HEX --calldata HEX [--gas N] [--trace] [--revision MONAD_NINE|MONAD_TEN]` — run raw bytecode via the interpreter.
 - `dune exec execrun -- --blockchain_test FILE [--trace] [--update_fixture FILE]` — replay a blockchain-test JSON fixture.
 
 Running a single test file (Alcotest via dune): `dune exec test/unit/numeric.exe` (each `(test (name X))` stanza produces `X.exe`). Alcotest supports `-e` to filter test names.
@@ -42,7 +42,7 @@ Almost everything that varies by chain revision is a functor argument:
 ```
 module Params : sig
   val chain_id : Uint.t
-  val revision : Chain.Monad.Revision.active   (* `Eight | `Nine *)
+  val revision : Chain.Monad.Revision.active   (* `Nine | `Ten *)
   val trace : bool
   val debug_tstore : bool   (* only for the VM; enables the fuzzer's tstore log *)
 end
