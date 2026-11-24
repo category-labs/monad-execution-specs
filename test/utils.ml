@@ -1,7 +1,7 @@
 open Monad_lib
-open Monad_lib.Chain.Ethereum
-open Monad_lib.Numeric
-open Monad_lib.Byte_string
+open Chain.Ethereum
+open Numeric
+open Byte_string
 
 (* Generators and printers for our types. *)
 module QCheck2 = struct
@@ -20,6 +20,7 @@ module QCheck2 = struct
 
   module Gen = struct
     include Gen
+    let tiny_nat = int_range 0 3
     let uint8 = char_range '\x00' '\xff'
     let u256 : U256.t t =
       (* Uniformly distributed random strings are very unlikely to be negative.
@@ -66,26 +67,15 @@ end
 let check_prop ~name ?print ?(count = 10000) generator property =
   QCheck_alcotest.to_alcotest (QCheck2.Test.make ?print ~name ~count generator property)
 
-let u256 =
-  ( module struct
-    include U256
-    let pp = Fmt.of_to_string U256.to_string
-  end : Alcotest.TESTABLE
-    with type t = U256.t )
+let u256 = Alcotest.testable (Fmt.of_to_string U256.to_hex_string) U256.equal
+let u64 = Alcotest.testable (Fmt.of_to_string U64.to_hex_string) U64.equal
+let u8 = Alcotest.testable (Fmt.of_to_string U8.to_hex_string) U8.equal
 
-let b32 =
-  ( module struct
-    include B32
-    let pp = Fmt.of_to_string B32.to_hex_string
-  end : Alcotest.TESTABLE
-    with type t = B32.t )
+let b32 = Alcotest.testable (Fmt.of_to_string B32.to_hex_string) B32.equal
 
-let rlp =
-  ( module struct
-    include Rlp
-    let pp = Fmt.of_to_string Rlp.to_string
-  end : Alcotest.TESTABLE
-    with type t = Rlp.t )
+let rlp = Alcotest.testable (Fmt.of_to_string Rlp.to_string) Rlp.equal
+
+let address = Alcotest.testable (Fmt.of_to_string Address.to_hex_string) Address.equal
 
 let status_code =
   ( module struct
@@ -95,17 +85,30 @@ let status_code =
     with type t = Evmc.Result.StatusCode.t )
 
 let account =
-  ( module struct
-    include Chain.Ethereum.Account
-    let pp = Fmt.of_to_string (fun acc -> Yojson.Safe.pretty_to_string (Account.to_yojson acc))
-  end : Alcotest.TESTABLE
-    with type t = Chain.Ethereum.Account.t )
+  Alcotest.testable
+    (Fmt.of_to_string (fun acc -> Yojson.Safe.pretty_to_string (Account.to_yojson acc)))
+    Account.equal
 
 let expect_result_status (status : Evmc.Result.StatusCode.t) (result : Evmc.Result.t) =
   Alcotest.check' status_code ~msg:"Result status code is correct" ~expected:status ~actual:result.status_code
 
-let expect_ok (result : ('a, string) result) : 'a =
-  match result with Ok value -> value | Error err -> Alcotest.fail err
+let expect_some ~msg (opt : 'a option) : 'a = match opt with Some value -> value | None -> Alcotest.fail msg
+
+let expect_none ~msg (opt : 'a option) : unit = match opt with Some _ -> Alcotest.fail msg | None -> ()
+
+let expect_ok ?(err_kind : 'err Alcotest.testable option) (result : ('a, 'err) result) : 'a =
+  match result with
+  | Ok value -> value
+  | Error err -> (
+    match err_kind with
+    | None -> Alcotest.fail "Expected Ok, got Error (...)"
+    | Some testable ->
+        Alcotest.fail (Format.asprintf "Expected Ok, got Error (%a)" (Alcotest.pp testable) err) )
+
+let expect_error (testable : 'err Alcotest.testable) (expected : 'err) (result : ('a, 'err) result) : unit =
+  match result with
+  | Ok _ -> Alcotest.fail (Format.asprintf "Expected Error (%a), got Ok" (Alcotest.pp testable) expected)
+  | Error actual -> Alcotest.check' testable ~msg:"Error" ~expected ~actual
 
 module type PARAMS = sig
   val chain_id : Uint.t

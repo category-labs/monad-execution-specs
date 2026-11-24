@@ -18,6 +18,8 @@
   lens
   digestif
   secp256k1-internal
+  bls12-381-signature
+  blake3_vendored
   yojson
   ppx_deriving_yojson.runtime)
  (flags
