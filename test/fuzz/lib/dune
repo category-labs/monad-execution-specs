@@ -1,0 +1,3 @@
+(library
+ (name fuzz)
+ (libraries monad_lib alcotest qcheck-core qcheck-alcotest))

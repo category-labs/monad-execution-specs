@@ -1,0 +1,3 @@
+(library
+ (name fuzz_staking)
+ (libraries monad_lib fuzz test_utils))
